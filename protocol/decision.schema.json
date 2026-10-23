@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://transpiler.local/protocol/decision.schema.json",
+  "title": "Decisions",
+  "description": "Structured decision requests raised by workers for operations they cannot translate deterministically, and the responses a provider returns. Responses can only select one of the worker's validated candidates.",
+  "$defs": {
+    "request": {
+      "type": "object",
+      "required": ["id", "fingerprint", "reason", "operation", "message", "required", "state", "source", "context", "candidates"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^decision-[0-9]+$", "description": "Unique within a session"},
+        "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "Content hash (reason, operation, location, text, facts, candidate ids); the cache key"},
+        "reason": {"enum": ["missing_mapping", "unsupported_construct", "ambiguous_mapping", "missing_target_api", "invalid_mapping", "callback_required"]},
+        "operation": {"type": "string", "description": "Source operation, or DATA / ENVIRONMENT / PROCEDURE for declarations"},
+        "message": {"type": "string"},
+        "required": {"const": true, "description": "Finalize refuses to write output while a required decision is pending"},
+        "state": {"enum": ["pending", "resolved"]},
+        "selected_candidate": {"type": "string"},
+        "source": {
+          "type": "object",
+          "required": ["file", "line", "column", "text"],
+          "properties": {
+            "file": {"type": "string", "description": "Relative to the source root"},
+            "line": {"type": "integer", "minimum": 1},
+            "column": {"type": "integer", "minimum": 1},
+            "text": {"type": "string"}
+          }
+        },
+        "context": {
+          "type": "object",
+          "required": ["program_id", "source_operation", "target_language", "facts"],
+          "properties": {
+            "program_id": {"type": "string"},
+            "source_operation": {"type": "string"},
+            "target_language": {"type": "string"},
+            "rule_id": {"type": "string"},
+            "facts": {"type": "object"}
+          }
+        },
+        "candidates": {"type": "array", "items": {"$ref": "#/$defs/candidate"}},
+        "callback": {
+          "type": "object",
+          "required": ["script", "function"],
+          "properties": {"script": {"type": "string"}, "function": {"type": "string"}}
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "required": ["id", "description"],
+      "properties": {
+        "id": {"type": "string"},
+        "handler": {"type": "string"},
+        "description": {"type": "string"},
+        "preview": {"type": "string", "description": "Target code the candidate generates"}
+      }
+    },
+    "resolution": {
+      "description": "Element of resolve.params.resolutions",
+      "type": "object",
+      "required": ["decision_id", "selection"],
+      "properties": {
+        "decision_id": {"type": "string"},
+        "fingerprint": {"type": "string", "description": "If present, must equal the decision's fingerprint"},
+        "selection": {
+          "type": "object",
+          "required": ["kind", "candidate_id"],
+          "properties": {"kind": {"const": "candidate"}, "candidate_id": {"type": "string"}},
+          "additionalProperties": false
+        },
+        "provider": {"type": "string"},
+        "rationale": {"type": "string"}
+      }
+    },
+    "rejection": {
+      "type": "object",
+      "required": ["decision_id", "code", "message"],
+      "properties": {
+        "decision_id": {"type": "string"},
+        "code": {"enum": ["unknown_decision", "already_resolved", "fingerprint_mismatch", "unsupported_selection", "no_candidates", "unknown_candidate", "duplicate_resolution"]},
+        "message": {"type": "string"}
+      }
+    }
+  },
+  "$ref": "#/$defs/request"
+}
