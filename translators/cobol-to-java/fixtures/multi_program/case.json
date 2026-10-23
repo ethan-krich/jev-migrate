@@ -1,0 +1,18 @@
+{
+  "description": "Folder-to-package layout, PROGRAM-ID class names, copybook search (own dir copy/ and shared/copybooks), static CALL with persistent WORKING-STORAGE and RETURN-CODE propagation",
+  "expect": {
+    "status": "ok",
+    "outputs": {
+      "billing/PAY-MAIN.cbl": "src/main/java/fixtures/multi/billing/PayMain.java",
+      "billing/PAY-UTIL.cbl": "src/main/java/fixtures/multi/billing/PayUtil.java",
+      "reports/month-end/RPT01.cob": "src/main/java/fixtures/multi/reports/month_end/Rpt01.java"
+    }
+  },
+  "copybook_paths": ["src/shared/copybooks"],
+  "equivalence": {
+    "programs": ["billing/PAY-MAIN.cbl", "billing/PAY-UTIL.cbl", "reports/month-end/RPT01.cob"],
+    "cobc_copybook_dirs": ["billing/copy", "shared/copybooks"],
+    "main_class": "fixtures.multi.billing.PayMain"
+  },
+  "layout": {"base_package": "fixtures.multi"}
+}

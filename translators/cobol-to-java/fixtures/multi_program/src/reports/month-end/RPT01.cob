@@ -1,0 +1,10 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. RPT01.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       COPY RPT-HDR.
+       PROCEDURE DIVISION.
+           DISPLAY RPT-TITLE.
+           MOVE 0 TO RETURN-CODE.
+           EXIT PROGRAM.
+           DISPLAY "not reached".

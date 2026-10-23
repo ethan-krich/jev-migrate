@@ -1,0 +1,5 @@
+{
+  "description": "A COPY member that cannot be found fails the file with a diagnostic",
+  "expect": {"status": "incomplete", "diagnostics": {"NOCOPY.cbl": ["missing_copybook"]}},
+  "layout": {"base_package": "fixtures.nocopy"}
+}

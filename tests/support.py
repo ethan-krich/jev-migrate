@@ -1,0 +1,82 @@
+"""Shared helpers for integration and equivalence tests (stdlib only)."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+FIXTURES = REPO_ROOT / "translators/cobol-to-java/fixtures"
+BUILD_DIR = Path(os.environ.get("TRANSPILER_BUILD_DIR", REPO_ROOT / "build"))
+CORE = Path(os.environ.get("TRANSPILER_CORE", BUILD_DIR / "core/transpiler-core"))
+WORKER = REPO_ROOT / "translators/cobol-to-java/java/build/install/cobol-to-java-worker/bin/cobol-to-java-worker"
+REFERENCE_COBC = "3.2"
+
+
+@dataclass(frozen=True)
+class Case:
+    name: str
+    path: Path
+    spec: dict
+
+    @property
+    def src(self) -> Path:
+        return self.path / "src"
+
+    @property
+    def equivalence(self) -> dict | None:
+        return self.spec.get("equivalence")
+
+
+def cases() -> list[Case]:
+    return [Case(p.parent.name, p.parent, json.loads(p.read_text())) for p in sorted(FIXTURES.glob("*/case.json"))]
+
+
+@dataclass(frozen=True)
+class Execution:
+    stdout: bytes
+    exit_code: int
+
+
+def cobc_version() -> str | None:
+    if not shutil.which("cobc"):
+        return None
+    first = subprocess.run(["cobc", "--version"], capture_output=True, text=True).stdout.splitlines()[0]
+    return first.split()[-1]  # "cobc (GnuCOBOL) 3.2.0" -> "3.2.0"
+
+
+def run_cobol(case: Case) -> Execution:
+    """Compiles the case's programs with GnuCOBOL (main program first) and runs the result."""
+    eq = case.equivalence
+    with tempfile.TemporaryDirectory(prefix="cobc-") as tmp:
+        exe = Path(tmp) / "program"
+        args = ["cobc", "-x", "-o", str(exe)]
+        for d in eq.get("cobc_copybook_dirs", []):
+            args += ["-I", str(case.src / d)]
+        args += [str(case.src / p) for p in eq["programs"]]
+        compiled = subprocess.run(args, capture_output=True, text=True)
+        if compiled.returncode != 0:
+            raise AssertionError(f"cobc failed for {case.name}:\n{compiled.stderr}")
+        run = subprocess.run([str(exe)], capture_output=True, timeout=60, cwd=tmp)
+        return Execution(run.stdout, run.returncode)
+
+
+def golden(case: Case) -> Execution:
+    expected = case.path / "expected"
+    return Execution((expected / "stdout.txt").read_bytes(), int((expected / "exit_code").read_text().strip()))
+
+
+def run_java(output: Path, main_class: str) -> Execution:
+    sources = sorted(str(p) for p in (output / "src/main/java").rglob("*.java"))
+    classes = output / "classes"
+    compiled = subprocess.run(["javac", "-encoding", "UTF-8", "-Xlint:all", "-Werror", "-d", str(classes), *sources],
+                              capture_output=True, text=True)
+    if compiled.returncode != 0:
+        raise AssertionError(f"generated Java does not compile:\n{compiled.stderr}")
+    run = subprocess.run(["java", "-cp", str(classes), main_class], capture_output=True, timeout=60)
+    return Execution(run.stdout, run.returncode)

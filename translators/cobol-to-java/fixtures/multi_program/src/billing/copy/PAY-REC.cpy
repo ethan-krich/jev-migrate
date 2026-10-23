@@ -1,0 +1,2 @@
+       01 PAY-NAME   PIC X(8).
+       01 PAY-AMOUNT PIC 9(5)V99.

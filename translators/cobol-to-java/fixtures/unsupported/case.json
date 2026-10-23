@@ -1,0 +1,16 @@
+{
+  "description": "Constructs outside the supported subset are reported, never approximated",
+  "expect": {
+    "status": "incomplete",
+    "decisions": [
+      {"reason": "unsupported_construct", "operation": "DATA", "line": 6},
+      {"reason": "unsupported_construct", "operation": "DATA", "line": 7},
+      {"reason": "unsupported_construct", "operation": "DATA", "line": 9},
+      {"reason": "unsupported_construct", "operation": "DATA", "line": 10},
+      {"reason": "missing_mapping", "operation": "EVALUATE", "line": 14, "candidates": []},
+      {"reason": "unsupported_construct", "operation": "COMPUTE", "line": 17},
+      {"reason": "missing_mapping", "operation": "GO_TO", "line": 18, "candidates": []}
+    ]
+  },
+  "layout": {"base_package": "fixtures.unsupported"}
+}

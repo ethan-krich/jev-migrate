@@ -1,0 +1,6 @@
+{
+  "description": "Decimal alignment, high-order truncation, ROUNDED half away from zero, SIZE ERROR with several receivers, division by zero, literal display",
+  "expect": {"status": "ok"},
+  "equivalence": {"programs": ["ARITH.cbl"], "main_class": "fixtures.arith.Arith"},
+  "layout": {"base_package": "fixtures.arith"}
+}

@@ -1,0 +1,22 @@
+Hello, COBOL     !
+[ABC]
+[007]
+[45]
+[40]
+product -0000138.88
+rounded -0000138.88
+quot 014.2
+quot 014.3
+amount -00323.45
+computed +0000626.90
+no overflow
+overflow, kept 008
+negative
+padded compare
+count 009
+count 010
+count 011
+vary 01
+vary 03
+vary 05
+done -1.50 = -1.50

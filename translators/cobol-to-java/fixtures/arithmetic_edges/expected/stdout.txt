@@ -1,0 +1,19 @@
+trunc -001.2
+round neg -001.3
+unsigned 001.2
+giving unsigned 002.2
+size error 50 60
+times +00021
+neg -00042
+div -010.5
+div rounded -010.5
+div zero kept -00042
+div zero size error
+compute trunc 0
+compute size error
+kept 0
+unary +00083
+[42   ]
+[00083]
+[     ][0]
+it's  +0 -0.50 007

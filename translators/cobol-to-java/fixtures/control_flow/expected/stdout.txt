@@ -1,0 +1,21 @@
+section ran 0012
+small 01
+two
+big 03
+test after runs once 03
+inline times
+inline times
+down 10
+down 07
+down 04
+after 01
+after 02
+after 03
+j negative
+parenthesised
+spaces
+spaces mirrored
+collating
+alnum vs numeric
+zero less
+total 0012
