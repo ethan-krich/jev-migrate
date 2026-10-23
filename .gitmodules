@@ -1,0 +1,3 @@
+[submodule "third_party/proleap-cobol-parser"]
+	path = third_party/proleap-cobol-parser
+	url = https://github.com/uwol/proleap-cobol-parser.git
