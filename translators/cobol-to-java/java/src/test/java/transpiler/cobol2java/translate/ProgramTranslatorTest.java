@@ -113,7 +113,7 @@ class ProgramTranslatorTest {
         rules.removeIf(n -> n.get("source").asText().equals("DISPLAY"));
         var r = translate(dir, program("01 A PIC 9 VALUE 1.", "IF A = 1 DISPLAY 'one' END-IF."), rules);
         Decision d = r.decisions().getFirst();
-        d.register("decision-1", "java");
+        d.register("decision-1", "java", "sha256:0");
         assertEquals(Reason.MISSING_MAPPING, d.reason());
         assertEquals(List.of("builtin:display"), d.candidates().stream().map(c -> c.id()).toList());
         assertTrue(d.candidates().getFirst().preview().contains("Display.line(\"one\")"));

@@ -7,6 +7,8 @@ import io.proleap.cobol.asg.metamodel.call.Call;
 import io.proleap.cobol.asg.metamodel.valuestmt.ConditionValueStmt;
 import io.proleap.cobol.asg.metamodel.valuestmt.ValueStmt;
 import java.util.Optional;
+import org.antlr.v4.runtime.ParserRuleContext;
+import transpiler.cobol2java.session.Dialect;
 
 /** What handlers may ask of the program being translated. */
 public interface TranslationContext {
@@ -34,4 +36,15 @@ public interface TranslationContext {
 
     /** The fully qualified class translated from the program with this PROGRAM-ID, if in the project. */
     Optional<String> programClass(String programId);
+
+    /** The project's dialect settings. */
+    Dialect dialect();
+
+    /**
+     * The value of an optional dialect setting. When it is unset this records the program's
+     * {@code dialect:<field>} decision (once per program) and throws a {@link HandlerException.Kind#DIALECT}.
+     *
+     * @param usage what needs the setting, for the decision message ("HIGH-VALUES")
+     */
+    <T> T require(String field, Optional<T> value, ParserRuleContext where, String usage) throws HandlerException;
 }

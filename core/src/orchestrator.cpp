@@ -142,6 +142,8 @@ class Run {
 
     auto init = worker.call("initialize", session, params, job_.request_timeout, on_event);
     if (auto s = check(init, "initialize")) return *s;
+    // The project settings the worker translated under (opaque here; reported for reproducibility).
+    if (init->result.contains("dialect")) report_["dialect"] = init->result["dialect"];
 
     // One request per program keeps the interface ready for scheduling translation in parallel.
     for (const auto& f : d.files) {

@@ -132,3 +132,38 @@ def test_decision_locations_point_at_original_lines_despite_copybooks(tmp_path, 
         line = (src / d.source.file).read_text().splitlines()[d.source.line - 1]
         assert line.strip().startswith(d.source.text.splitlines()[0].strip()), (d.source, line)
     assert not any(diag["code"] == "approximate_line_numbers" for p in result.programs for diag in p.diagnostics)
+
+
+def test_dialect_is_sent_to_the_worker_and_recorded(tmp_path, built):
+    from cobol_to_java import Dialect
+
+    result = transpile(BASICS, output=tmp_path, layout=LAYOUT, dialect=Dialect(encoding="ascii"))
+    assert result.ok, result.summary()
+    assert result.report["dialect"]["encoding"] == "ascii"
+    assert result.report["dialect"]["out_of_range"] is None
+
+
+def test_dialect_and_options_must_not_overlap(tmp_path, built):
+    from cobol_to_java import Dialect
+    from transpiler import TranspilerError
+
+    with pytest.raises(TranspilerError, match="source_format"):
+        transpile(BASICS, output=tmp_path, dialect=Dialect(), options={"source_format": "fixed"})
+
+
+def test_unknown_worker_options_are_rejected(tmp_path, built):
+    result = transpile(BASICS, output=tmp_path, layout=LAYOUT, options={"colour": "blue"})
+    assert result.status == "failed"
+    [error] = result.errors
+    assert error["code"] == "invalid_params" and "unknown option 'colour'" in error["message"]
+
+
+def test_decision_fingerprints_depend_on_the_dialect(tmp_path, built):
+    from cobol_to_java import Dialect
+
+    mappings = default_mappings()
+    mappings.remove("DISPLAY")
+    a = transpile(BASICS, output=tmp_path / "a", mappings=mappings, layout=LAYOUT)
+    b = transpile(BASICS, output=tmp_path / "b", mappings=mappings, layout=LAYOUT, dialect=Dialect(encoding="ascii"))
+    assert [d.id for d in a.decisions] == [d.id for d in b.decisions]
+    assert not {d.fingerprint for d in a.decisions} & {d.fingerprint for d in b.decisions}

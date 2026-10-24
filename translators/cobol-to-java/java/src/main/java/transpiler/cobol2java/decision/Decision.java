@@ -57,9 +57,9 @@ public final class Decision {
     }
 
     /** Assigns the session-unique id and the content fingerprint used for caching. */
-    public void register(String assignedId, String targetLanguage) {
+    public void register(String assignedId, String targetLanguage, String dialectHash) {
         this.id = assignedId;
-        this.fingerprint = computeFingerprint(targetLanguage);
+        this.fingerprint = computeFingerprint(targetLanguage, dialectHash);
     }
 
     public String id() {
@@ -147,7 +147,7 @@ public final class Decision {
         return n;
     }
 
-    private String computeFingerprint(String targetLanguage) {
+    private String computeFingerprint(String targetLanguage, String dialectHash) {
         ObjectNode basis = Json.object();
         basis.put("reason", reason.wire());
         basis.put("operation", operation);
@@ -157,6 +157,8 @@ public final class Decision {
         basis.put("text", location.text());
         basis.put("program_id", programId);
         basis.put("target_language", targetLanguage);
+        // The same source means something else under other project settings.
+        basis.put("dialect", dialectHash);
         basis.set("facts", Json.MAPPER.valueToTree(facts));
         var ids = basis.putArray("candidates");
         candidates.forEach(c -> ids.add(c.id()));

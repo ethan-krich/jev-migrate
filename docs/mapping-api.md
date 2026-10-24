@@ -79,6 +79,31 @@ to `cobol_to_java.BUILTIN_HANDLERS` / `FACTS`.
 loads the script, calls `function(CallbackRequest)`, and validates that the answer is one of the
 offered candidates. Wiring it through the orchestrator is Phase 2.
 
+## Dialect (project settings)
+
+`cobol_to_java.Dialect` holds what the COBOL source does not determine. Pass it as
+`transpile(..., dialect=Dialect(...))`; `to_options()` becomes the worker's `initialize.options`.
+A key set both by `dialect=` and `options=` raises `TranspilerError`.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `encoding` | `None` | `ascii` or `ebcdic`: the bytes of HIGH-VALUES / LOW-VALUES, class tests |
+| `collating_sequence` | `None` | `native` (follows `encoding`), `ascii` or `ebcdic` |
+| `out_of_range` | `None` | subscripts and reference modification out of range: `fail` (stop the run unit) or `decision` (refuse unprovable accesses) |
+| `binary_truncate` | `True` | COMP/BINARY truncates to the PICTURE (GnuCOBOL `-fbinary-truncate`) |
+| `sync_alignment` | `None` | whether SYNCHRONIZED inserts slack bytes |
+| `debugging_lines` | `False` | compile `D` lines (otherwise comments, as GnuCOBOL; `WITH DEBUGGING MODE` also enables them) |
+| `source_format` | `fixed` | `fixed`, `variable`, `tandem` |
+| `file_assignments` | `{}` | `ASSIGN TO` name → run-time path |
+| `when_compiled` | `None` | value of WHEN-COMPILED, `YYYY-MM-DDTHH:MM:SS` |
+
+A program that needs an unset setting gets exactly one `missing_mapping` decision whose
+operation is `dialect:<field>` (no candidates; facts `{"field": ...}`), and its statements that
+depend on the setting stay placeholders. Set the field and translate again. The dialect is
+part of every decision fingerprint and is recorded as `dialect` in `transpile-report.json`.
+Debugging lines inside copybooks cannot be excluded and fail the file with
+`unsupported_dialect` unless `debugging_lines=True`.
+
 ## Folder layout
 
 `cobol_to_java.Layout` declares the folder convention. The worker applies it, because it owns

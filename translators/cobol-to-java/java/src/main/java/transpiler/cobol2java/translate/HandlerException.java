@@ -8,7 +8,9 @@ public final class HandlerException extends Exception {
         /** This handler does not cover this shape of the operation; another handler might. */
         NOT_APPLICABLE,
         /** A required target-side program or API is not available. */
-        MISSING_TARGET
+        MISSING_TARGET,
+        /** An unset dialect setting (named by the message) decides the semantics. */
+        DIALECT
     }
 
     private final Kind kind;

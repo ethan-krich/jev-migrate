@@ -87,6 +87,11 @@ result = transpile("examples/cobol-to-java/input", output="generated", mappings=
 assert result.ok   # generated/src/main/java/com/example/legacy/... compiles with plain javac
 ```
 
+Settings the source does not determine (character set, out-of-range policy, file paths, …) go
+in a [`Dialect`](docs/mapping-api.md#dialect-project-settings):
+`transpile(..., dialect=Dialect(encoding="ascii", out_of_range="fail"))`. A program that needs
+an unset one gets a single `dialect:<field>` decision.
+
 From the shell: `./scripts/run.sh examples/cobol-to-java/input -o generated --base-package com.acme`
 (`--mappings file.py` loads a `configure(mappings)` hook).
 
@@ -111,7 +116,8 @@ equivalence fixtures.
 
 | | Construct | Notes |
 |---|---|---|
-| ✅ | IDENTIFICATION / DATA / PROCEDURE divisions, WORKING-STORAGE | one program per file, fixed format |
+| ✅ | IDENTIFICATION / DATA / PROCEDURE divisions, WORKING-STORAGE | one program per file, fixed / variable / tandem format |
+| ✅ | Debugging lines (`D` indicator) | comments unless `Dialect.debugging_lines` or `WITH DEBUGGING MODE` |
 | ✅ | `PIC X(n)`, `PIC [S]9(i)[V9(s)]` USAGE DISPLAY, levels 01–49 and 77, `VALUE` literal / ZERO / SPACE | default init: spaces / zero |
 | ✅ | `MOVE` (alphanumeric pad/truncate; numeric decimal alignment, high-/low-order truncation, sign drop; integer numeric → alphanumeric digits; figurative ZERO/SPACE) | per receiver |
 | ✅ | `ADD`, `SUBTRACT`, `MULTIPLY`, `DIVIDE` (TO/FROM/BY/INTO/GIVING), `ROUNDED`, `[NOT] ON SIZE ERROR` | exact `BigDecimal`; divide by zero is a size error |

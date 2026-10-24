@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from cobol_to_java import Layout
+from cobol_to_java import Dialect, Layout
 from support import Case, cases
 from transpiler import transpile
 
@@ -17,6 +17,7 @@ def translate(case: Case, output: Path):
         case.src,
         output=output,
         layout=Layout(**case.spec.get("layout", {})),
+        dialect=Dialect(**case.spec.get("dialect", {})),
         copybook_paths=[case.path / p for p in case.spec.get("copybook_paths", [])],
     )
 

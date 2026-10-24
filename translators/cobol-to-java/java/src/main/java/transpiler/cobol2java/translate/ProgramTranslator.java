@@ -85,6 +85,7 @@ import transpiler.cobol2java.decision.SourceLocation;
 import transpiler.cobol2java.mapping.MappingRegistry;
 import transpiler.cobol2java.mapping.MappingRule;
 import transpiler.cobol2java.mapping.Strategy;
+import transpiler.cobol2java.session.Dialect;
 
 /**
  * Translates one COBOL program unit into a JavaParser {@link CompilationUnit}.
@@ -105,7 +106,8 @@ public final class ProgramTranslator implements TranslationContext {
             String runtimePackage,
             MappingRegistry registry,
             Builtins builtins,
-            Function<String, Optional<String>> programDirectory) {}
+            Function<String, Optional<String>> programDirectory,
+            Dialect dialect) {}
 
     /** The translation output; {@code decisions} are not yet registered with ids. */
     public record Result(CompilationUnit compilationUnit, List<Decision> decisions, int statements, int translated) {}
@@ -117,6 +119,9 @@ public final class ProgramTranslator implements TranslationContext {
     private final Map<Object, String> procedureMethods = new IdentityHashMap<>();
     private final Map<String, Integer> freshCounters = new LinkedHashMap<>();
     private List<Decision> sink = new ArrayList<>();
+    /** Program-level decisions (never discarded with a failed candidate), in source order with the rest. */
+    private final List<Decision> root = sink;
+    private final Set<String> dialectDecisions = new HashSet<>();
     private int statements;
     private int translated;
 
@@ -507,6 +512,8 @@ public final class ProgramTranslator implements TranslationContext {
                                 candidatesFor(unit, handler));
                         case UNSUPPORTED -> unresolved(unit, block, facts, Reason.UNSUPPORTED_CONSTRUCT, rule, e.getMessage(), List.of());
                         case MISSING_TARGET -> unresolved(unit, block, facts, Reason.MISSING_TARGET_API, rule, e.getMessage(), List.of());
+                        // The dialect:<field> decision is already recorded once for the program.
+                        case DIALECT -> block.addStatement(placeholder(unit, "needs Dialect." + e.getMessage()));
                     }
                 }
             }
@@ -566,10 +573,16 @@ public final class ProgramTranslator implements TranslationContext {
         sink.add(newDecision(unit, facts, reason, rule, message, generated.stream().map(Generated::candidate).toList(), plans, block));
     }
 
+    private static EmptyStmt placeholder(OpUnit unit, String note) {
+        EmptyStmt placeholder = new EmptyStmt();
+        placeholder.setComment(new LineComment(" UNRESOLVED " + unit.operation() + (note == null ? "" : " (" + note + ")") + ": "
+                + unit.location().text().replace('\n', ' ')));
+        return placeholder;
+    }
+
     private Decision newDecision(OpUnit unit, Map<String, Object> facts, Reason reason, MappingRule rule, String message,
             List<Candidate> candidates, Map<String, Generated> plans, BlockStmt block) {
-        EmptyStmt placeholder = new EmptyStmt();
-        placeholder.setComment(new LineComment(" UNRESOLVED " + unit.operation() + ": " + unit.location().text().replace('\n', ' ')));
+        EmptyStmt placeholder = placeholder(unit, null);
         block.addStatement(placeholder);
         Decision.Plan plan = candidateId -> {
             Generated g = plans.get(candidateId);
@@ -596,6 +609,35 @@ public final class ProgramTranslator implements TranslationContext {
         };
         sink.add(new Decision(Reason.UNSUPPORTED_CONSTRUCT, operation, message, location(ctx), in.programId(),
                 Map.of(), null, List.of(), null, none));
+    }
+
+    /**
+     * Records the program's single decision for an unset dialect setting. It has no candidates:
+     * the project must set the field and translate again.
+     */
+    private void dialectDecision(String field, SourceLocation where, String usage) {
+        if (!dialectDecisions.add(field)) {
+            return;
+        }
+        Decision.Plan none = id -> {
+            throw new IllegalArgumentException("decision has no candidates");
+        };
+        root.add(new Decision(Reason.MISSING_MAPPING, "dialect:" + field, usage + " depends on Dialect." + field
+                + ", which the project leaves unset", where, in.programId(), Map.of("field", field), null, List.of(), null, none));
+    }
+
+    @Override
+    public Dialect dialect() {
+        return in.dialect();
+    }
+
+    @Override
+    public <T> T require(String field, Optional<T> value, ParserRuleContext where, String usage) throws HandlerException {
+        if (value.isPresent()) {
+            return value.get();
+        }
+        dialectDecision(field, location(where), usage);
+        throw new HandlerException(HandlerException.Kind.DIALECT, field);
     }
 
     private SourceLocation location(ParserRuleContext ctx) {

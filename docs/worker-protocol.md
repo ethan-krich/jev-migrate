@@ -34,7 +34,7 @@ Error codes: `malformed_json` (response `id` is null), `invalid_request`,
 
 | Method | Params | Result |
 |---|---|---|
-| `initialize` | `source_root`, `output_root` (absolute), `target_language`, `files: [{path, role: program\|copybook}]`, `mappings`, `layout`, `options` (`source_format`: `fixed`; `source_encoding`: `ISO-8859-1`), `copybook_paths` | `programs: [{file, status, program_id, package, class, output_path, diagnostics}]`. Parse failures are per-file diagnostics, not errors. |
+| `initialize` | `source_root`, `output_root` (absolute), `target_language`, `files: [{path, role: program\|copybook}]`, `mappings`, `layout`, `options` (the dialect keys of [`Dialect`](mapping-api.md#dialect-project-settings), plus `source_encoding`: `ISO-8859-1`; any other key is `invalid_params`), `copybook_paths` | `programs: [{file, status, program_id, package, class, output_path, diagnostics}]`, `dialect` (the settings in effect). Parse failures are per-file diagnostics, not errors. |
 | `translate` | `files` (relative paths; default all) | `files: [...]`, `decisions: [request…]`. Status `incomplete` if any file has pending decisions or failed. |
 | `resolve` | `resolutions: [{decision_id, fingerprint?, selection: {kind: "candidate", candidate_id}}]` | `applied`, `rejected: [{decision_id, code, message}]`, `new_decisions` (raised by a newly applied structural candidate), `pending` |
 | `finalize` | — | Writes all files **only** if every program is translated with no pending decision; else `incomplete` with `blocking` and `pending`, nothing written. Result: `files_written`, `programs`. |

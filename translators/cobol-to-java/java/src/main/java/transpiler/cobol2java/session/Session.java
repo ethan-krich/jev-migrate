@@ -76,6 +76,7 @@ public final class Session {
     private final Layout layout;
     private final MappingRegistry registry;
     private final Builtins builtins;
+    private final Dialect dialect;
     private final Map<String, ProgramState> programs = new LinkedHashMap<>();
     private final List<String> copybooks = new ArrayList<>();
     private final Map<String, String> programDirectory = new HashMap<>();
@@ -83,8 +84,10 @@ public final class Session {
     private final Map<String, Decision> decisionsById = new HashMap<>();
     private State state = State.ACTIVE;
 
-    private Session(String id, Path sourceRoot, Path outputRoot, Layout layout, MappingRegistry registry, Builtins builtins) {
+    private Session(String id, Path sourceRoot, Path outputRoot, Layout layout, MappingRegistry registry, Builtins builtins,
+            Dialect dialect) {
         this.id = id;
+        this.dialect = dialect;
         this.sourceRoot = sourceRoot;
         this.outputRoot = outputRoot;
         this.layout = layout;
@@ -105,11 +108,13 @@ public final class Session {
         Layout layout = Layout.parse(params.get("layout"));
         MappingRegistry registry = MappingRegistry.parse(params.get("mappings"), builtins);
         JsonNode options = params.path("options");
+        Dialect dialect = Dialect.parse(options);
         CobolFrontend frontend;
         try {
             frontend = new CobolFrontend(new CobolFrontend.Options(
-                    CobolFrontend.Options.parseFormat(options.path("source_format").asText("fixed")),
-                    Charset.forName(options.path("source_encoding").asText("ISO-8859-1"))));
+                    CobolFrontend.Options.parseFormat(dialect.sourceFormat()),
+                    Charset.forName(options.path("source_encoding").asText("ISO-8859-1")),
+                    dialect.debuggingLines()));
         } catch (IllegalArgumentException e) {
             throw new ProtocolException(ErrorCode.INVALID_PARAMS, "invalid options: " + e.getMessage());
         }
@@ -122,7 +127,7 @@ public final class Session {
             extraCopybookPaths.add(absolute(p.asText(), "copybook_paths[]"));
         }
 
-        Session session = new Session(id, sourceRoot, outputRoot, layout, registry, builtins);
+        Session session = new Session(id, sourceRoot, outputRoot, layout, registry, builtins, dialect);
         ArrayNode files = Json.requireArray(params, "files");
         List<ProgramState> toParse = new ArrayList<>();
         for (JsonNode f : files) {
@@ -269,6 +274,7 @@ public final class Session {
         ArrayNode cbs = r.putArray("copybooks");
         copybooks.forEach(cbs::add);
         r.put("mapping_rules", registry.rules().size());
+        r.set("dialect", dialect.toJson());
         return r;
     }
 
@@ -334,7 +340,7 @@ public final class Session {
             if (!ps.failed) {
                 var out = new ProgramTranslator(new ProgramTranslator.Input(ps.unit, ps.sourceMap, ps.relativePath, ps.programId,
                         ps.packageName, ps.className, layout.runtimePackage(), registry, builtins,
-                        pid -> Optional.ofNullable(programDirectory.get(pid)))).translate();
+                        pid -> Optional.ofNullable(programDirectory.get(pid)), dialect)).translate();
                 ps.java = out.compilationUnit();
                 ps.statements = out.statements();
                 ps.translatedStatements = out.translated();
@@ -357,7 +363,7 @@ public final class Session {
     }
 
     private void register(Decision d) {
-        d.register("decision-" + (decisions.size() + 1), TARGET_LANGUAGE);
+        d.register("decision-" + (decisions.size() + 1), TARGET_LANGUAGE, dialect.hash());
         decisions.add(d);
         decisionsById.put(d.id(), d);
     }

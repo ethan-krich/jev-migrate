@@ -105,6 +105,38 @@ public final class SourceMap {
         return new SourceMap(List.copyOf(expansions), exact);
     }
 
+    /** Every copybook a source includes, directly or through other copybooks, as ProLeap resolves them. */
+    static List<File> copybooks(String source, CobolParserParams params) {
+        List<File> found = new ArrayList<>();
+        collect(source, params, found);
+        return found;
+    }
+
+    private static void collect(String source, CobolParserParams params, List<File> found) {
+        String normalized = new Normalizer().normalize(source, params);
+        var parser = new CobolPreprocessorParser(new CommonTokenStream(new CobolPreprocessorLexer(CharStreams.fromString(normalized))));
+        parser.removeErrorListeners();
+        parser.addErrorListener(new BaseErrorListener());
+        List<File> direct = new ArrayList<>();
+        new ParseTreeWalker().walk(new CobolPreprocessorBaseListener() {
+            @Override
+            public void enterCopyStatement(CobolPreprocessorParser.CopyStatementContext ctx) {
+                File copybook = find(ctx.copySource(), params);
+                if (copybook != null && !found.contains(copybook) && !direct.contains(copybook)) {
+                    direct.add(copybook);
+                }
+            }
+        }, parser.startRule());
+        for (File f : direct) {
+            found.add(f);
+            try {
+                collect(java.nio.file.Files.readString(f.toPath(), params.getCharset()), params, found);
+            } catch (IOException e) {
+                // Reported by the parse itself as a missing copybook.
+            }
+        }
+    }
+
     private static File find(CobolPreprocessorParser.CopySourceContext src, CobolParserParams params) {
         if (src.cobolWord() != null) {
             return new CobolWordCopyBookFinderImpl().findCopyBook(params, src.cobolWord());

@@ -21,6 +21,7 @@ import transpiler.cobol2java.cobol.CobolFrontend;
 import transpiler.cobol2java.cobol.SourceMap;
 import transpiler.cobol2java.mapping.MappingRegistry;
 import transpiler.cobol2java.protocol.Json;
+import transpiler.cobol2java.session.Dialect;
 import transpiler.cobol2java.translate.Builtins;
 import transpiler.cobol2java.translate.ProgramTranslator;
 
@@ -53,7 +54,7 @@ public final class TestSupport {
     public static ProgramUnit parse(Path dir, String source) throws Exception {
         Path file = dir.resolve("T.cbl");
         Files.writeString(file, source, StandardCharsets.ISO_8859_1);
-        var frontend = new CobolFrontend(new CobolFrontend.Options(CobolSourceFormatEnum.FIXED, StandardCharsets.ISO_8859_1));
+        var frontend = new CobolFrontend(new CobolFrontend.Options(CobolSourceFormatEnum.FIXED, StandardCharsets.ISO_8859_1, false));
         return frontend.parse(file, List.of(dir), List.of(".cpy")).program().getCompilationUnits().getFirst().getProgramUnit();
     }
 
@@ -102,8 +103,18 @@ public final class TestSupport {
 
     public static ProgramTranslator.Result translate(Path dir, String source, ArrayNode rules, Map<String, String> programs)
             throws Exception {
+        return translate(dir, source, rules, programs, Dialect.defaults());
+    }
+
+    public static ProgramTranslator.Result translate(Path dir, String source, ArrayNode rules, Map<String, String> programs,
+            Dialect dialect) throws Exception {
         return new ProgramTranslator(new ProgramTranslator.Input(parse(dir, source), SourceMap.identity(), "T.cbl", "T", "test.gen", "T",
-                "transpiler.cobol.runtime", registry(rules), BUILTINS, id -> Optional.ofNullable(programs.get(id)))).translate();
+                "transpiler.cobol.runtime", registry(rules), BUILTINS, id -> Optional.ofNullable(programs.get(id)), dialect)).translate();
+    }
+
+    /** A dialect from JSON options, e.g. {@code dialect("{\"encoding\": \"ascii\"}")}. */
+    public static Dialect dialect(String json) throws Exception {
+        return Dialect.parse(Json.MAPPER.readTree(json));
     }
 
     /** Compiles generated Java against the runtime on the test classpath; returns diagnostics. */
