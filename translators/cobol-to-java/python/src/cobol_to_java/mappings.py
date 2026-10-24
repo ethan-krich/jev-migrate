@@ -32,7 +32,18 @@ BUILTIN_HANDLERS = MappingProxyType({
     "accept_stdin": "ACCEPT",
     "accept_datetime": "ACCEPT",
     "exhibit": "EXHIBIT",
+    "move_group": "MOVE",
+    "initialize": "INITIALIZE",
+    "set_index": "SET",
+    "search": "SEARCH",
+    "search_all": "SEARCH",
+    "search_all_binary": "SEARCH",
+    "search_all_linear": "SEARCH",
 })
+
+# Handlers that no default rule selects: the worker offers them as candidates on a decision
+# (they are correct only under conditions it cannot prove, e.g. SEARCH ALL key order).
+CANDIDATE_HANDLERS = frozenset({"search_all_binary", "search_all_linear"})
 
 # Facts the worker computes per operation instance; usable as `when` condition keys.
 FACTS = MappingProxyType({
@@ -52,6 +63,8 @@ FACTS = MappingProxyType({
     "EVALUATE": frozenset({"subjects", "has_other", "has_thru"}),
     "ACCEPT": frozenset({"from"}),
     "EXHIBIT": frozenset({"named", "changed"}),
+    "INITIALIZE": frozenset({"replacing", "to_value", "with_filler", "then_default"}),
+    "SEARCH": frozenset({"all", "varying", "at_end"}),
 })
 
 # COBOL statement verbs known to the parser (rules may target any of them, e.g. to mark one
@@ -93,4 +106,11 @@ DEFAULT_RULES: tuple[tuple[str, str, str, dict, str], ...] = (
     ("cobol.accept.datetime", "ACCEPT", "accept_datetime",
      {"from": ("date", "date_yyyymmdd", "day", "day_yyyyddd", "day_of_week", "time")}, "ACCEPT FROM DATE / DAY / TIME"),
     ("cobol.exhibit", "EXHIBIT", "exhibit", {"changed": False}, "EXHIBIT [NAMED]"),
+    ("cobol.move.to_group", "MOVE", "move_group", {"target_category": "group"},
+     "MOVE into a group: bytes as alphanumeric data"),
+    ("cobol.initialize", "INITIALIZE", "initialize", {}, "INITIALIZE item by item"),
+    ("cobol.set.index", "SET", "set_index", {"form": ("to", "up_by", "down_by")}, "SET index TO / UP BY / DOWN BY"),
+    ("cobol.search", "SEARCH", "search", {"all": False}, "serial SEARCH"),
+    ("cobol.search_all", "SEARCH", "search_all", {"all": True},
+     "SEARCH ALL (a decision unless key order is proven; binary and serial candidates)"),
 )

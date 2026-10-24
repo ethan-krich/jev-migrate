@@ -11,15 +11,22 @@ public final class AlphanumericField {
     private final Storage storage;
     private final int offset;
     private final int length;
+    private final boolean justified;
 
     /** A view of {@code length} bytes at {@code offset}; the bytes are left as they are. */
     public AlphanumericField(Storage storage, int offset, int length) {
-        if (length <= 0 || offset < 0 || offset + length > storage.length()) {
+        this(storage, offset, length, false);
+    }
+
+    /** A view of a {@code JUSTIFIED RIGHT} item when {@code justified}. */
+    public AlphanumericField(Storage storage, int offset, int length, boolean justified) {
+        if (length < 0 || offset < 0 || offset + length > storage.length()) {
             throw new IllegalArgumentException("invalid range " + offset + "+" + length + " of " + storage.length() + " bytes");
         }
         this.storage = storage;
         this.offset = offset;
         this.length = length;
+        this.justified = justified;
     }
 
     /** A standalone item (its own record), initialised to spaces. */
@@ -39,9 +46,9 @@ public final class AlphanumericField {
         return this;
     }
 
-    /** Initialises the item as if by {@code VALUE value}; returns this view. */
+    /** Initialises the item as if by {@code VALUE value} (left-aligned even when JUSTIFIED); returns this view. */
     public AlphanumericField initial(String value) {
-        set(value);
+        storage.put(offset, length, value);
         return this;
     }
 
@@ -57,9 +64,31 @@ public final class AlphanumericField {
         return length;
     }
 
-    /** MOVE of alphanumeric data into this field. */
+    /**
+     * MOVE of alphanumeric data into this field: left-justified, space-padded and cut on the
+     * right; a JUSTIFIED RIGHT item is right-justified and cut on the left instead.
+     */
     public void set(String value) {
+        if (justified && value.length() != length) {
+            if (value.length() > length) {
+                storage.put(offset, length, value.substring(value.length() - length));
+            } else {
+                storage.fill(offset, length - value.length(), (byte) ' ');
+                storage.put(offset + length - value.length(), value.length(), value);
+            }
+            return;
+        }
         storage.put(offset, length, value);
+    }
+
+    /** Reference modification {@code (start : length)}, checked as GnuCOBOL checks it at run time. */
+    public AlphanumericField ref(int start, int length, String name) {
+        return Bounds.ref(storage, offset, this.length, start, length, name);
+    }
+
+    /** Reference modification {@code (start :)}: to the end of the item. */
+    public AlphanumericField ref(int start, String name) {
+        return Bounds.ref(storage, offset, this.length, start, this.length - start + 1, name);
     }
 
     /** MOVE of a figurative constant (SPACES, ZEROS) into this field. */

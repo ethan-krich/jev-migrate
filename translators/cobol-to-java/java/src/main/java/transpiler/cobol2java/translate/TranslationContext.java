@@ -33,6 +33,12 @@ public interface TranslationContext {
     /** The Java expression naming a data item's field (or RETURN-CODE). */
     Expression field(Operand operand) throws HandlerException;
 
+    /**
+     * The Java expression for a receiving data item. Like {@link #field} except that a group
+     * whose OCCURS DEPENDING ON object lies inside it receives at its maximum length.
+     */
+    Expression receiving(Operand operand) throws HandlerException;
+
     /** Translates nested statements (IF branches, inline PERFORM, SIZE ERROR phrases). */
     BlockStmt nested(Scope scope);
 
@@ -55,6 +61,15 @@ public interface TranslationContext {
      * @param usage what needs the setting, for the decision message ("HIGH-VALUES")
      */
     <T> T require(String field, Optional<T> value, ParserRuleContext where, String usage) throws HandlerException;
+
+    /** The data item a call names, without subscripts (SEARCH tables, INITIALIZE expansion). */
+    DataItem dataItem(Call call) throws HandlerException;
+
+    /** Whether two operands may share bytes (conservatively true for subscripted or modified references). */
+    boolean overlaps(Operand a, Operand b);
+
+    /** Requires Dialect.encoding = ascii when {@code item}'s bytes include signed zoned items. */
+    void requireBytes(DataItem item, String usage) throws HandlerException;
 
     /** Whether SPECIAL-NAMES declares DECIMAL-POINT IS COMMA. */
     boolean decimalPointComma();

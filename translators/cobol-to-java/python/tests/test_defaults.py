@@ -2,15 +2,17 @@ import pytest
 
 import cobol_to_java
 from cobol_to_java import BUILTIN_HANDLERS, Layout, default_mappings, empty_mappings, language_pair
+from cobol_to_java.mappings import CANDIDATE_HANDLERS
 from transpiler import MappingError, find_language_pair
 
 
 def test_defaults_cover_the_supported_subset():
     m = default_mappings()
-    assert {r.handler for r in m} == set(BUILTIN_HANDLERS)
+    assert {r.handler for r in m} == set(BUILTIN_HANDLERS) - CANDIDATE_HANDLERS
+    assert CANDIDATE_HANDLERS <= set(BUILTIN_HANDLERS)
     assert m.sources() == sorted({"MOVE", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "COMPUTE", "DISPLAY", "IF",
                                   "PERFORM", "STOP", "GOBACK", "EXIT", "CONTINUE", "CALL", "SET", "EVALUATE",
-                                  "ACCEPT", "EXHIBIT"})
+                                  "ACCEPT", "EXHIBIT", "INITIALIZE", "SEARCH"})
     m.validate()
 
 

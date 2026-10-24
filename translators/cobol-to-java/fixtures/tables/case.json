@@ -1,0 +1,8 @@
+{
+  "description": "OCCURS (nested, VALUE), subscripts, reference modification of elements, INDEXED BY, SET, SEARCH, OCCURS DEPENDING ON, and an out-of-range subscript stopping the run unit",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "out_of_range": "fail"},
+  "equivalence": {"programs": ["TABLES.cbl"], "main_class": "fixtures.tables.Tables",
+                  "cobc_flags": ["-fec=EC-BOUND-SUBSCRIPT", "-fec=EC-BOUND-REF-MOD", "-fec=EC-BOUND-ODO"]},
+  "layout": {"base_package": "fixtures.tables"}
+}

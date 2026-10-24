@@ -23,6 +23,9 @@ val grammarExtensions = mapOf(
     // Level-88 VALUE ... WHEN SET TO FALSE IS literal (COBOL 2002).
     "dataValueClause\n   : ((VALUE | VALUES) (IS | ARE)?)? dataValueInterval (COMMACHAR? dataValueInterval)*\n" to
         "dataValueClause\n   : ((VALUE | VALUES) (IS | ARE)?)? dataValueInterval (COMMACHAR? dataValueInterval)* (WHEN? SET TO FALSE IS? literal)?\n",
+    // INITIALIZE ... [WITH FILLER] [ALL TO VALUE] [REPLACING ...] [THEN TO DEFAULT] (COBOL 2002).
+    "initializeStatement\n   : INITIALIZE identifier+ initializeReplacingPhrase?\n" to
+        "initializeStatement\n   : INITIALIZE identifier+ (WITH? FILLER)? (ALL TO? VALUE)? THEN? initializeReplacingPhrase? (THEN? TO? DEFAULT)?\n",
 )
 
 val patchGrammar by tasks.registering {

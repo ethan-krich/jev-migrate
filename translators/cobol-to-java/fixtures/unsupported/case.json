@@ -3,7 +3,6 @@
   "expect": {
     "status": "incomplete",
     "decisions": [
-      {"reason": "unsupported_construct", "operation": "DATA", "line": 6},
       {"reason": "unsupported_construct", "operation": "DATA", "line": 7},
       {"reason": "unsupported_construct", "operation": "DATA", "line": 10},
       {"reason": "unsupported_construct", "operation": "COMPUTE", "line": 18},

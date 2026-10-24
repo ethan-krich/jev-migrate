@@ -89,6 +89,11 @@ public final class TestSupport {
         rules.add(rule("cobol.accept.datetime", "ACCEPT", "accept_datetime",
                 Map.of("from", List.of("date", "date_yyyymmdd", "day", "day_yyyyddd", "day_of_week", "time")), 100));
         rules.add(rule("cobol.exhibit", "EXHIBIT", "exhibit", Map.of("changed", false), 100));
+        rules.add(rule("cobol.move.to_group", "MOVE", "move_group", Map.of("target_category", "group"), 100));
+        rules.add(rule("cobol.initialize", "INITIALIZE", "initialize", Map.of(), 100));
+        rules.add(rule("cobol.set.index", "SET", "set_index", Map.of("form", List.of("to", "up_by", "down_by")), 100));
+        rules.add(rule("cobol.search", "SEARCH", "search", Map.of("all", false), 100));
+        rules.add(rule("cobol.search_all", "SEARCH", "search_all", Map.of("all", true), 100));
         return rules;
     }
 

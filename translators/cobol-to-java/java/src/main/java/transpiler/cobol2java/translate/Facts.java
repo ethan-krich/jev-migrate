@@ -53,7 +53,9 @@ public final class Facts {
             Map.entry("SET", Set.of("form")),
             Map.entry("EVALUATE", Set.of("subjects", "has_other", "has_thru")),
             Map.entry("ACCEPT", Set.of("from")),
-            Map.entry("EXHIBIT", Set.of("named", "changed")));
+            Map.entry("EXHIBIT", Set.of("named", "changed")),
+            Map.entry("INITIALIZE", Set.of("replacing", "to_value", "with_filler", "then_default")),
+            Map.entry("SEARCH", Set.of("all", "varying", "at_end")));
 
     private Facts() {}
 
@@ -203,6 +205,19 @@ public final class Facts {
                     from = device.equals("SYSIN") || device.equals("CONSOLE") ? "stdin" : "device";
                 }
                 f.put("from", from);
+            }
+            case "INITIALIZE" -> {
+                var init = (io.proleap.cobol.CobolParser.InitializeStatementContext) s.getCtx();
+                f.put("replacing", init.initializeReplacingPhrase() != null);
+                f.put("to_value", init.VALUE() != null);
+                f.put("with_filler", init.FILLER() != null);
+                f.put("then_default", init.DEFAULT() != null);
+            }
+            case "SEARCH" -> {
+                var search = (io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement) s;
+                f.put("all", ((io.proleap.cobol.CobolParser.SearchStatementContext) s.getCtx()).ALL() != null);
+                f.put("varying", search.getVaryingPhrase() != null);
+                f.put("at_end", search.getAtEndPhrase() != null);
             }
             case "EXHIBIT" -> {
                 var e = (io.proleap.cobol.CobolParser.ExhibitStatementContext) s.getCtx();

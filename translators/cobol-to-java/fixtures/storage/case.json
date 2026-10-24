@@ -1,0 +1,8 @@
+{
+  "description": "Byte storage: group MOVE and compare, REDEFINES, reference modification, SIGN, JUSTIFIED, level 78, class tests on bytes, INITIALIZE",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "out_of_range": "fail"},
+  "equivalence": {"programs": ["BYTES.cbl"], "main_class": "fixtures.storage.Bytes",
+                  "cobc_flags": ["-fec=EC-BOUND-SUBSCRIPT", "-fec=EC-BOUND-REF-MOD", "-fec=EC-BOUND-ODO"]},
+  "layout": {"base_package": "fixtures.storage"}
+}

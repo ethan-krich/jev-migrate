@@ -1,0 +1,29 @@
+[abc  012u--07xyz]
+[abc  012u--07xyz][abc  012][u--07xyz]
+hello 3
+[abc  012u--07xyz]
+[abc  012u--ZZ   ] ZZ
+not num
+num
+[012u ]
+h2 > h1
+differ
+bc |--012u |b
+[aQQ  ]
+[aQQ  012u--123u ]
+-007|007+|-042|-007007+p42|
++003|017+|-032|+003017+p32|
+[J     ]
+[cdefgh]
+[    ab]
+1235
+not num
+num
+[     0000--00   ]
+[zzzzz0090zz09zzz]
+[abc  012uzz07xyz]
+[q    0000zz00q  ]
+[     zzzzzz00zzz]
+[                ]
+[           00000]
+[12345           ]

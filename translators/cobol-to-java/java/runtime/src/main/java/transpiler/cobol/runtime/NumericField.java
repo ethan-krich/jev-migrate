@@ -142,7 +142,10 @@ public final class NumericField {
         putSign(unscaled.signum() < 0);
     }
 
-    /** MOVE between numeric DISPLAY items: digit positions are aligned on the decimal point and copied. */
+    /**
+     * MOVE between numeric DISPLAY items: digit positions are aligned on the decimal point and
+     * copied as they are, except that a space becomes a zero.
+     */
     public void move(NumericField source) {
         if (source == this) {
             return;
@@ -152,7 +155,8 @@ public final class NumericField {
         byte[] moved = new byte[digits];
         for (int i = 0; i < digits; i++) {
             int j = i + shift;
-            moved[i] = j >= 0 && j < source.digits ? (byte) source.digitChar(j) : (byte) '0';
+            char d = j >= 0 && j < source.digits ? source.digitChar(j) : '0';
+            moved[i] = (byte) (d == ' ' ? '0' : d);
         }
         for (int i = 0; i < digits; i++) {
             storage.bytes[digitIndex(i)] = moved[i];
@@ -191,6 +195,39 @@ public final class NumericField {
         return new String(out);
     }
 
+    /** The item's bytes as characters (a group move or reference modification sees these). */
+    public String bytes() {
+        return storage.text(offset, size());
+    }
+
+    /** Reference modification of the item's bytes. */
+    public AlphanumericField ref(int start, int length, String name) {
+        return Bounds.ref(storage, offset, size(), start, length, name);
+    }
+
+    public AlphanumericField ref(int start, String name) {
+        return Bounds.ref(storage, offset, size(), start, size() - start + 1, name);
+    }
+
+    /**
+     * Class condition NUMERIC: every digit position holds {@code '0'..'9'}; an embedded sign
+     * position may also hold {@code 'p'..'y'} and a separate sign is {@code '+'} or {@code '-'}.
+     */
+    public boolean isNumeric() {
+        for (int i = 0; i < digits; i++) {
+            int b = storage.bytes[digitIndex(i)] & 0xFF;
+            boolean ok = (b >= '0' && b <= '9') || (isSignDigit(i) && b >= 'p' && b <= 'y');
+            if (!ok) {
+                return false;
+            }
+        }
+        if (signSeparate) {
+            byte sign = storage.bytes[signLeading ? offset : offset + digits];
+            return sign == '+' || sign == '-';
+        }
+        return true;
+    }
+
     /** GnuCOBOL DISPLAY format: leading sign when signed, decimal point when scaled. */
     public String display() {
         return display('.');
@@ -200,12 +237,19 @@ public final class NumericField {
     public String display(char point) {
         String raw = digits();
         StringBuilder sb = new StringBuilder(digits + 2);
-        if (signed) {
+        // A separate sign is shown where it is stored, as it is stored; an embedded one leads.
+        char separate = signSeparate ? (char) (storage.bytes[signLeading ? offset : offset + digits] & 0xFF) : 0;
+        if (signSeparate && signLeading) {
+            sb.append(separate);
+        } else if (signed && !signSeparate) {
             sb.append(get().signum() < 0 ? '-' : '+');
         }
         sb.append(raw, 0, digits - scale);
         if (scale > 0) {
             sb.append(point).append(raw, digits - scale, digits);
+        }
+        if (signSeparate && !signLeading) {
+            sb.append(separate);
         }
         return sb.toString();
     }
@@ -223,14 +267,17 @@ public final class NumericField {
         return signed && !signSeparate && i == (signLeading ? 0 : digits - 1);
     }
 
-    /** The character of digit position {@code i} with an embedded sign removed. */
+    /**
+     * The character of digit position {@code i} with an embedded sign removed: {@code 'p'..'y'}
+     * read as their digit, a space stays a space, anything else that is not a digit reads as zero.
+     */
     private char digitChar(int i) {
         int b = storage.bytes[digitIndex(i)] & 0xFF;
         if (isSignDigit(i)) {
             if (b >= 'p' && b <= 'y') {
                 return (char) (b - 0x40);
             }
-            return b >= '0' && b <= '9' ? (char) b : '0';
+            return (b >= '0' && b <= '9') || b == ' ' ? (char) b : '0';
         }
         return (char) b;
     }

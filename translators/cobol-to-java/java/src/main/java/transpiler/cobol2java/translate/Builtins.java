@@ -105,6 +105,18 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("accept_datetime", "ACCEPT",
                 "ACCEPT FROM DATE [YYYYMMDD] / DAY [YYYYDDD] / DAY-OF-WEEK / TIME via the runtime Clock", Builtins::acceptDatetime));
         register(Handler.of("exhibit", "EXHIBIT", "EXHIBIT [NAMED] as GnuCOBOL: NAME = value for items", Builtins::exhibit));
+        register(Handler.of("move_group", "MOVE",
+                "MOVE into a group item: the sending bytes as alphanumeric data, space-padded or cut", Builtins::moveToGroup));
+        register(Handler.of("initialize", "INITIALIZE",
+                "INITIALIZE [WITH FILLER] [ALL TO VALUE] [REPLACING ...] [THEN TO DEFAULT] item by item", Builtins::initialize));
+        register(Handler.of("set_index", "SET", "SET index TO / UP BY / DOWN BY, SET item TO index", Builtins::setIndex));
+        register(Handler.of("search", "SEARCH", "Serial SEARCH [VARYING] with AT END and WHEN", Builtins::search));
+        register(Handler.of("search_all", "SEARCH",
+                "SEARCH ALL where the table's keys are proven ascending/descending and unique", Builtins::searchAll));
+        register(Handler.of("search_all_binary", "SEARCH",
+                "SEARCH ALL as a binary search on the KEY (correct only if the keys are in order)", Builtins::searchAllBinary));
+        register(Handler.of("search_all_linear", "SEARCH",
+                "SEARCH ALL as a serial scan from the first occurrence (correct only if the keys are unique)", Builtins::searchAllLinear));
     }
 
     private void register(Handler h) {
@@ -158,10 +170,12 @@ public final class Builtins implements MappingRegistry.Catalog {
             return new Operand.Field(u.corresponding().source());
         }
         Operand src = moveAll(move, c.operand(move.getMoveToStatement().getSendingArea().getSendingAreaValueStmt()));
-        for (Call receiver : move.getMoveToStatement().getReceivingAreaCalls()) {
-            if (src instanceof Operand.Field f && c.operand(receiver) instanceof Operand.Field r && r.item() == f.item()
-                    && move.getMoveToStatement().getReceivingAreaCalls().size() > 1) {
-                throw HandlerException.unsupported("MOVE whose sending item is also one of several receivers");
+        if (move.getMoveToStatement().getReceivingAreaCalls().size() > 1) {
+            // Each receiver is a separate store: a receiver that shares bytes with the sender would change it for the next.
+            for (Call receiver : move.getMoveToStatement().getReceivingAreaCalls()) {
+                if (c.overlaps(src, c.operand(receiver))) {
+                    throw HandlerException.unsupported("MOVE to several receivers where one shares storage with the sending item");
+                }
             }
         }
         return src;
@@ -181,10 +195,36 @@ public final class Builtins implements MappingRegistry.Catalog {
 
     private static List<Statement> moveToAlphanumeric(OpUnit u, TranslationContext c) throws HandlerException {
         Operand target = moveTarget(u, c);
-        if (!(target instanceof Operand.Field t) || !t.item().isAlphanumeric()) {
+        if (!(target instanceof Operand.Field t) || !t.alphanumeric() || (t.refmod() == null && t.item().isGroup())) {
             throw HandlerException.notApplicable("receiver " + receiverName(u, target) + " is not alphanumeric");
         }
         return List.of(storeAlphanumeric(c.field(target), moveSource(u, c), c));
+    }
+
+    /** A group receives the sending item's bytes unconverted (a numeric item's digits and sign as stored). */
+    private static List<Statement> moveToGroup(OpUnit u, TranslationContext c) throws HandlerException {
+        Operand target = moveTarget(u, c);
+        if (!(target instanceof Operand.Field t) || !t.item().isGroup() || t.refmod() != null) {
+            throw HandlerException.notApplicable("receiver " + receiverName(u, target) + " is not a group item");
+        }
+        Operand src = moveSource(u, c);
+        Expression field = c.receiving(target);
+        Expression value = switch (src) {
+            case Operand.Field f when f.numeric() -> {
+                c.requireBytes(f.item(), "MOVE of " + f.item().cobolName() + " to a group");
+                yield call(c.field(src), "bytes");
+            }
+            case Operand.Field f when f.alphanumeric() -> call(c.field(src), "get");
+            case Operand.ReturnCode r -> throw HandlerException.unsupported("MOVE RETURN-CODE to a group item is not supported");
+            case Operand.AlphanumericLiteral a -> str(a.value());
+            case Operand.NumericLiteral n when n.isInteger() && !n.isSigned() -> str(n.text());
+            case Operand.Figurative f -> null;
+            default -> throw HandlerException.unsupported("MOVE from " + src.category() + " to a group item is not supported");
+        };
+        if (src instanceof Operand.Figurative f) {
+            return List.of(stmt(call(field, "fill", f.isSingle() ? chr(f.fill()) : str(f.pattern()))));
+        }
+        return List.of(stmt(call(field, "set", value)));
     }
 
     private static String receiverName(OpUnit u, Operand target) {
@@ -194,9 +234,9 @@ public final class Builtins implements MappingRegistry.Catalog {
     /** MOVE of {@code src} into an alphanumeric field (shared by MOVE, SET condition-name and ACCEPT). */
     static Statement storeAlphanumeric(Expression field, Operand src, TranslationContext c) throws HandlerException {
         Expression value = switch (src) {
-            case Operand.Field f when f.item().isAlphanumeric() -> call(c.field(src), "get");
-            case Operand.Field f when f.item().isInteger() -> c.field(src);
-            case Operand.Field f when f.item().isNumeric() ->
+            case Operand.Field f when f.alphanumeric() -> call(c.field(src), "get");
+            case Operand.Field f when f.integer() -> c.field(src);
+            case Operand.Field f when f.numeric() ->
                 throw HandlerException.unsupported("MOVE of non-integer numeric " + f.item().cobolName() + " to alphanumeric is invalid COBOL");
             case Operand.AlphanumericLiteral a -> str(a.value());
             case Operand.NumericLiteral n when n.isInteger() -> str(n.unsignedText());
@@ -213,7 +253,7 @@ public final class Builtins implements MappingRegistry.Catalog {
     private static List<Statement> moveToNumeric(OpUnit u, TranslationContext c) throws HandlerException {
         Operand target = moveTarget(u, c);
         boolean numericTarget = target instanceof Operand.ReturnCode
-                || target instanceof Operand.Field t && t.item().isNumeric();
+                || target instanceof Operand.Field t && t.numeric();
         if (!numericTarget) {
             throw HandlerException.notApplicable("receiver " + receiverName(u, target) + " is not numeric");
         }
@@ -237,7 +277,7 @@ public final class Builtins implements MappingRegistry.Catalog {
     private static Receiver receiver(Call call, ASGElement phrase, TranslationContext c) throws HandlerException {
         Operand o = c.operand(call);
         int scale;
-        if (o instanceof Operand.Field f && f.item().isNumeric()) {
+        if (o instanceof Operand.Field f && f.numeric()) {
             scale = f.item().numeric().scale();
         } else if (o instanceof Operand.ReturnCode) {
             scale = 0;
@@ -519,9 +559,9 @@ public final class Builtins implements MappingRegistry.Catalog {
     /** The DISPLAY text of an operand. */
     private static Expression displayValue(Operand o, TranslationContext c) throws HandlerException {
         return switch (o) {
-            case Operand.Field f when f.item().isNumeric() && c.decimalPointComma() && f.item().numeric().scale() > 0 ->
+            case Operand.Field f when f.numeric() && c.decimalPointComma() && f.item().numeric().scale() > 0 ->
                     call(c.field(o), "display", chr(','));
-            case Operand.Field f when f.item().isAlphanumeric() || f.item().isNumeric() -> call(c.field(o), "display");
+            case Operand.Field f when f.alphanumeric() || f.numeric() -> call(c.field(o), "display");
             case Operand.ReturnCode r -> call(c.field(o), "display");
             case Operand.AlphanumericLiteral a -> str(a.value());
             case Operand.NumericLiteral n -> str(n.displayText());
@@ -566,10 +606,10 @@ public final class Builtins implements MappingRegistry.Catalog {
             throw HandlerException.notApplicable("ACCEPT FROM " + a.getAcceptType() + " is not standard input");
         }
         Operand target = c.operand(a.getAcceptCall());
-        if (!(target instanceof Operand.Field f) || !f.item().isAlphanumeric()) {
+        if (!(target instanceof Operand.Field f) || !f.alphanumeric()) {
             throw HandlerException.unsupported("ACCEPT into " + target.category() + " is not supported (only alphanumeric items)");
         }
-        return List.of(stmt(call(c.field(target), "set", staticCall("Accept", "line"))));
+        return List.of(stmt(call(c.receiving(target), "set", staticCall("Accept", "line"))));
     }
 
     private static List<Statement> acceptDatetime(OpUnit u, TranslationContext c) throws HandlerException {
@@ -590,10 +630,10 @@ public final class Builtins implements MappingRegistry.Catalog {
         // The value is an unsigned integer of fixed width, moved as such.
         Operand target = c.operand(a.getAcceptCall());
         Expression value = staticCall("Clock", method);
-        if (target instanceof Operand.Field f && f.item().isAlphanumeric()) {
+        if (target instanceof Operand.Field f && f.alphanumeric()) {
             return List.of(stmt(call(c.field(target), "set", value)));
         }
-        if (target instanceof Operand.ReturnCode || target instanceof Operand.Field f && f.item().isNumeric()) {
+        if (target instanceof Operand.ReturnCode || target instanceof Operand.Field f && f.numeric()) {
             return List.of(stmt(call(c.field(target), "move", create("BigDecimal", value))));
         }
         throw HandlerException.unsupported("ACCEPT into " + target.category() + " is not supported");
@@ -831,7 +871,7 @@ public final class Builtins implements MappingRegistry.Catalog {
             case TIMES -> {
                 Operand times = c.operand(type.getTimes().getTimesValueStmt());
                 boolean integral = times instanceof Operand.NumericLiteral n && n.isInteger()
-                        || times instanceof Operand.Field f && f.item().isInteger();
+                        || times instanceof Operand.Field f && f.integer();
                 if (!integral) {
                     throw HandlerException.unsupported("PERFORM ... TIMES requires an integer literal or integer item");
                 }
@@ -857,7 +897,23 @@ public final class Builtins implements MappingRegistry.Catalog {
                 }
                 VaryingPhrase phrase = varying.getVaryingClause().getVaryingPhrase();
                 Operand var = c.operand(phrase.getVaryingValueStmt());
-                if (!(var instanceof Operand.Field f && f.item().isNumeric())) {
+                if (var instanceof Operand.Index idx) {
+                    // An index holds an occurrence number: FROM sets it, BY adds to it.
+                    Expression from = intValue(c.operand(phrase.getFrom().getFromValueStmt()), c);
+                    Expression by = intValue(c.operand(phrase.getBy().getByValueStmt()), c);
+                    Expression until = c.condition(phrase.getUntil().getCondition());
+                    Statement init = stmt(new AssignExpr(name(idx.index().javaName()), from, AssignExpr.Operator.ASSIGN));
+                    Statement step = stmt(new AssignExpr(name(idx.index().javaName()), by, AssignExpr.Operator.PLUS));
+                    BlockStmt loop = body;
+                    if (testAfter(varying.getTestClause())) {
+                        loop.addStatement(new IfStmt(until, new BreakStmt(), null));
+                        loop.addStatement(step);
+                        yield List.of(init, new WhileStmt(bool(true), loop));
+                    }
+                    loop.addStatement(step);
+                    yield List.of(init, new WhileStmt(not(until), loop));
+                }
+                if (!(var instanceof Operand.Field f && f.numeric())) {
                     throw HandlerException.unsupported("PERFORM VARYING requires a numeric data item");
                 }
                 Expression field = c.field(var);
@@ -931,5 +987,310 @@ public final class Builtins implements MappingRegistry.Catalog {
         String cls = c.programClass(program).orElseThrow(() -> new HandlerException(HandlerException.Kind.MISSING_TARGET,
                 "program '" + program + "' is not part of the translation project (unresolved cross-file dependency)"));
         return List.of(stmt(staticCall("ProgramSupport", "call", self(), call(name(cls), "instance"))));
+    }
+
+    /** An integer-valued operand (literal, integer item or index) as a Java int. */
+    static Expression intValue(Operand o, TranslationContext c) throws HandlerException {
+        return switch (o) {
+            case Operand.NumericLiteral n when n.isInteger() -> integer(n.value().intValueExact());
+            case Operand.Field f when f.integer() -> call(c.field(f), "intValue");
+            case Operand.Index i -> name(i.index().javaName());
+            default -> throw HandlerException.unsupported(o.category() + " where an integer is required");
+        };
+    }
+
+    // ---------------------------------------------------------- INITIALIZE
+
+    private static List<Statement> initialize(OpUnit u, TranslationContext c) throws HandlerException {
+        var s = (io.proleap.cobol.asg.metamodel.procedure.initialize.InitializeStatement) u.statement();
+        var ctx = (io.proleap.cobol.CobolParser.InitializeStatementContext) s.getCtx();
+        boolean withFiller = ctx.FILLER() != null;
+        boolean toValue = ctx.VALUE() != null;
+        Map<String, Operand> replacing = new LinkedHashMap<>();
+        if (s.getReplacingPhrase() != null) {
+            for (var by : s.getReplacingPhrase().getBys()) {
+                String category = switch (by.getByType()) {
+                    case ALPHANUMERIC -> "alphanumeric";
+                    case NUMERIC -> "numeric";
+                    // No supported item is alphabetic or edited, so these replace nothing.
+                    case ALPHABETIC, ALPHANUMERIC_EDITED, NUMERIC_EDITED -> by.getByType().name().toLowerCase(java.util.Locale.ROOT);
+                    default -> throw HandlerException.unsupported("INITIALIZE REPLACING " + by.getByType() + " is not supported");
+                };
+                replacing.put(category, c.operand(by.getValueStmt()));
+            }
+        }
+        // Without REPLACING or TO VALUE every item gets its default; with them, only THEN TO DEFAULT adds it.
+        boolean defaults = (replacing.isEmpty() && !toValue) || ctx.DEFAULT() != null;
+        List<Statement> out = new ArrayList<>();
+        for (Call call : s.getDataItemCalls()) {
+            Operand o = c.operand(call);
+            if (!(o instanceof Operand.Field target) || target.refmod() != null) {
+                throw HandlerException.unsupported("INITIALIZE of " + o.category() + " is not supported");
+            }
+            if (target.item().isGroup() && target.item().variableTable() != null) {
+                throw HandlerException.unsupported("INITIALIZE of a group with OCCURS DEPENDING ON is not supported");
+            }
+            for (DataItem e : target.item().elementaryItems()) {
+                if (e != target.item() && (skippedByInitialize(e, target.item(), withFiller))) {
+                    continue;
+                }
+                if (e.kind() == DataItem.Kind.UNSUPPORTED) {
+                    throw HandlerException.unsupported(e.cobolName() + ": " + e.unsupportedReason());
+                }
+                Statement store = initializeItem(e, toValue, replacing, defaults, c, target, out.size());
+                if (store != null) {
+                    out.add(store);
+                }
+            }
+        }
+        return out;
+    }
+
+    /** FILLER (unless WITH FILLER) and items under a REDEFINES below the target are left alone. */
+    private static boolean skippedByInitialize(DataItem e, DataItem target, boolean withFiller) {
+        for (DataItem i = e; i != null && i != target; i = i.parent()) {
+            if (i.redefines() != null || (i.isFiller() && !withFiller)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The store for one elementary item, inside loops over the tables between it and the target. */
+    private static Statement initializeItem(DataItem e, boolean toValue, Map<String, Operand> replacing, boolean defaults,
+            TranslationContext c, Operand.Field target, int n) throws HandlerException {
+        List<DataItem> extra = e.dimensions().subList(target.item().dimensions().size(), e.dimensions().size());
+        List<Operand.Subscript> subs = new ArrayList<>(target.subscripts());
+        List<String> vars = new ArrayList<>();
+        for (DataItem t : extra) {
+            String v = c.fresh("occurrence");
+            vars.add(v);
+            subs.add(new Operand.Subscript(new Operand.Index(new DataItem.IndexName(v, v, t)), 0));
+        }
+        Operand.Field ref = new Operand.Field(e, subs, null);
+        Expression field = c.field(ref);
+        Statement store;
+        if (toValue && e.initialValue() != null) {
+            store = stmt(call(field, "initial", str(e.initialValue())));
+        } else if (replacing.containsKey(e.category())) {
+            Operand v = replacing.get(e.category());
+            store = e.isAlphanumeric() ? storeAlphanumeric(field, v, c) : storeNumeric(field, v, c);
+        } else if (defaults) {
+            store = stmt(e.isAlphanumeric() ? call(field, "fill", chr(' ')) : call(field, "move", decimal("0")));
+        } else {
+            return null;
+        }
+        for (int i = extra.size() - 1; i >= 0; i--) {
+            String v = vars.get(i);
+            store = new ForStmt(NodeList.nodeList(new VariableDeclarationExpr(new VariableDeclarator(Ast.intType(), v, integer(1)))),
+                    new BinaryExpr(name(v), integer(extra.get(i).occurs()), BinaryExpr.Operator.LESS_EQUALS),
+                    NodeList.nodeList(new UnaryExpr(name(v), UnaryExpr.Operator.POSTFIX_INCREMENT)),
+                    new BlockStmt(NodeList.nodeList(store)));
+        }
+        return store;
+    }
+
+    // ---------------------------------------------------------- SET index
+
+    private static List<Statement> setIndex(OpUnit u, TranslationContext c) throws HandlerException {
+        SetStatement set = (SetStatement) u.statement();
+        List<Statement> out = new ArrayList<>();
+        if (set.getSetType() == SetStatement.SetType.BY) {
+            var by = set.getSetBy();
+            Expression amount = intValue(c.operand(by.getBy().getByValueStmt()), c);
+            var op = by.getSetByType() == io.proleap.cobol.asg.metamodel.procedure.set.SetBy.SetByType.UP
+                    ? AssignExpr.Operator.PLUS : AssignExpr.Operator.MINUS;
+            for (var to : by.getTos()) {
+                if (!(c.operand(to.getToCall()) instanceof Operand.Index idx)) {
+                    throw HandlerException.notApplicable("SET " + to.getToCall().getName() + " UP / DOWN BY: only indexes are supported");
+                }
+                out.add(stmt(new AssignExpr(name(idx.index().javaName()), amount.clone(), op)));
+            }
+            return out;
+        }
+        for (var setTo : set.getSetTos()) {
+            if (setTo.getValues().size() != 1) {
+                throw HandlerException.unsupported("SET with several values is not supported");
+            }
+            var value = setTo.getValues().getFirst();
+            if (value.getValueType() != io.proleap.cobol.asg.metamodel.procedure.set.Value.ValueType.CALL
+                    || booleanValue(value.getValueStmt()) != null) {
+                throw HandlerException.notApplicable("SET ... TO " + value.getCtx().getText() + " is not an index SET");
+            }
+            Operand v = c.operand(value.getValueStmt());
+            for (var to : setTo.getTos()) {
+                Operand r = c.operand(to.getToCall());
+                if (r instanceof Operand.Index idx) {
+                    out.add(stmt(new AssignExpr(name(idx.index().javaName()), intValue(v, c), AssignExpr.Operator.ASSIGN)));
+                } else if (r instanceof Operand.Field f && f.integer() && v instanceof Operand.Index idx) {
+                    out.add(stmt(call(c.field(f), "move", staticCall("BigDecimal", "valueOf", name(idx.index().javaName())))));
+                } else {
+                    throw HandlerException.notApplicable("SET " + to.getToCall().getName() + " TO " + value.getCtx().getText()
+                            + ": neither side is an index");
+                }
+            }
+        }
+        return out;
+    }
+
+    // ------------------------------------------------------------- SEARCH
+
+    private static boolean isSearchAll(OpUnit u) {
+        return ((io.proleap.cobol.CobolParser.SearchStatementContext) u.statement().getCtx()).ALL() != null;
+    }
+
+    /** The searched table and the index the search runs on (VARYING index, else the first INDEXED BY). */
+    private record Searched(DataItem table, DataItem.IndexName index, Operand varying) {}
+
+    private static Searched searched(io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement s, TranslationContext c)
+            throws HandlerException {
+        DataItem table = c.dataItem(s.getDataCall());
+        if (table.occurs() == 0) {
+            throw HandlerException.unsupported("SEARCH " + table.cobolName() + ": not a table");
+        }
+        Operand varying = s.getVaryingPhrase() == null ? null : c.operand(s.getVaryingPhrase().getDataCall());
+        DataItem.IndexName index;
+        if (varying instanceof Operand.Index i && i.index().table() == table) {
+            index = i.index();
+            varying = null;
+        } else if (table.indexes().isEmpty()) {
+            throw HandlerException.unsupported("SEARCH " + table.cobolName() + ": the table has no INDEXED BY");
+        } else {
+            index = table.indexes().getFirst();
+        }
+        if (varying != null && !(varying instanceof Operand.Index) && !(varying instanceof Operand.Field f && f.integer())) {
+            throw HandlerException.unsupported("SEARCH VARYING " + varying.category() + " is not supported");
+        }
+        return new Searched(table, index, varying);
+    }
+
+    /** The number of occurrences in use: OCCURS, or the DEPENDING ON item's value. */
+    private static Expression occurrences(DataItem table, TranslationContext c) throws HandlerException {
+        return table.dependingOn() == null ? integer(table.occurs())
+                : call(c.field(new Operand.Field(table.dependingOn())), "intValue");
+    }
+
+    /**
+     * Serial SEARCH from the index's current value: AT END once it passes the last occurrence in
+     * use, otherwise the first WHEN that holds; the index (and VARYING item) step by one.
+     */
+    private static List<Statement> search(OpUnit u, TranslationContext c) throws HandlerException {
+        if (isSearchAll(u)) {
+            throw HandlerException.notApplicable("SEARCH ALL is not a serial SEARCH");
+        }
+        var s = (io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement) u.statement();
+        Searched t = searched(s, c);
+        String label = c.fresh("search");
+        String index = t.index().javaName();
+        BlockStmt loop = new BlockStmt();
+        BlockStmt atEnd = s.getAtEndPhrase() == null ? new BlockStmt() : c.nested(s.getAtEndPhrase());
+        atEnd.addStatement(new BreakStmt(label));
+        loop.addStatement(new IfStmt(new BinaryExpr(name(index), occurrences(t.table(), c), BinaryExpr.Operator.GREATER), atEnd, null));
+        for (var when : s.getWhenPhrases()) {
+            BlockStmt body = when.getWhenType() == io.proleap.cobol.asg.metamodel.procedure.search.WhenPhrase.WhenType.NEXT_SENTENCE
+                    ? new BlockStmt(NodeList.nodeList(c.jump(TranslationContext.Jump.NEXT_SENTENCE))) : c.nested(when);
+            body.addStatement(new BreakStmt(label));
+            loop.addStatement(new IfStmt(c.condition(when.getCondition()), body, null));
+        }
+        loop.addStatement(stmt(new UnaryExpr(name(index), UnaryExpr.Operator.POSTFIX_INCREMENT)));
+        if (t.varying() instanceof Operand.Index other) {
+            loop.addStatement(stmt(new UnaryExpr(name(other.index().javaName()), UnaryExpr.Operator.POSTFIX_INCREMENT)));
+        } else if (t.varying() != null) {
+            Expression f = c.field(t.varying());
+            loop.addStatement(stmt(call(f, "store", call(call(f.clone(), "get"), "add", decimal("1")), bool(false), bool(false))));
+        }
+        return List.of(new LabeledStmt(label, new WhileStmt(bool(true), loop)));
+    }
+
+    /**
+     * SEARCH ALL finds a match only when the table is in KEY order; which occurrence it finds
+     * for equal keys, and what it does on an unordered table, depend on the compiler's binary
+     * search. Neither can be proven here, so it is always a decision offering both candidates.
+     */
+    private static List<Statement> searchAll(OpUnit u, TranslationContext c) throws HandlerException {
+        if (!isSearchAll(u)) {
+            throw HandlerException.notApplicable("not SEARCH ALL");
+        }
+        var s = (io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement) u.statement();
+        Searched t = searched(s, c);
+        if (t.table().keys().isEmpty()) {
+            throw HandlerException.unsupported("SEARCH ALL " + t.table().cobolName() + ": the table has no ASCENDING / DESCENDING KEY");
+        }
+        throw HandlerException.unprovable("SEARCH ALL " + t.table().cobolName()
+                + ": the keys cannot be proven to be in order and unique, so the occurrence found is not determined");
+    }
+
+    /** One WHEN of SEARCH ALL, which must be the only one. */
+    private static io.proleap.cobol.asg.metamodel.procedure.search.WhenPhrase searchAllWhen(
+            io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement s) throws HandlerException {
+        if (s.getWhenPhrases().size() != 1) {
+            throw HandlerException.unsupported("SEARCH ALL has exactly one WHEN");
+        }
+        return s.getWhenPhrases().getFirst();
+    }
+
+    private static List<Statement> searchAllLinear(OpUnit u, TranslationContext c) throws HandlerException {
+        if (!isSearchAll(u)) {
+            throw HandlerException.notApplicable("not SEARCH ALL");
+        }
+        var s = (io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement) u.statement();
+        Searched t = searched(s, c);
+        var when = searchAllWhen(s);
+        String label = c.fresh("search");
+        String index = t.index().javaName();
+        BlockStmt found = c.nested(when);
+        found.addStatement(new BreakStmt(label));
+        BlockStmt atEnd = s.getAtEndPhrase() == null ? new BlockStmt() : c.nested(s.getAtEndPhrase());
+        BlockStmt loop = new BlockStmt(NodeList.nodeList(new IfStmt(c.condition(when.getCondition()), found, null)));
+        Statement scan = new ForStmt(NodeList.nodeList(new AssignExpr(name(index), integer(1), AssignExpr.Operator.ASSIGN)),
+                new BinaryExpr(name(index), occurrences(t.table(), c), BinaryExpr.Operator.LESS_EQUALS),
+                NodeList.nodeList(new UnaryExpr(name(index), UnaryExpr.Operator.POSTFIX_INCREMENT)), loop);
+        BlockStmt body = new BlockStmt(NodeList.nodeList(scan));
+        atEnd.getStatements().forEach(body::addStatement);
+        return List.of(new LabeledStmt(label, body));
+    }
+
+    /** Binary search on the first KEY: halves the occurrences in use by comparing the key with the WHEN's value. */
+    private static List<Statement> searchAllBinary(OpUnit u, TranslationContext c) throws HandlerException {
+        if (!isSearchAll(u)) {
+            throw HandlerException.notApplicable("not SEARCH ALL");
+        }
+        var s = (io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement) u.statement();
+        Searched t = searched(s, c);
+        var when = searchAllWhen(s);
+        var cond = when.getCondition();
+        var rel = cond.getAndOrConditions().isEmpty() ? cond.getCombinableCondition().getSimpleCondition().getRelationCondition() : null;
+        if (rel == null || rel.getArithmeticComparison() == null
+                || rel.getArithmeticComparison().getOperator().getRelationalOperatorType() != RelationalOperatorType.EQUAL) {
+            throw HandlerException.unsupported("binary SEARCH ALL candidate needs WHEN key = value");
+        }
+        Operand key = c.operand(rel.getArithmeticComparison().getArithmeticExpressionLeft());
+        Operand value = c.operand(rel.getArithmeticComparison().getArithmeticExpressionRight());
+        DataItem.Key first = t.table().keys().getFirst();
+        if (!(key instanceof Operand.Field kf) || kf.item() != first.item()) {
+            throw HandlerException.unsupported("binary SEARCH ALL candidate needs WHEN on the first KEY");
+        }
+        String label = c.fresh("search");
+        String low = c.fresh("low");
+        String high = c.fresh("high");
+        String index = t.index().javaName();
+        BlockStmt found = c.nested(when);
+        found.addStatement(new BreakStmt(label));
+        BlockStmt atEnd = s.getAtEndPhrase() == null ? new BlockStmt() : c.nested(s.getAtEndPhrase());
+        Expression below = c.compare(key, value, first.ascending() ? RelationalOperatorType.LESS : RelationalOperatorType.GREATER, when.getCtx());
+        BlockStmt loop = new BlockStmt(NodeList.nodeList(
+                stmt(new AssignExpr(name(index), new BinaryExpr(new EnclosedExpr(new BinaryExpr(name(low), name(high),
+                        BinaryExpr.Operator.PLUS)), integer(2), BinaryExpr.Operator.DIVIDE), AssignExpr.Operator.ASSIGN)),
+                new IfStmt(c.compare(key, value, RelationalOperatorType.EQUAL, when.getCtx()), found,
+                        new IfStmt(below, stmt(new AssignExpr(name(low), new BinaryExpr(name(index), integer(1), BinaryExpr.Operator.PLUS),
+                                AssignExpr.Operator.ASSIGN)),
+                                stmt(new AssignExpr(name(high), new BinaryExpr(name(index), integer(1), BinaryExpr.Operator.MINUS),
+                                        AssignExpr.Operator.ASSIGN))))));
+        BlockStmt body = new BlockStmt();
+        body.addStatement(declare(Ast.intType(), low, integer(1)));
+        body.addStatement(declare(Ast.intType(), high, occurrences(t.table(), c)));
+        body.addStatement(new WhileStmt(new BinaryExpr(name(low), name(high), BinaryExpr.Operator.LESS_EQUALS), loop));
+        atEnd.getStatements().forEach(body::addStatement);
+        return List.of(new LabeledStmt(label, body));
     }
 }
