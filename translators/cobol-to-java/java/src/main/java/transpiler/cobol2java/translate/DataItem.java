@@ -23,6 +23,8 @@ public final class DataItem {
     private String initialValue;
     private List<ConditionValue> conditionValues = List.of();
     private Operand falseValue;
+    private int offset;
+    private int size;
 
     DataItem(String cobolName, Kind kind, Picture picture, String unsupportedReason, DataItem parent, int line) {
         this.cobolName = cobolName;
@@ -105,6 +107,30 @@ public final class DataItem {
 
     public int line() {
         return line;
+    }
+
+    /** The level-01 / level-77 item whose storage this item is part of. */
+    public DataItem record() {
+        DataItem r = this;
+        while (r.parent != null) {
+            r = r.parent;
+        }
+        return r;
+    }
+
+    /** Byte offset within the record. */
+    public int offset() {
+        return offset;
+    }
+
+    /** Size in bytes (0 for condition-names and unsupported items). */
+    public int size() {
+        return size;
+    }
+
+    void layout(int offset, int size) {
+        this.offset = offset;
+        this.size = size;
     }
 
     public String javaName() {

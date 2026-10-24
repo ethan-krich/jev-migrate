@@ -172,6 +172,7 @@ public final class ProgramTranslator implements TranslationContext {
         cu.addImport(in.runtimePackage() + ".Display");
         cu.addImport(in.runtimePackage() + ".NumericField");
         cu.addImport(in.runtimePackage() + ".ProgramSupport");
+        cu.addImport(in.runtimePackage() + ".Storage");
         cu.addImport(BigDecimal.class);
 
         ClassOrInterfaceDeclaration cls = cu.addClass(in.className(), Modifier.Keyword.PUBLIC, Modifier.Keyword.FINAL);
@@ -267,6 +268,7 @@ public final class ProgramTranslator implements TranslationContext {
         }
         for (DataDescriptionEntry e : data.getWorkingStorageSection().getRootDataDescriptionEntries()) {
             buildItem(e, null);
+            layout(items.get(e), 0);
         }
     }
 
@@ -323,15 +325,33 @@ public final class ProgramTranslator implements TranslationContext {
             }
         }
         items.put(e, item);
-        if (item.kind() == DataItem.Kind.ALPHANUMERIC || item.kind() == DataItem.Kind.NUMERIC) {
-            if (e.getName() != null) {
-                item.javaName(allocateField(Names.fieldName(name)));
-                fieldOrder.add(item);
-            }
+        // Every elementary item (FILLER too: its bytes are initialised) and every named group gets a view.
+        if (item.isAlphanumeric() || item.isNumeric() || (item.isGroup() && !item.isFiller())) {
+            item.javaName(allocateField(Names.fieldName(name)));
+            fieldOrder.add(item);
         }
         for (DataDescriptionEntry child : g.getDataDescriptionEntries()) {
             buildItem(child, item);
         }
+    }
+
+    /** Assigns byte offsets: elementary items take their PICTURE's size, groups the sum of their children. */
+    private static int layout(DataItem item, int offset) {
+        int size = switch (item.kind()) {
+            case ALPHANUMERIC -> item.alphanumeric().length();
+            case NUMERIC -> item.numeric().digits();
+            case GROUP -> {
+                int at = offset;
+                for (DataItem child : item.children()) {
+                    at = layout(child, at);
+                }
+                yield at - offset;
+            }
+            // Unsupported items have their own decision; nothing after them is written.
+            case CONDITION, UNSUPPORTED -> 0;
+        };
+        item.layout(offset, size);
+        return offset + size;
     }
 
     /** A level-88 entry; its values are checked against the parent when the condition is used. */
@@ -472,25 +492,62 @@ public final class ProgramTranslator implements TranslationContext {
         return name;
     }
 
+    /**
+     * One {@code Storage} per level-01 group and a view per item over it, initialised in source
+     * order as GnuCOBOL initialises WORKING-STORAGE (VALUE, else spaces / zeros by category). A
+     * level-01 / level-77 elementary item is a standalone field with its own storage.
+     */
     private void addFields(ClassOrInterfaceDeclaration cls) {
         cls.addFieldWithInitializer("NumericField", "returnCode", create("NumericField", integer(9), integer(0), Ast.bool(true)),
                 Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL);
+        Map<DataItem, String> storages = new IdentityHashMap<>();
         for (DataItem item : fieldOrder) {
+            DataItem record = item.record();
             Expression init;
-            if (item.isAlphanumeric()) {
-                init = item.initialValue() == null
-                        ? create("AlphanumericField", integer(item.alphanumeric().length()))
-                        : create("AlphanumericField", integer(item.alphanumeric().length()), str(item.initialValue()));
+            if (record == item && !item.isGroup()) {
+                init = standalone(item);
             } else {
-                Picture.Numeric n = item.numeric();
-                init = item.initialValue() == null
-                        ? create("NumericField", integer(n.digits()), integer(n.scale()), Ast.bool(n.signed()))
-                        : create("NumericField", integer(n.digits()), integer(n.scale()), Ast.bool(n.signed()), str(item.initialValue()));
+                String storage = storages.get(record);
+                if (storage == null) {
+                    storage = allocateField(Names.fieldName(record.cobolName()) + "Storage");
+                    storages.put(record, storage);
+                    cls.addFieldWithInitializer("Storage", storage, create("Storage", integer(Math.max(1, record.size()))),
+                            Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL)
+                            .setLineComment(" " + record.cobolName() + " (" + record.size() + " bytes)");
+                }
+                init = view(item, name(storage));
             }
-            var field = cls.addFieldWithInitializer(item.isAlphanumeric() ? "AlphanumericField" : "NumericField",
+            var field = cls.addFieldWithInitializer(item.isNumeric() ? "NumericField" : "AlphanumericField",
                     item.javaName(), init, Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL);
             field.setLineComment(" " + item.cobolName() + " (line " + item.line() + ")");
         }
+    }
+
+    private static Expression standalone(DataItem item) {
+        if (item.isAlphanumeric()) {
+            return item.initialValue() == null
+                    ? create("AlphanumericField", integer(item.alphanumeric().length()))
+                    : create("AlphanumericField", integer(item.alphanumeric().length()), str(item.initialValue()));
+        }
+        Picture.Numeric n = item.numeric();
+        return item.initialValue() == null
+                ? create("NumericField", integer(n.digits()), integer(n.scale()), Ast.bool(n.signed()))
+                : create("NumericField", integer(n.digits()), integer(n.scale()), Ast.bool(n.signed()), str(item.initialValue()));
+    }
+
+    private static Expression view(DataItem item, Expression storage) {
+        if (item.isGroup()) {
+            // Group bytes are initialised through its elementary items.
+            return create("AlphanumericField", storage, integer(item.offset()), integer(Math.max(1, item.size())));
+        }
+        Expression v;
+        if (item.isAlphanumeric()) {
+            v = create("AlphanumericField", storage, integer(item.offset()), integer(item.size()));
+        } else {
+            Picture.Numeric n = item.numeric();
+            v = create("NumericField", storage, integer(item.offset()), integer(n.digits()), integer(n.scale()), Ast.bool(n.signed()));
+        }
+        return item.initialValue() == null ? call(v, "initial") : call(v, "initial", str(item.initialValue()));
     }
 
     // ------------------------------------------------------------ structure

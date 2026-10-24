@@ -213,9 +213,11 @@ public final class Session {
     }
 
     /** Simple names that generated programs import (see ProgramTranslator) or use unqualified. */
-    private static final java.util.Set<String> RESERVED_CLASS_NAMES = java.util.Set.of(
-            "Accept", "AlphanumericField", "Arithmetic", "Clock", "CobolProgram", "Compare", "Display", "NumericField",
-            "ProgramSupport", "BigDecimal", "Goback", "StopRun", "String", "Object", "Exception", "Override");
+    /** Every runtime class plus the java.lang / java.math types generated code names. */
+    private static final java.util.Set<String> RESERVED_CLASS_NAMES = java.util.stream.Stream.concat(
+            RuntimeSources.CLASSES.stream(),
+            java.util.stream.Stream.of("BigDecimal", "String", "Object", "Exception", "Override", "Math", "System"))
+            .collect(java.util.stream.Collectors.toUnmodifiableSet());
 
     private void checkNameCollisions() {
         Map<String, List<ProgramState>> byClass = new LinkedHashMap<>();
