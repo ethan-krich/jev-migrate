@@ -13,6 +13,7 @@ ARG PYTHON_VERSION=3.13
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
+      git \
       gnucobol3=${GNUCOBOL_VERSION} \
       openjdk-21-jdk-headless=${OPENJDK_VERSION} \
       g++=${GXX_VERSION} \

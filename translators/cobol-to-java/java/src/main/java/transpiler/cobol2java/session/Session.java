@@ -113,6 +113,10 @@ public final class Session {
         } catch (IllegalArgumentException e) {
             throw new ProtocolException(ErrorCode.INVALID_PARAMS, "invalid options: " + e.getMessage());
         }
+        if (!frontend.charset().equals(StandardCharsets.ISO_8859_1)) {
+            throw new ProtocolException(ErrorCode.INVALID_PARAMS, "unsupported options.source_encoding "
+                    + frontend.charset().name() + ": the runtime is byte-oriented and only ISO-8859-1 is preserved exactly");
+        }
         List<Path> extraCopybookPaths = new ArrayList<>();
         for (JsonNode p : params.path("copybook_paths")) {
             extraCopybookPaths.add(absolute(p.asText(), "copybook_paths[]"));
@@ -203,6 +207,11 @@ public final class Session {
                 .resolve(ps.packageName.replace('.', '/')).resolve(ps.className + ".java").normalize();
     }
 
+    /** Simple names that generated programs import (see ProgramTranslator) or use unqualified. */
+    private static final java.util.Set<String> RESERVED_CLASS_NAMES = java.util.Set.of(
+            "AlphanumericField", "Arithmetic", "CobolProgram", "Compare", "Display", "NumericField",
+            "ProgramSupport", "BigDecimal", "Goback", "StopRun", "String", "Object", "Exception", "Override");
+
     private void checkNameCollisions() {
         Map<String, List<ProgramState>> byClass = new LinkedHashMap<>();
         Map<String, List<ProgramState>> byProgramId = new LinkedHashMap<>();
@@ -212,6 +221,10 @@ public final class Session {
             }
             byClass.computeIfAbsent(ps.fqcn().toLowerCase(Locale.ROOT), k -> new ArrayList<>()).add(ps);
             byProgramId.computeIfAbsent(ps.programId, k -> new ArrayList<>()).add(ps);
+            if (RESERVED_CLASS_NAMES.contains(ps.className)) {
+                fail(ps, "class_collision", "class name " + ps.className
+                        + " clashes with a runtime type imported by generated programs");
+            }
             if (ps.packageName.equals(layout.runtimePackage())) {
                 fail(ps, "class_collision", "package " + ps.packageName + " is reserved for the runtime library");
             }

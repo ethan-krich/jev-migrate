@@ -44,7 +44,9 @@ def main(argv: list[str] | None = None) -> int:
         pair = find_language_pair(args.target)
         mappings = pair.default_mappings()
         if args.mappings:
-            mappings = load_configure(args.mappings)(mappings) or mappings
+            configured = load_configure(args.mappings)(mappings)
+            if configured is not None:
+                mappings = configured
         layout = pair.default_layout()
         if args.base_package:
             layout = dataclasses.replace(layout, base_package=args.base_package)

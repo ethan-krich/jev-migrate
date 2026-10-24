@@ -4,8 +4,8 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 [[ -x "$TRANSPILER_CORE" ]] || "$ROOT/scripts/build.sh"
-cd "$ROOT"
+# --project selects the workspace without changing cwd, so relative CLI paths resolve for the caller.
 if [[ $# -eq 0 ]]; then
-  exec uv run --frozen python examples/cobol-to-java/run_example.py
+  exec uv run --project "$ROOT" --frozen python "$ROOT/examples/cobol-to-java/run_example.py"
 fi
-exec uv run --frozen python -m transpiler "$@"
+exec uv run --project "$ROOT" --frozen python -m transpiler "$@"

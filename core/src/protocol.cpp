@@ -41,16 +41,17 @@ std::expected<Message, std::string> decode(std::string_view line) {
   json j = json::parse(line, nullptr, false);
   if (j.is_discarded()) return std::unexpected("worker output is not valid JSON");
   if (!j.is_object()) return std::unexpected("worker message is not a JSON object");
-  if (j.value("protocol", std::string{}) != kVersion)
-    return std::unexpected(std::format("unexpected protocol '{}'", j.value("protocol", std::string{"<missing>"})));
+  const auto protocol = optional_string(j, "protocol");
+  if (protocol != kVersion)
+    return std::unexpected(std::format("unexpected protocol '{}'", protocol.value_or("<missing or not a string>")));
 
-  const std::string type = j.value("type", std::string{});
+  const std::string type = optional_string(j, "type").value_or("");
   if (type == "event") {
     if (!j.contains("event") || !j["event"].is_string()) return std::unexpected("event without a name");
     Event e{.name = j["event"].get<std::string>(),
             .session = optional_string(j, "session"),
             .in_reply_to = optional_string(j, "in_reply_to"),
-            .data = j.value("data", json::object())};
+            .data = j.contains("data") && j["data"].is_object() ? j["data"] : json::object()};
     return e;
   }
   if (type != "response") return std::unexpected(std::format("unknown message type '{}'", type));
@@ -62,15 +63,15 @@ std::expected<Message, std::string> decode(std::string_view line) {
     r.id = j["id"].get<std::string>();
   }
   r.session = optional_string(j, "session");
-  auto status = parse_status(j.value("status", std::string{}));
+  auto status = parse_status(optional_string(j, "status").value_or(""));
   if (!status) return std::unexpected("response has an invalid 'status'");
   r.status = *status;
   if (r.status == Status::error) {
-    const json& err = j.value("error", json{});
+    const json err = j.contains("error") ? j["error"] : json{};
     if (!err.is_object() || !err.contains("code") || !err["code"].is_string() || !err.contains("message") ||
         !err["message"].is_string())
       return std::unexpected("error response without {code, message}");
-    r.error = ErrorInfo{err["code"].get<std::string>(), err["message"].get<std::string>(), err.value("details", json{})};
+    r.error = ErrorInfo{err["code"].get<std::string>(), err["message"].get<std::string>(), err.contains("details") ? err["details"] : json{}};
   } else {
     if (!j.contains("result") || !j["result"].is_object()) return std::unexpected("response without a 'result' object");
     r.result = j["result"];

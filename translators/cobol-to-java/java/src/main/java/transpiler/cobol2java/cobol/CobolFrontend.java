@@ -40,6 +40,10 @@ public final class CobolFrontend {
         this.options = options;
     }
 
+    public java.nio.charset.Charset charset() {
+        return options.charset();
+    }
+
     /** A parsed program and the map from preprocessed to original line numbers. */
     public record Parsed(Program program, SourceMap sourceMap) {}
 
