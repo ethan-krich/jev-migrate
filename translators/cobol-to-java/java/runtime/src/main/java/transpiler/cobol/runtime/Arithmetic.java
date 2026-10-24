@@ -28,4 +28,17 @@ public final class Arithmetic {
         }
         return dividend.divide(divisor, receiverScale + (rounded ? 1 : 0), RoundingMode.DOWN);
     }
+
+    /**
+     * DIVIDE ... REMAINDER: {@code dividend - quotient * divisor}, where the quotient is truncated
+     * to the quotient receiver's scale. As in GnuCOBOL 3.2 the quotient is never rounded here
+     * (even with ROUNDED) and is not cut to the receiver's integer digits. {@code null} on
+     * division by zero.
+     */
+    public static BigDecimal remainder(BigDecimal dividend, BigDecimal divisor, int quotientScale) {
+        if (divisor.signum() == 0) {
+            return null;
+        }
+        return dividend.subtract(dividend.divide(divisor, quotientScale, RoundingMode.DOWN).multiply(divisor));
+    }
 }

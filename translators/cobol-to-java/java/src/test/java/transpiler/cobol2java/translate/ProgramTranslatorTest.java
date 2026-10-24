@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import transpiler.cobol2java.TestSupport;
 import transpiler.cobol2java.decision.Decision;
 import transpiler.cobol2java.decision.Reason;
 
@@ -21,7 +22,7 @@ class ProgramTranslatorTest {
     Path dir;
 
     private static String java(ProgramTranslator.Result r) {
-        ProgramTranslator.pruneImports(r.compilationUnit());
+        ProgramTranslator.finish(r.compilationUnit());
         return r.compilationUnit().toString();
     }
 
@@ -147,5 +148,55 @@ class ProgramTranslatorTest {
         assertEquals("month_end", Names.packageSegment("Month-End"));
         assertEquals("_2024", Names.packageSegment("2024"));
         assertFalse(Names.isValidPackage("com.example.class"));
+    }
+
+    private static List<String> operations(ProgramTranslator.Result r) {
+        return r.decisions().stream().map(Decision::operation).toList();
+    }
+
+    @Test
+    void anUnsetDialectSettingIsOneDecisionPerProgram() throws Exception {
+        String src = program("01 A PIC X(2) VALUE HIGH-VALUES.\n01 B PIC X(2).",
+                "MOVE LOW-VALUES TO B.", "IF A = HIGH-VALUES DISPLAY 'h' END-IF.", "STOP RUN.");
+        var unset = translate(dir, src, defaultRules());
+        assertEquals(List.of("dialect:encoding"), operations(unset));
+        Decision d = unset.decisions().getFirst();
+        assertEquals(Reason.MISSING_MAPPING, d.reason());
+        assertTrue(d.candidates().isEmpty());
+        var set = translate(dir, src, defaultRules(), Map.of(), TestSupport.dialect("{\"encoding\": \"ascii\"}"));
+        assertTrue(set.decisions().isEmpty(), () -> set.decisions().toString());
+        assertEquals("", compile("test.gen.T", java(set)));
+    }
+
+    @Test
+    void orderedAlphanumericComparisonNeedsTheCollatingSequence() throws Exception {
+        String src = program("01 A PIC X(2).", "IF A < 'B' DISPLAY 'x' END-IF.", "IF A = 'B' DISPLAY 'y' END-IF.");
+        assertEquals(List.of("dialect:collating_sequence"), operations(translate(dir, src, defaultRules())));
+        var ebcdic = translate(dir, src, defaultRules(), Map.of(), TestSupport.dialect("{\"collating_sequence\": \"ebcdic\"}"));
+        assertEquals(List.of(Reason.UNSUPPORTED_CONSTRUCT), ebcdic.decisions().stream().map(Decision::reason).toList());
+    }
+
+    @Test
+    void exitsThatLeaveAPerformedRangeAreDecisions() throws Exception {
+        String src = program("01 N PIC 9.",
+                "MAIN SECTION.", "P1.", "    PERFORM P2.", "    EXIT PERFORM.", "    STOP RUN.",
+                "P2.", "    EXIT SECTION.");
+        var r = translate(dir, src, defaultRules());
+        assertEquals(List.of("EXIT", "EXIT"), operations(r));
+        assertTrue(r.decisions().get(0).toJson("java").get("message").asText().contains("outside an inline PERFORM"));
+        assertTrue(r.decisions().get(1).toJson("java").get("message").asText().contains("PERFORMed on its own"));
+    }
+
+    @Test
+    void correspondingWithSizeErrorIsOneDecision() throws Exception {
+        String src = program("01 A.\n 05 X PIC 9.\n 05 Y PIC 9.\n01 B.\n 05 X PIC 9.\n 05 Y PIC 9.",
+                "ADD CORR A TO B ON SIZE ERROR DISPLAY 'e' END-ADD.", "ADD CORR A TO B.", "MOVE CORR A TO B.");
+        var r = translate(dir, src, defaultRules());
+        assertEquals(List.of("ADD"), operations(r));
+        String out = java(r);
+        // ADD CORR A TO B adds each pair; MOVE CORR moves each pair.
+        assertTrue(out.contains("x_2.store(x_2.get().add(x.get()), false, false);"), out);
+        assertTrue(out.contains("y_2.store(y_2.get().add(y.get()), false, false);"), out);
+        assertTrue(out.contains("x_2.move(x);") && out.contains("y_2.move(y);"), out);
     }
 }

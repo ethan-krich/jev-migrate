@@ -1,15 +1,16 @@
 {
-  "description": "Constructs outside the supported subset are reported, never approximated",
+  "description": "Constructs outside the supported subset are reported, never approximated (including the constructs saved for Jev)",
   "expect": {
     "status": "incomplete",
     "decisions": [
       {"reason": "unsupported_construct", "operation": "DATA", "line": 6},
       {"reason": "unsupported_construct", "operation": "DATA", "line": 7},
-      {"reason": "unsupported_construct", "operation": "DATA", "line": 9},
       {"reason": "unsupported_construct", "operation": "DATA", "line": 10},
-      {"reason": "missing_mapping", "operation": "EVALUATE", "line": 14, "candidates": []},
-      {"reason": "unsupported_construct", "operation": "COMPUTE", "line": 17},
-      {"reason": "missing_mapping", "operation": "GO_TO", "line": 18, "candidates": []}
+      {"reason": "unsupported_construct", "operation": "COMPUTE", "line": 18},
+      {"reason": "missing_target_api", "operation": "DISPLAY", "line": 19, "candidates": []},
+      {"reason": "missing_target_api", "operation": "ACCEPT", "line": 20, "candidates": []},
+      {"reason": "missing_target_api", "operation": "STOP", "line": 21, "candidates": []},
+      {"reason": "missing_mapping", "operation": "GO_TO", "line": 22, "candidates": []}
     ]
   },
   "layout": {"base_package": "fixtures.unsupported"}

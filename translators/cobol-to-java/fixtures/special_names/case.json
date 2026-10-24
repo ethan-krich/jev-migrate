@@ -1,0 +1,7 @@
+{
+  "description": "Identification paragraphs, SOURCE-/OBJECT-COMPUTER, SPECIAL-NAMES ALPHABET, CLASS and DECIMAL-POINT IS COMMA",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii"},
+  "equivalence": {"programs": ["SPECNAME.cbl"], "main_class": "fixtures.special_names.Specname"},
+  "layout": {"base_package": "fixtures.special_names"}
+}

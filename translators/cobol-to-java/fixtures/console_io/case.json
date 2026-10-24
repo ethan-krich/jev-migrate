@@ -1,0 +1,7 @@
+{
+  "description": "DISPLAY UPON CONSOLE / SYSERR / mnemonic names, EXHIBIT, ACCEPT from stdin and FROM DATE / DAY / DAY-OF-WEEK / TIME",
+  "expect": {"status": "ok"},
+  "equivalence": {"programs": ["CONSOLE.cbl"], "main_class": "fixtures.console_io.Console",
+                  "env": {"COB_CURRENT_DATE": "2024/03/05 13:14:15"}},
+  "layout": {"base_package": "fixtures.console_io"}
+}

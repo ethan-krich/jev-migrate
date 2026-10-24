@@ -82,7 +82,13 @@ public final class TestSupport {
         for (String[] s : simple) {
             rules.add(rule("cobol." + s[1], s[0], s[1], Map.of(), 100));
         }
-        rules.add(rule("cobol.stop_run", "STOP", "stop_run", Map.of("kind", "run"), 100));
+        rules.add(rule("cobol.stop_run", "STOP", "stop_run", Map.of(), 100));
+        rules.add(rule("cobol.set.condition", "SET", "set_condition", Map.of("form", List.of("true", "false")), 100));
+        rules.add(rule("cobol.evaluate", "EVALUATE", "evaluate", Map.of(), 100));
+        rules.add(rule("cobol.accept.stdin", "ACCEPT", "accept_stdin", Map.of("from", List.of("stdin", "device")), 100));
+        rules.add(rule("cobol.accept.datetime", "ACCEPT", "accept_datetime",
+                Map.of("from", List.of("date", "date_yyyymmdd", "day", "day_yyyyddd", "day_of_week", "time")), 100));
+        rules.add(rule("cobol.exhibit", "EXHIBIT", "exhibit", Map.of("changed", false), 100));
         return rules;
     }
 

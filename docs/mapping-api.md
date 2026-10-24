@@ -44,14 +44,19 @@ Only plain JSON crosses process boundaries: no callables, AST objects or Python 
 
 | Handler | Operation | Behaviour |
 |---|---|---|
-| `move_to_alphanumeric` | MOVE | receiver must be PIC X; pad/truncate right; integer numeric → digits |
+| `move_to_alphanumeric` | MOVE | receiver must be PIC X; pad/truncate right; integer numeric → digits; figuratives incl. `ALL "lit"` |
 | `move_to_numeric` | MOVE | receiver must be PIC 9; decimal alignment, truncation, sign |
-| `add`, `subtract`, `multiply`, `divide` | … | exact `BigDecimal`, `ROUNDED`, `SIZE ERROR` |
+| `add`, `subtract`, `multiply`, `divide` | … | exact `BigDecimal`, `ROUNDED`, `SIZE ERROR`; `CORRESPONDING` (one unit per pair, no SIZE ERROR); `DIVIDE … REMAINDER` (remainder from the quotient truncated to its scale, as GnuCOBOL) |
 | `compute` | COMPUTE | `+ - *`, unary minus |
-| `display` | DISPLAY | stdout, GnuCOBOL format, `NO ADVANCING` |
-| `if` | IF | conditions incl. AND/OR precedence |
-| `perform` | PERFORM | procedure/inline, TIMES, UNTIL, VARYING, TEST AFTER |
-| `stop_run`, `goback`, `exit`, `continue` | … | run-unit control |
+| `display` | DISPLAY | GnuCOBOL format, `NO ADVANCING`, `UPON CONSOLE / SYSOUT` (stdout) and `SYSERR` (stderr), mnemonic names; other devices are `missing_target_api` |
+| `exhibit` | EXHIBIT | `[NAMED]`: `NAME = value` with the name as written (CHANGED is a decision) |
+| `if` | IF | conditions incl. AND/OR precedence; `NEXT SENTENCE` branches |
+| `evaluate` | EVALUATE | if/else chain; `ALSO`, `THRU`, `ANY`, `NOT`, `TRUE`/`FALSE`, condition subjects, `OTHER` |
+| `perform` | PERFORM | procedure/inline, TIMES, UNTIL, VARYING, TEST AFTER; `EXIT PERFORM [CYCLE]` inside inline bodies |
+| `set_condition` | SET | `SET cond TO TRUE` moves the first value; `TO FALSE` needs `WHEN SET TO FALSE` |
+| `accept_stdin` | ACCEPT | one stdin line into a PIC X item (spaces at end of input); `FROM SYSIN / CONSOLE`; other devices `missing_target_api` |
+| `accept_datetime` | ACCEPT | `FROM DATE [YYYYMMDD]`, `DAY [YYYYDDD]`, `DAY-OF-WEEK`, `TIME` via runtime `Clock` (`COB_CURRENT_DATE` fixes it, as in GnuCOBOL) |
+| `stop_run`, `goback`, `exit`, `continue` | … | run-unit control; `EXIT PARAGRAPH / SECTION / PERFORM [CYCLE]`; `STOP literal` is `missing_target_api` |
 | `call_program` | CALL | static `CALL 'X'` of a program in the project |
 
 The running worker announces this list (with facts) in its `ready` event. A test keeps it equal
@@ -61,16 +66,20 @@ to `cobol_to_java.BUILTIN_HANDLERS` / `FACTS`.
 
 | Operation | Facts |
 |---|---|
-| MOVE | `source_category` (`alphanumeric`, `numeric`, `alphanumeric_literal`, `numeric_literal`, `figurative`, `group`, `unsupported`, `corresponding`), `target_category`, `source_figurative` (`zero`, `space`, null) |
+| MOVE | `source_category` (`alphanumeric`, `numeric`, `alphanumeric_literal`, `numeric_literal`, `figurative`, `group`, `condition`, `unsupported`, `corresponding`), `target_category`, `source_figurative` (`zero`, `space`, `quote`, `high_value`, `low_value`, `all`, null). A MOVE CORRESPONDING pair has the categories of its items. |
 | ADD / SUBTRACT / MULTIPLY | `form` (`to`/`from`/`by`, `giving`, `corresponding`), `rounded`, `size_error` |
 | DIVIDE | `form` (`into`, `into_giving`, `by_giving`), `rounded`, `size_error`, `remainder` |
 | COMPUTE | `rounded`, `size_error`, `receivers` |
-| DISPLAY | `upon`, `no_advancing`, `operands` |
+| DISPLAY | `upon` (device after resolving mnemonic names), `no_advancing`, `operands` |
 | IF | `has_else` |
 | PERFORM | `form` (`procedure`/`inline`), `loop` (`once`, `times`, `until`, `varying`), `test`, `thru` |
 | STOP | `kind` (`run`, `literal`, `giving`) |
-| EXIT | `kind` (`plain`, `program`) |
+| EXIT | `kind` (`plain`, `program`, `paragraph`, `section`, `perform`, `perform_cycle`, `invalid`) |
 | CALL | `program`, `program_kind` (`literal`/`identifier`), `program_in_project`, `using` |
+| SET | `form` (`true`, `false`, `to`, `on_off`, `up_by`, `down_by`) |
+| EVALUATE | `subjects`, `has_other`, `has_thru` |
+| ACCEPT | `from` (`stdin`, `device`, `date`, `date_yyyymmdd`, `day`, `day_yyyyddd`, `day_of_week`, `time`, `other_date`, `escape_key`, `message_count`) |
+| EXHIBIT | `named`, `changed` |
 
 ## Callbacks
 

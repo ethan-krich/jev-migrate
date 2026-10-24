@@ -41,6 +41,13 @@ public final class AlphanumericField {
         Arrays.fill(data, c);
     }
 
+    /** MOVE of {@code ALL literal}: the pattern repeated, the last repetition cut at the field's end. */
+    public void fill(String pattern) {
+        for (int i = 0; i < data.length; i++) {
+            data[i] = pattern.charAt(i % pattern.length());
+        }
+    }
+
     /** MOVE of an integer numeric item: its unsigned digit string is moved as alphanumeric data. */
     public void set(NumericField source) {
         set(source.digits());

@@ -105,6 +105,11 @@ public final class NumericField {
 
     /** GnuCOBOL DISPLAY format: leading sign when signed, decimal point when scaled. */
     public String display() {
+        return display('.');
+    }
+
+    /** DISPLAY with {@code DECIMAL-POINT IS COMMA}: the decimal point is shown as {@code point}. */
+    public String display(char point) {
         String raw = digits();
         StringBuilder sb = new StringBuilder(digits + 2);
         if (signed) {
@@ -112,7 +117,7 @@ public final class NumericField {
         }
         sb.append(raw, 0, digits - scale);
         if (scale > 0) {
-            sb.append('.').append(raw, digits - scale, digits);
+            sb.append(point).append(raw, digits - scale, digits);
         }
         return sb.toString();
     }

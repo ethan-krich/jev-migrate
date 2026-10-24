@@ -1,0 +1,7 @@
+{
+  "description": "Level 88 with SET TO TRUE/FALSE, EVALUATE (ALSO, THRU, ANY, TRUE/FALSE, OTHER), abbreviated, combined and class conditions, figurative constants",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native"},
+  "equivalence": {"programs": ["CONDS.cbl"], "main_class": "fixtures.conditions.Conds"},
+  "layout": {"base_package": "fixtures.conditions"}
+}

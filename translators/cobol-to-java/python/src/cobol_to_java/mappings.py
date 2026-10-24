@@ -27,6 +27,11 @@ BUILTIN_HANDLERS = MappingProxyType({
     "exit": "EXIT",
     "continue": "CONTINUE",
     "call_program": "CALL",
+    "set_condition": "SET",
+    "evaluate": "EVALUATE",
+    "accept_stdin": "ACCEPT",
+    "accept_datetime": "ACCEPT",
+    "exhibit": "EXHIBIT",
 })
 
 # Facts the worker computes per operation instance; usable as `when` condition keys.
@@ -43,6 +48,10 @@ FACTS = MappingProxyType({
     "STOP": frozenset({"kind"}),
     "EXIT": frozenset({"kind"}),
     "CALL": frozenset({"program", "program_kind", "program_in_project", "using"}),
+    "SET": frozenset({"form"}),
+    "EVALUATE": frozenset({"subjects", "has_other", "has_thru"}),
+    "ACCEPT": frozenset({"from"}),
+    "EXHIBIT": frozenset({"named", "changed"}),
 })
 
 # COBOL statement verbs known to the parser (rules may target any of them, e.g. to mark one
@@ -72,9 +81,16 @@ DEFAULT_RULES: tuple[tuple[str, str, str, dict, str], ...] = (
     ("cobol.display", "DISPLAY", "display", {}, "DISPLAY to stdout"),
     ("cobol.if", "IF", "if", {}, "IF / ELSE"),
     ("cobol.perform", "PERFORM", "perform", {}, "PERFORM procedure or inline"),
-    ("cobol.stop_run", "STOP", "stop_run", {"kind": "run"}, "STOP RUN"),
+    ("cobol.stop_run", "STOP", "stop_run", {}, "STOP RUN (STOP literal has no target)"),
     ("cobol.goback", "GOBACK", "goback", {}, "GOBACK"),
     ("cobol.exit", "EXIT", "exit", {}, "EXIT / EXIT PROGRAM"),
     ("cobol.continue", "CONTINUE", "continue", {}, "CONTINUE"),
     ("cobol.call", "CALL", "call_program", {}, "static CALL of a program in the project"),
+    ("cobol.set.condition", "SET", "set_condition", {"form": ("true", "false")}, "SET condition-name TO TRUE / FALSE"),
+    ("cobol.evaluate", "EVALUATE", "evaluate", {}, "EVALUATE as an if/else chain"),
+    ("cobol.accept.stdin", "ACCEPT", "accept_stdin", {"from": ("stdin", "device")},
+     "ACCEPT from standard input (other devices have no target)"),
+    ("cobol.accept.datetime", "ACCEPT", "accept_datetime",
+     {"from": ("date", "date_yyyymmdd", "day", "day_yyyyddd", "day_of_week", "time")}, "ACCEPT FROM DATE / DAY / TIME"),
+    ("cobol.exhibit", "EXHIBIT", "exhibit", {"changed": False}, "EXHIBIT [NAMED]"),
 )

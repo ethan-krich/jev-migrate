@@ -214,7 +214,7 @@ public final class Session {
 
     /** Simple names that generated programs import (see ProgramTranslator) or use unqualified. */
     private static final java.util.Set<String> RESERVED_CLASS_NAMES = java.util.Set.of(
-            "AlphanumericField", "Arithmetic", "CobolProgram", "Compare", "Display", "NumericField",
+            "Accept", "AlphanumericField", "Arithmetic", "Clock", "CobolProgram", "Compare", "Display", "NumericField",
             "ProgramSupport", "BigDecimal", "Goback", "StopRun", "String", "Object", "Exception", "Override");
 
     private void checkNameCollisions() {
@@ -467,7 +467,7 @@ public final class Session {
         }
         try {
             for (ProgramState ps : programs.values()) {
-                ProgramTranslator.pruneImports(ps.java);
+                ProgramTranslator.finish(ps.java);
                 write(ps.outputPath, ps.java.toString());
                 ObjectNode w = written.addObject();
                 w.put("path", outputRoot.relativize(ps.outputPath).toString().replace('\\', '/'));

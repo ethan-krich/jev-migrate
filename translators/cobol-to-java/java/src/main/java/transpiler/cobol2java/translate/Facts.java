@@ -4,17 +4,20 @@ import io.proleap.cobol.asg.metamodel.ASGElement;
 import io.proleap.cobol.asg.metamodel.Literal;
 import io.proleap.cobol.asg.metamodel.procedure.StatementType;
 import io.proleap.cobol.asg.metamodel.procedure.StatementTypeEnum;
+import io.proleap.cobol.asg.metamodel.procedure.accept.AcceptStatement;
 import io.proleap.cobol.asg.metamodel.procedure.add.AddStatement;
 import io.proleap.cobol.asg.metamodel.procedure.call.CallStatement;
 import io.proleap.cobol.asg.metamodel.procedure.compute.ComputeStatement;
 import io.proleap.cobol.asg.metamodel.procedure.display.DisplayStatement;
 import io.proleap.cobol.asg.metamodel.procedure.divide.DivideStatement;
+import io.proleap.cobol.asg.metamodel.procedure.evaluate.EvaluateStatement;
 import io.proleap.cobol.asg.metamodel.procedure.ifstmt.IfStatement;
 import io.proleap.cobol.asg.metamodel.procedure.move.MoveStatement;
 import io.proleap.cobol.asg.metamodel.procedure.multiply.MultiplyStatement;
 import io.proleap.cobol.asg.metamodel.procedure.perform.PerformStatement;
 import io.proleap.cobol.asg.metamodel.procedure.perform.PerformType;
 import io.proleap.cobol.asg.metamodel.procedure.perform.TestClause;
+import io.proleap.cobol.asg.metamodel.procedure.set.SetStatement;
 import io.proleap.cobol.asg.metamodel.procedure.stop.StopStatement;
 import io.proleap.cobol.asg.metamodel.procedure.subtract.SubtractStatement;
 import io.proleap.cobol.asg.metamodel.valuestmt.LiteralValueStmt;
@@ -46,7 +49,11 @@ public final class Facts {
             Map.entry("PERFORM", Set.of("form", "loop", "test", "thru")),
             Map.entry("STOP", Set.of("kind")),
             Map.entry("EXIT", Set.of("kind")),
-            Map.entry("CALL", Set.of("program", "program_kind", "program_in_project", "using")));
+            Map.entry("CALL", Set.of("program", "program_kind", "program_in_project", "using")),
+            Map.entry("SET", Set.of("form")),
+            Map.entry("EVALUATE", Set.of("subjects", "has_other", "has_thru")),
+            Map.entry("ACCEPT", Set.of("from")),
+            Map.entry("EXHIBIT", Set.of("named", "changed")));
 
     private Facts() {}
 
@@ -71,11 +78,18 @@ public final class Facts {
             case "MOVE" -> {
                 MoveStatement move = (MoveStatement) s;
                 if (move.getMoveType() == MoveStatement.MoveType.MOVE_TO) {
-                    Operand src = tryOperand(() -> ctx.operand(move.getMoveToStatement().getSendingArea().getSendingAreaValueStmt()));
+                    Operand src = tryOperand(() -> Builtins.moveAll(move,
+                            ctx.operand(move.getMoveToStatement().getSendingArea().getSendingAreaValueStmt())));
                     f.put("source_category", src == null ? "unsupported" : src.category());
-                    f.put("source_figurative", src instanceof Operand.Figurative fig ? (fig.fill() == '0' ? "zero" : "space") : null);
+                    f.put("source_figurative", src instanceof Operand.Figurative fig
+                            ? fig.name().toLowerCase(Locale.ROOT).replace('-', '_') : null);
                     Operand dst = tryOperand(() -> ctx.operand(unit.receiver()));
                     f.put("target_category", dst == null ? "unsupported" : dst.category());
+                } else if (unit.corresponding() != null && unit.corresponding().problem() == null) {
+                    // One pair of MOVE CORRESPONDING: matched like a plain MOVE of the pair.
+                    f.put("source_category", unit.corresponding().source().category());
+                    f.put("target_category", unit.corresponding().target().category());
+                    f.put("source_figurative", null);
                 } else {
                     f.put("source_category", "corresponding");
                     f.put("target_category", "corresponding");
@@ -127,7 +141,7 @@ public final class Facts {
             }
             case "DISPLAY" -> {
                 DisplayStatement d = (DisplayStatement) s;
-                f.put("upon", d.getUpon() == null ? null : d.getUpon().getUponCall().getName().toUpperCase(Locale.ROOT));
+                f.put("upon", d.getUpon() == null ? null : ctx.device(Builtins.deviceName(d.getUpon())));
                 f.put("no_advancing", d.getWith() != null);
                 f.put("operands", d.getOperands().size());
             }
@@ -152,7 +166,49 @@ public final class Facts {
                 case STOP_RUN_AND_DISPLAY -> "literal";
                 case STOP_RUN_GIVING -> "giving";
             });
-            case "EXIT" -> f.put("kind", containsToken(s, "PROGRAM") ? "program" : "plain");
+            case "EXIT" -> f.put("kind", exitKind(s));
+            case "SET" -> {
+                SetStatement set = (SetStatement) s;
+                String form;
+                if (set.getSetType() == SetStatement.SetType.BY) {
+                    form = set.getSetBy().getSetByType() == io.proleap.cobol.asg.metamodel.procedure.set.SetBy.SetByType.UP ? "up_by" : "down_by";
+                } else {
+                    form = "to";
+                    if (set.getSetTos().size() == 1 && set.getSetTos().getFirst().getValues().size() == 1) {
+                        var value = set.getSetTos().getFirst().getValues().getFirst();
+                        Boolean b = Builtins.booleanValue(value.getValueStmt());
+                        if (b != null) {
+                            form = b ? "true" : "false";
+                        } else if (value.getValueType() == io.proleap.cobol.asg.metamodel.procedure.set.Value.ValueType.ON
+                                || value.getValueType() == io.proleap.cobol.asg.metamodel.procedure.set.Value.ValueType.OFF) {
+                            form = "on_off";
+                        }
+                    }
+                }
+                f.put("form", form);
+            }
+            case "EVALUATE" -> {
+                EvaluateStatement e = (EvaluateStatement) s;
+                f.put("subjects", 1 + e.getAlsoSelects().size());
+                f.put("has_other", e.getWhenOther() != null);
+                f.put("has_thru", e.getWhenPhrases().stream().flatMap(p -> p.getWhens().stream())
+                        .anyMatch(w -> w.getCondition().getThrough() != null
+                                || w.getAlsoConditions().stream().anyMatch(a -> a.getCondition().getThrough() != null)));
+            }
+            case "ACCEPT" -> {
+                AcceptStatement a = (AcceptStatement) s;
+                String from = acceptFrom(a);
+                if (a.getAcceptType() == AcceptStatement.AcceptType.MNEMONIC) {
+                    String device = ctx.device(Builtins.deviceName(a.getAcceptFromMnemonicStatement()));
+                    from = device.equals("SYSIN") || device.equals("CONSOLE") ? "stdin" : "device";
+                }
+                f.put("from", from);
+            }
+            case "EXHIBIT" -> {
+                var e = (io.proleap.cobol.CobolParser.ExhibitStatementContext) s.getCtx();
+                f.put("named", e.NAMED() != null);
+                f.put("changed", e.CHANGED() != null);
+            }
             case "CALL" -> {
                 CallStatement call = (CallStatement) s;
                 var program = call.getProgramValueStmt();
@@ -170,6 +226,51 @@ public final class Facts {
             }
         }
         return f;
+    }
+
+    /** EXIT kind: plain, program, paragraph, section, perform, perform_cycle (or invalid). */
+    static String exitKind(io.proleap.cobol.asg.metamodel.procedure.Statement s) {
+        var e = (io.proleap.cobol.CobolParser.ExitStatementContext) s.getCtx();
+        if (e.PROGRAM() != null) {
+            return "program";
+        }
+        if (e.SECTION() != null) {
+            return "section";
+        }
+        String word = e.cobolWord() == null ? null : e.cobolWord().getText().toUpperCase(Locale.ROOT);
+        if (e.PERFORM() != null) {
+            return word == null ? "perform" : word.equals("CYCLE") ? "perform_cycle" : "invalid";
+        }
+        if (word != null) {
+            return word.equals("PARAGRAPH") ? "paragraph" : "invalid";
+        }
+        return "plain";
+    }
+
+    /**
+     * ACCEPT source: stdin (no FROM; FROM SYSIN / CONSOLE is resolved by the caller), date,
+     * date_yyyymmdd, day, day_yyyyddd, day_of_week, time, other_date, escape_key, message_count.
+     */
+    static String acceptFrom(AcceptStatement a) {
+        return switch (a.getAcceptType()) {
+            case NO_FROM -> "stdin";
+            case MNEMONIC -> "device";
+            case FROM_ESCAPE_KEY -> "escape_key";
+            case MESSAGE_COUNT -> "message_count";
+            case DATE -> {
+                var d = (io.proleap.cobol.CobolParser.AcceptFromDateStatementContext) a.getAcceptFromDateStatement().getCtx();
+                if (d.DATE() != null && d.TODAYS_DATE() == null) {
+                    yield d.YYYYMMDD() != null ? "date_yyyymmdd" : "date";
+                }
+                if (d.DAY() != null) {
+                    yield d.YYYYDDD() != null ? "day_yyyyddd" : "day";
+                }
+                if (d.DAY_OF_WEEK() != null) {
+                    yield "day_of_week";
+                }
+                yield d.TIME() != null ? "time" : "other_date";
+            }
+        };
     }
 
     private interface OperandSupplier {

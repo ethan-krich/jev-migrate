@@ -3,6 +3,7 @@ package transpiler.cobol2java.translate;
 import static transpiler.cobol2java.translate.Ast.bool;
 import static transpiler.cobol2java.translate.Ast.call;
 import static transpiler.cobol2java.translate.Ast.chr;
+import static transpiler.cobol2java.translate.Ast.create;
 import static transpiler.cobol2java.translate.Ast.decimal;
 import static transpiler.cobol2java.translate.Ast.declare;
 import static transpiler.cobol2java.translate.Ast.integer;
@@ -29,6 +30,7 @@ import com.github.javaparser.ast.stmt.DoStmt;
 import com.github.javaparser.ast.stmt.EmptyStmt;
 import com.github.javaparser.ast.stmt.ForStmt;
 import com.github.javaparser.ast.stmt.IfStmt;
+import com.github.javaparser.ast.stmt.LabeledStmt;
 import com.github.javaparser.ast.stmt.Statement;
 import com.github.javaparser.ast.stmt.WhileStmt;
 import io.proleap.cobol.asg.metamodel.ASGElement;
@@ -37,11 +39,13 @@ import io.proleap.cobol.asg.metamodel.Scope;
 import io.proleap.cobol.asg.metamodel.call.Call;
 import io.proleap.cobol.asg.metamodel.procedure.NotOnSizeErrorPhrase;
 import io.proleap.cobol.asg.metamodel.procedure.OnSizeErrorPhrase;
+import io.proleap.cobol.asg.metamodel.procedure.accept.AcceptStatement;
 import io.proleap.cobol.asg.metamodel.procedure.add.AddStatement;
 import io.proleap.cobol.asg.metamodel.procedure.call.CallStatement;
 import io.proleap.cobol.asg.metamodel.procedure.compute.ComputeStatement;
 import io.proleap.cobol.asg.metamodel.procedure.display.DisplayStatement;
 import io.proleap.cobol.asg.metamodel.procedure.divide.DivideStatement;
+import io.proleap.cobol.asg.metamodel.procedure.evaluate.EvaluateStatement;
 import io.proleap.cobol.asg.metamodel.procedure.ifstmt.IfStatement;
 import io.proleap.cobol.asg.metamodel.procedure.move.MoveStatement;
 import io.proleap.cobol.asg.metamodel.procedure.multiply.MultiplyStatement;
@@ -49,16 +53,20 @@ import io.proleap.cobol.asg.metamodel.procedure.perform.PerformStatement;
 import io.proleap.cobol.asg.metamodel.procedure.perform.PerformType;
 import io.proleap.cobol.asg.metamodel.procedure.perform.TestClause;
 import io.proleap.cobol.asg.metamodel.procedure.perform.VaryingPhrase;
+import io.proleap.cobol.asg.metamodel.procedure.set.SetStatement;
 import io.proleap.cobol.asg.metamodel.procedure.stop.StopStatement;
 import io.proleap.cobol.asg.metamodel.procedure.subtract.SubtractStatement;
+import io.proleap.cobol.asg.metamodel.valuestmt.ConditionValueStmt;
 import io.proleap.cobol.asg.metamodel.valuestmt.LiteralValueStmt;
 import io.proleap.cobol.asg.metamodel.valuestmt.ValueStmt;
+import io.proleap.cobol.asg.metamodel.valuestmt.relation.RelationalOperator.RelationalOperatorType;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
+import org.antlr.v4.runtime.ParserRuleContext;
 import transpiler.cobol2java.mapping.MappingRegistry;
 
 /**
@@ -88,6 +96,15 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("continue", "CONTINUE", "CONTINUE (no-op)", (u, c) -> List.of(noOp("CONTINUE"))));
         register(Handler.of("call_program", "CALL",
                 "Static CALL 'literal' of a program in the same translation project, without USING", Builtins::callProgram));
+        register(Handler.of("set_condition", "SET",
+                "SET condition-name TO TRUE (moves its first value), or TO FALSE with WHEN SET TO FALSE", Builtins::setCondition));
+        register(Handler.of("evaluate", "EVALUATE",
+                "EVALUATE with ALSO, THRU, ANY, TRUE/FALSE and OTHER as an if/else chain", Builtins::evaluate));
+        register(Handler.of("accept_stdin", "ACCEPT",
+                "ACCEPT an alphanumeric item from standard input (one line; spaces at end of input)", Builtins::acceptStdin));
+        register(Handler.of("accept_datetime", "ACCEPT",
+                "ACCEPT FROM DATE [YYYYMMDD] / DAY [YYYYDDD] / DAY-OF-WEEK / TIME via the runtime Clock", Builtins::acceptDatetime));
+        register(Handler.of("exhibit", "EXHIBIT", "EXHIBIT [NAMED] as GnuCOBOL: NAME = value for items", Builtins::exhibit));
     }
 
     private void register(Handler h) {
@@ -124,12 +141,23 @@ public final class Builtins implements MappingRegistry.Catalog {
 
     // ---------------------------------------------------------------- MOVE
 
+    /** The receiver of a MOVE unit: its receiving call, or the target of a CORRESPONDING pair. */
+    private static Operand moveTarget(OpUnit u, TranslationContext c) throws HandlerException {
+        if (u.corresponding() != null) {
+            if (u.corresponding().problem() != null) {
+                throw HandlerException.unsupported(u.corresponding().problem());
+            }
+            return new Operand.Field(u.corresponding().target());
+        }
+        return c.operand(u.receiver());
+    }
+
     private static Operand moveSource(OpUnit u, TranslationContext c) throws HandlerException {
         MoveStatement move = (MoveStatement) u.statement();
-        if (move.getMoveType() != MoveStatement.MoveType.MOVE_TO) {
-            throw HandlerException.unsupported("MOVE CORRESPONDING is not supported");
+        if (u.corresponding() != null) {
+            return new Operand.Field(u.corresponding().source());
         }
-        Operand src = c.operand(move.getMoveToStatement().getSendingArea().getSendingAreaValueStmt());
+        Operand src = moveAll(move, c.operand(move.getMoveToStatement().getSendingArea().getSendingAreaValueStmt()));
         for (Call receiver : move.getMoveToStatement().getReceivingAreaCalls()) {
             if (src instanceof Operand.Field f && c.operand(receiver) instanceof Operand.Field r && r.item() == f.item()
                     && move.getMoveToStatement().getReceivingAreaCalls().size() > 1) {
@@ -139,13 +167,32 @@ public final class Builtins implements MappingRegistry.Catalog {
         return src;
     }
 
-    private static List<Statement> moveToAlphanumeric(OpUnit u, TranslationContext c) throws HandlerException {
-        Operand target = c.operand(u.receiver());
-        if (!(target instanceof Operand.Field t) || !t.item().isAlphanumeric()) {
-            throw HandlerException.notApplicable("receiver " + u.receiver().getName() + " is not alphanumeric");
+    /** {@code MOVE ALL "lit"}: ProLeap's grammar puts ALL on the MOVE statement, not on the literal. */
+    static Operand moveAll(MoveStatement move, Operand src) throws HandlerException {
+        if (((io.proleap.cobol.CobolParser.MoveStatementContext) move.getCtx()).ALL() == null) {
+            return src;
         }
-        Expression field = c.field(target);
-        Operand src = moveSource(u, c);
+        return switch (src) {
+            case Operand.AlphanumericLiteral a when !a.value().isEmpty() -> new Operand.Figurative(a.value(), "ALL");
+            case Operand.Figurative f -> f;
+            default -> throw HandlerException.unsupported("MOVE ALL with " + src.category() + " is not supported");
+        };
+    }
+
+    private static List<Statement> moveToAlphanumeric(OpUnit u, TranslationContext c) throws HandlerException {
+        Operand target = moveTarget(u, c);
+        if (!(target instanceof Operand.Field t) || !t.item().isAlphanumeric()) {
+            throw HandlerException.notApplicable("receiver " + receiverName(u, target) + " is not alphanumeric");
+        }
+        return List.of(storeAlphanumeric(c.field(target), moveSource(u, c), c));
+    }
+
+    private static String receiverName(OpUnit u, Operand target) {
+        return u.receiver() != null ? u.receiver().getName() : target instanceof Operand.Field f ? f.item().cobolName() : "?";
+    }
+
+    /** MOVE of {@code src} into an alphanumeric field (shared by MOVE, SET condition-name and ACCEPT). */
+    static Statement storeAlphanumeric(Expression field, Operand src, TranslationContext c) throws HandlerException {
         Expression value = switch (src) {
             case Operand.Field f when f.item().isAlphanumeric() -> call(c.field(src), "get");
             case Operand.Field f when f.item().isInteger() -> c.field(src);
@@ -158,24 +205,28 @@ public final class Builtins implements MappingRegistry.Catalog {
             default -> throw HandlerException.unsupported("MOVE from " + src.category() + " to alphanumeric is not supported");
         };
         if (src instanceof Operand.Figurative f) {
-            return List.of(stmt(call(field, "fill", chr(f.fill()))));
+            return stmt(call(field, "fill", f.isSingle() ? chr(f.fill()) : str(f.pattern())));
         }
-        return List.of(stmt(call(field, "set", value)));
+        return stmt(call(field, "set", value));
     }
 
     private static List<Statement> moveToNumeric(OpUnit u, TranslationContext c) throws HandlerException {
-        Operand target = c.operand(u.receiver());
+        Operand target = moveTarget(u, c);
         boolean numericTarget = target instanceof Operand.ReturnCode
                 || target instanceof Operand.Field t && t.item().isNumeric();
         if (!numericTarget) {
-            throw HandlerException.notApplicable("receiver " + u.receiver().getName() + " is not numeric");
+            throw HandlerException.notApplicable("receiver " + receiverName(u, target) + " is not numeric");
         }
-        Operand src = moveSource(u, c);
+        return List.of(storeNumeric(c.field(target), moveSource(u, c), c));
+    }
+
+    /** MOVE of {@code src} into a numeric field. */
+    static Statement storeNumeric(Expression field, Operand src, TranslationContext c) throws HandlerException {
         if (!src.isNumericValued() || src instanceof Operand.Arithmetic) {
             throw HandlerException.unsupported("MOVE from " + src.category() + " to numeric is not supported (no de-editing or alphanumeric-to-numeric conversion)");
         }
         Expression value = src instanceof Operand.Field || src instanceof Operand.ReturnCode ? c.field(src) : c.numeric(src);
-        return List.of(stmt(call(c.field(target), "move", value)));
+        return stmt(call(field, "move", value));
     }
 
     // ---------------------------------------------------------- arithmetic
@@ -285,7 +336,7 @@ public final class Builtins implements MappingRegistry.Catalog {
                 Expression total = once(sum(ops), rs.size(), out, c, "sum");
                 out.addAll(storeAll(rs, r -> total.clone(), add.getOnSizeErrorPhrase(), add.getNotOnSizeErrorPhrase(), c));
             }
-            case CORRESPONDING -> throw HandlerException.unsupported("ADD CORRESPONDING is not supported");
+            case CORRESPONDING -> out.add(corresponding(u, c, "add"));
         }
         return out;
     }
@@ -321,9 +372,20 @@ public final class Builtins implements MappingRegistry.Catalog {
                 Expression difference = once(call(minuend, "subtract", sum(ops)), rs.size(), out, c, "difference");
                 out.addAll(storeAll(rs, r -> difference.clone(), sub.getOnSizeErrorPhrase(), sub.getNotOnSizeErrorPhrase(), c));
             }
-            case CORRESPONDING -> throw HandlerException.unsupported("SUBTRACT CORRESPONDING is not supported");
+            case CORRESPONDING -> out.add(corresponding(u, c, "subtract"));
         }
         return out;
+    }
+
+    /** One pair of ADD / SUBTRACT CORRESPONDING: target = target op source. */
+    private static Statement corresponding(OpUnit u, TranslationContext c, String op) throws HandlerException {
+        var pair = u.corresponding();
+        if (pair == null || pair.problem() != null) {
+            throw HandlerException.unsupported(pair == null ? "CORRESPONDING operands must be group items" : pair.problem());
+        }
+        Expression target = c.field(new Operand.Field(pair.target()));
+        Expression source = c.numeric(new Operand.Field(pair.source()));
+        return stmt(call(target, "store", call(call(target.clone(), "get"), op, source), bool(pair.rounded()), bool(false)));
     }
 
     private static List<Statement> multiply(OpUnit u, TranslationContext c) throws HandlerException {
@@ -353,7 +415,7 @@ public final class Builtins implements MappingRegistry.Catalog {
     private static List<Statement> divide(OpUnit u, TranslationContext c) throws HandlerException {
         DivideStatement div = (DivideStatement) u.statement();
         if (div.getRemainder() != null) {
-            throw HandlerException.unsupported("DIVIDE ... REMAINDER is not supported");
+            return divideRemainder(div, c);
         }
         List<Statement> out = new ArrayList<>();
         List<Receiver> rs = new ArrayList<>();
@@ -384,6 +446,38 @@ public final class Builtins implements MappingRegistry.Catalog {
         return out;
     }
 
+    /**
+     * DIVIDE ... GIVING q REMAINDER r. The remainder is {@code dividend - q' * divisor} where q'
+     * is the quotient truncated to q's scale, as in GnuCOBOL 3.2: never rounded, even with
+     * ROUNDED, and not cut to q's integer digits. Both receivers are stored even if one has a
+     * size error.
+     */
+    private static List<Statement> divideRemainder(DivideStatement div, TranslationContext c) throws HandlerException {
+        if (div.getDivideType() == DivideStatement.DivideType.INTO) {
+            throw HandlerException.unsupported("REMAINDER requires GIVING");
+        }
+        boolean into = div.getDivideType() == DivideStatement.DivideType.INTO_GIVING;
+        var phrase = into ? div.getDivideIntoGivingStatement().getGivingPhrase() : div.getDivideByGivingStatement().getGivingPhrase();
+        if (phrase.getGivings().size() != 1) {
+            throw HandlerException.unsupported("DIVIDE ... REMAINDER with several GIVING receivers is invalid");
+        }
+        Expression operand = numericOperand(div.getOperandValueStmt(), c);
+        Expression other = numericOperand(into ? div.getDivideIntoGivingStatement().getIntoValueStmt()
+                : div.getDivideByGivingStatement().getByValueStmt(), c);
+        var g = phrase.getGivings().getFirst();
+        Receiver q = receiver(g.getGivingCall(), g, c);
+        Receiver r = receiver(div.getRemainder().getRemainderCall(), div.getRemainder(), c);
+        List<Statement> out = new ArrayList<>();
+        Expression dividend = once(into ? other : operand, 2, out, c, "dividend");
+        Expression divisor = once(into ? operand : other, 2, out, c, "divisor");
+        Receiver remainder = new Receiver(r.field(), r.scale(), false);
+        Map<Receiver, Expression> values = new LinkedHashMap<>();
+        values.put(q, staticCall("Arithmetic", "divide", dividend.clone(), divisor.clone(), integer(q.scale()), bool(q.rounded())));
+        values.put(remainder, staticCall("Arithmetic", "remainder", dividend.clone(), divisor.clone(), integer(q.scale())));
+        out.addAll(storeAll(List.of(q, remainder), values::get, div.getOnSizeErrorPhrase(), div.getNotOnSizeErrorPhrase(), c));
+        return out;
+    }
+
     private static List<Statement> compute(OpUnit u, TranslationContext c) throws HandlerException {
         ComputeStatement comp = (ComputeStatement) u.statement();
         List<Statement> out = new ArrayList<>();
@@ -400,49 +494,302 @@ public final class Builtins implements MappingRegistry.Catalog {
 
     private static List<Statement> display(OpUnit u, TranslationContext c) throws HandlerException {
         DisplayStatement d = (DisplayStatement) u.statement();
-        if (d.getUpon() != null || d.getAt() != null || d.getOnExceptionClause() != null || d.getNotOnExceptionClause() != null) {
-            throw HandlerException.unsupported("DISPLAY with UPON, AT or exception phrases is not supported");
+        if (d.getAt() != null || d.getOnExceptionClause() != null || d.getNotOnExceptionClause() != null) {
+            throw HandlerException.unsupported("DISPLAY with AT or exception phrases is not supported");
+        }
+        boolean err = false;
+        if (d.getUpon() != null) {
+            String device = c.device(deviceName(d.getUpon()));
+            switch (device) {
+                case "CONSOLE", "SYSOUT" -> err = false;
+                case "SYSERR" -> err = true;
+                default -> throw new HandlerException(HandlerException.Kind.MISSING_TARGET,
+                        "DISPLAY UPON " + device + " (a device other than CONSOLE, SYSOUT or SYSERR) has no target");
+            }
         }
         NodeList<Expression> args = new NodeList<>();
         for (var operand : d.getOperands()) {
-            Operand o = c.operand(operand.getOperandValueStmt());
-            args.add(switch (o) {
-                case Operand.Field f when f.item().isAlphanumeric() || f.item().isNumeric() -> call(c.field(o), "display");
-                case Operand.ReturnCode r -> call(c.field(o), "display");
-                case Operand.AlphanumericLiteral a -> str(a.value());
-                case Operand.NumericLiteral n -> str(n.displayText());
-                default -> throw HandlerException.unsupported("DISPLAY of " + o.category() + " is not supported");
-            });
+            args.add(displayValue(c.operand(operand.getOperandValueStmt()), c));
         }
-        String method = d.getWith() != null ? "noAdvancing" : "line";
+        boolean noAdvancing = d.getWith() != null;
+        String method = err ? (noAdvancing ? "errNoAdvancing" : "err") : (noAdvancing ? "noAdvancing" : "line");
         return List.of(stmt(new com.github.javaparser.ast.expr.MethodCallExpr(name("Display"), method, args)));
+    }
+
+    /** The DISPLAY text of an operand. */
+    private static Expression displayValue(Operand o, TranslationContext c) throws HandlerException {
+        return switch (o) {
+            case Operand.Field f when f.item().isNumeric() && c.decimalPointComma() && f.item().numeric().scale() > 0 ->
+                    call(c.field(o), "display", chr(','));
+            case Operand.Field f when f.item().isAlphanumeric() || f.item().isNumeric() -> call(c.field(o), "display");
+            case Operand.ReturnCode r -> call(c.field(o), "display");
+            case Operand.AlphanumericLiteral a -> str(a.value());
+            case Operand.NumericLiteral n -> str(n.displayText());
+            case Operand.Figurative f when !f.name().equals("ALL") -> str(f.pattern());
+            default -> throw HandlerException.unsupported("DISPLAY of " + o.category() + " is not supported");
+        };
+    }
+
+    /** EXHIBIT [NAMED]: items as {@code NAME = value} with the name as written, literals as is, space separated. */
+    private static List<Statement> exhibit(OpUnit u, TranslationContext c) throws HandlerException {
+        var ctx = (io.proleap.cobol.CobolParser.ExhibitStatementContext) u.statement().getCtx();
+        if (ctx.CHANGED() != null) {
+            throw HandlerException.unsupported("EXHIBIT CHANGED is not implemented by GnuCOBOL 3.2, so its behaviour has no reference");
+        }
+        NodeList<Expression> args = new NodeList<>();
+        var operands = ((io.proleap.cobol.asg.metamodel.procedure.exhibit.ExhibitStatement) u.statement()).getOperands();
+        for (int i = 0; i < operands.size(); i++) {
+            if (i > 0) {
+                args.add(str(" "));
+            }
+            Operand o = c.operand(operands.get(i).getOperandValueStmt());
+            if (o instanceof Operand.Field || o instanceof Operand.ReturnCode) {
+                args.add(str(operands.get(i).getCtx().getText() + " = "));
+            }
+            args.add(displayValue(o, c));
+        }
+        return List.of(stmt(new com.github.javaparser.ast.expr.MethodCallExpr(name("Display"), "line", args)));
+    }
+
+    // ------------------------------------------------------------- ACCEPT
+
+    private static List<Statement> acceptStdin(OpUnit u, TranslationContext c) throws HandlerException {
+        AcceptStatement a = (AcceptStatement) u.statement();
+        rejectAcceptExceptions(a);
+        if (a.getAcceptType() == AcceptStatement.AcceptType.MNEMONIC) {
+            String device = c.device(deviceName(a.getAcceptFromMnemonicStatement()));
+            if (!device.equals("SYSIN") && !device.equals("CONSOLE")) {
+                throw new HandlerException(HandlerException.Kind.MISSING_TARGET, "ACCEPT FROM " + device
+                        + " (environment, command line or another device) has no target");
+            }
+        } else if (a.getAcceptType() != AcceptStatement.AcceptType.NO_FROM) {
+            throw HandlerException.notApplicable("ACCEPT FROM " + a.getAcceptType() + " is not standard input");
+        }
+        Operand target = c.operand(a.getAcceptCall());
+        if (!(target instanceof Operand.Field f) || !f.item().isAlphanumeric()) {
+            throw HandlerException.unsupported("ACCEPT into " + target.category() + " is not supported (only alphanumeric items)");
+        }
+        return List.of(stmt(call(c.field(target), "set", staticCall("Accept", "line"))));
+    }
+
+    private static List<Statement> acceptDatetime(OpUnit u, TranslationContext c) throws HandlerException {
+        AcceptStatement a = (AcceptStatement) u.statement();
+        rejectAcceptExceptions(a);
+        if (a.getAcceptType() != AcceptStatement.AcceptType.DATE) {
+            throw HandlerException.notApplicable("not ACCEPT FROM DATE / DAY / DAY-OF-WEEK / TIME");
+        }
+        String method = switch (Facts.acceptFrom(a)) {
+            case "date" -> "date";
+            case "date_yyyymmdd" -> "dateYyyymmdd";
+            case "day" -> "day";
+            case "day_yyyyddd" -> "dayYyyyddd";
+            case "day_of_week" -> "dayOfWeek";
+            case "time" -> "time";
+            default -> throw HandlerException.unsupported("ACCEPT " + a.getCtx().getText() + " is not supported");
+        };
+        // The value is an unsigned integer of fixed width, moved as such.
+        Operand target = c.operand(a.getAcceptCall());
+        Expression value = staticCall("Clock", method);
+        if (target instanceof Operand.Field f && f.item().isAlphanumeric()) {
+            return List.of(stmt(call(c.field(target), "set", value)));
+        }
+        if (target instanceof Operand.ReturnCode || target instanceof Operand.Field f && f.item().isNumeric()) {
+            return List.of(stmt(call(c.field(target), "move", create("BigDecimal", value))));
+        }
+        throw HandlerException.unsupported("ACCEPT into " + target.category() + " is not supported");
+    }
+
+    private static void rejectAcceptExceptions(AcceptStatement a) throws HandlerException {
+        if (a.getOnExceptionClause() != null || a.getNotOnExceptionClause() != null) {
+            throw HandlerException.unsupported("ACCEPT with exception phrases is not supported");
+        }
+    }
+
+    // ---------------------------------------------------------------- SET
+
+    private static List<Statement> setCondition(OpUnit u, TranslationContext c) throws HandlerException {
+        SetStatement set = (SetStatement) u.statement();
+        if (set.getSetType() != SetStatement.SetType.TO) {
+            throw HandlerException.notApplicable("SET ... UP / DOWN BY is not a condition-name SET");
+        }
+        List<Statement> out = new ArrayList<>();
+        for (var setTo : set.getSetTos()) {
+            if (setTo.getValues().size() != 1) {
+                throw HandlerException.unsupported("SET with several values is not supported");
+            }
+            Boolean value = booleanValue(setTo.getValues().getFirst().getValueStmt());
+            if (value == null) {
+                throw HandlerException.notApplicable("SET ... TO a value other than TRUE / FALSE");
+            }
+            for (var to : setTo.getTos()) {
+                Operand o = c.operand(to.getToCall());
+                if (!(o instanceof Operand.Field f) || !f.item().isCondition()) {
+                    throw HandlerException.notApplicable(to.getToCall().getName() + " is not a condition-name");
+                }
+                DataItem cond = f.item();
+                Operand v;
+                if (value) {
+                    v = cond.conditionValues().getFirst().from();
+                } else if (cond.falseValue() != null) {
+                    v = cond.falseValue();
+                } else {
+                    throw HandlerException.unsupported("SET " + cond.cobolName() + " TO FALSE needs VALUE ... WHEN SET TO FALSE");
+                }
+                Expression field = c.field(new Operand.Field(cond.parent()));
+                out.add(cond.parent().isAlphanumeric() ? storeAlphanumeric(field, v, c) : storeNumeric(field, v, c));
+            }
+        }
+        return out;
+    }
+
+    /** TRUE / FALSE as a value statement, or null. */
+    static Boolean booleanValue(ValueStmt v) {
+        if (v instanceof LiteralValueStmt lit && lit.getLiteral().getLiteralType() == Literal.LiteralType.BOOLEAN) {
+            return lit.getLiteral().getCtx().getText().equalsIgnoreCase("TRUE");
+        }
+        return null;
     }
 
     // ------------------------------------------------------- control flow
 
-    private static void rejectNextSentence(Scope scope, String where) throws HandlerException {
-        if (scope != null && Facts.hasDirectToken(scope.getCtx(), "NEXT")) {
-            throw HandlerException.unsupported("NEXT SENTENCE in " + where + " is not supported");
-        }
+    /** An IF branch: its statements, or a jump to the end of the sentence for NEXT SENTENCE. */
+    private static BlockStmt branch(Scope scope, boolean nextSentence, TranslationContext c) throws HandlerException {
+        return nextSentence ? new BlockStmt(NodeList.nodeList(c.jump(TranslationContext.Jump.NEXT_SENTENCE))) : c.nested(scope);
     }
 
     private static List<Statement> ifElse(OpUnit u, TranslationContext c) throws HandlerException {
         IfStatement s = (IfStatement) u.statement();
-        rejectNextSentence(s.getThen(), "IF");
-        rejectNextSentence(s.getElse(), "ELSE");
         Expression cond = c.condition(s.getCondition());
-        BlockStmt then = c.nested(s.getThen());
-        BlockStmt otherwise = s.getElse() == null ? null : c.nested(s.getElse());
+        BlockStmt then = branch(s.getThen(), s.getThen().isNextSentence(), c);
+        BlockStmt otherwise = s.getElse() == null ? null : branch(s.getElse(), s.getElse().isNextSentence(), c);
         return List.of(new IfStmt(cond, then, otherwise));
+    }
+
+    /** An EVALUATE subject: a value, TRUE / FALSE, or a condition. */
+    private record Subject(Operand value, Boolean bool, Expression condition) {}
+
+    private static Subject subject(ValueStmt v, ParserRuleContext where, TranslationContext c) throws HandlerException {
+        Boolean b = booleanValue(v);
+        if (b != null) {
+            return new Subject(null, b, null);
+        }
+        if (v instanceof ConditionValueStmt cond) {
+            return new Subject(null, null, c.condition(cond));
+        }
+        Operand o = c.operand(v);
+        if (o instanceof Operand.Field f && f.item().isCondition()) {
+            return new Subject(null, null, c.conditionName(f.item(), where));
+        }
+        return new Subject(o, null, null);
+    }
+
+    /** The test of one WHEN object against its subject, or null for ANY. */
+    private static Expression selection(Subject subject, io.proleap.cobol.asg.metamodel.procedure.evaluate.Condition object,
+            TranslationContext c) throws HandlerException {
+        ParserRuleContext where = object.getCtx();
+        Expression test = switch (object.getConditionType()) {
+            case ANY -> null;
+            case VALUE, VALUE_THROUGH -> {
+                Boolean literal = booleanValue(object.getValue().getValueStmt());
+                if (literal != null && object.getThrough() == null) {
+                    // ProLeap parses WHEN TRUE / FALSE as a value.
+                    yield booleanObject(subject, literal, where);
+                }
+                Operand value = c.operand(object.getValue().getValueStmt());
+                if (subject.value() == null) {
+                    // TRUE / FALSE / condition subject with a condition-name object.
+                    if (subject.bool() != null && value instanceof Operand.Field f && f.item().isCondition() && object.getThrough() == null) {
+                        Expression e = c.conditionName(f.item(), where);
+                        yield subject.bool() ? e : not(e);
+                    }
+                    throw HandlerException.unsupported("WHEN " + where.getText() + " does not match a TRUE/FALSE or condition subject");
+                }
+                if (object.getThrough() == null) {
+                    yield c.compare(subject.value(), value, RelationalOperatorType.EQUAL, where);
+                }
+                Operand thru = c.operand(object.getThrough().getValue().getValueStmt());
+                yield new EnclosedExpr(new BinaryExpr(c.compare(subject.value(), value, RelationalOperatorType.GREATER_OR_EQUAL, where),
+                        c.compare(subject.value(), thru, RelationalOperatorType.LESS_OR_EQUAL, where), BinaryExpr.Operator.AND));
+            }
+            case BOOLEAN -> {
+                Boolean b = booleanValue(object.getConditionValueStmt());
+                yield booleanObject(subject, b == null ? where.getText().toUpperCase(java.util.Locale.ROOT).endsWith("TRUE") : b, where);
+            }
+            case CONDITION -> {
+                if (subject.bool() == null) {
+                    throw HandlerException.unsupported("WHEN condition needs a TRUE or FALSE subject");
+                }
+                Expression e = c.condition((ConditionValueStmt) object.getConditionValueStmt());
+                yield subject.bool() ? e : not(e);
+            }
+        };
+        return test != null && object.isNot() ? not(test) : test;
+    }
+
+    private static Expression booleanObject(Subject subject, boolean b, ParserRuleContext where) throws HandlerException {
+        if (subject.condition() != null) {
+            return b ? subject.condition() : not(subject.condition());
+        }
+        if (subject.bool() != null) {
+            return bool(subject.bool() == b);
+        }
+        throw HandlerException.unsupported("WHEN " + where.getText() + " needs a TRUE, FALSE or condition subject");
+    }
+
+    /** The name after UPON / FROM, from the parse tree (ProLeap leaves environment names unnamed). */
+    static String deviceName(io.proleap.cobol.asg.metamodel.ASGElement phrase) {
+        var ctx = phrase.getCtx();
+        return ctx.getChild(ctx.getChildCount() - 1).getText();
+    }
+
+    private static List<Statement> evaluate(OpUnit u, TranslationContext c) throws HandlerException {
+        EvaluateStatement e = (EvaluateStatement) u.statement();
+        List<Subject> subjects = new ArrayList<>();
+        subjects.add(subject(e.getSelect().getSelectValueStmt(), e.getSelect().getCtx(), c));
+        for (var also : e.getAlsoSelects()) {
+            subjects.add(subject(also.getSelect().getSelectValueStmt(), also.getCtx(), c));
+        }
+        List<Expression> tests = new ArrayList<>();
+        List<BlockStmt> bodies = new ArrayList<>();
+        for (var phrase : e.getWhenPhrases()) {
+            Expression any = null;
+            for (var when : phrase.getWhens()) {
+                List<io.proleap.cobol.asg.metamodel.procedure.evaluate.Condition> objects = new ArrayList<>();
+                objects.add(when.getCondition());
+                when.getAlsoConditions().forEach(a -> objects.add(a.getCondition()));
+                if (objects.size() != subjects.size()) {
+                    throw HandlerException.unsupported("WHEN " + when.getCtx().getText() + " has " + objects.size()
+                            + " objects for " + subjects.size() + " subjects");
+                }
+                Expression all = null;
+                for (int i = 0; i < objects.size(); i++) {
+                    Expression t = selection(subjects.get(i), objects.get(i), c);
+                    if (t != null) {
+                        all = all == null ? t : new BinaryExpr(all, t, BinaryExpr.Operator.AND);
+                    }
+                }
+                Expression whenTest = all == null ? bool(true) : all;
+                any = any == null ? whenTest : new BinaryExpr(any, whenTest, BinaryExpr.Operator.OR);
+            }
+            tests.add(any);
+            bodies.add(c.nested(phrase));
+        }
+        Statement chain = e.getWhenOther() == null ? null : c.nested(e.getWhenOther());
+        for (int i = tests.size() - 1; i >= 0; i--) {
+            chain = new IfStmt(tests.get(i), bodies.get(i), chain);
+        }
+        return chain == null ? List.of() : List.of(chain);
     }
 
     private static List<Statement> perform(OpUnit u, TranslationContext c) throws HandlerException {
         PerformStatement p = (PerformStatement) u.statement();
         BlockStmt body;
         PerformType type;
+        TranslationContext.PerformFrame frame = null;
         if (p.getPerformStatementType() == PerformStatement.PerformStatementType.INLINE) {
             type = p.getPerformInlineStatement().getPerformType();
-            body = c.nested(p.getPerformInlineStatement());
+            frame = new TranslationContext.PerformFrame(c.fresh("perform"), c.fresh("cycle"));
+            body = c.nestedPerform(p.getPerformInlineStatement(), frame);
         } else {
             var proc = p.getPerformProcedureStatement();
             List<Call> calls = proc.getCalls();
@@ -453,9 +800,33 @@ public final class Builtins implements MappingRegistry.Catalog {
             body = new BlockStmt(NodeList.nodeList(stmt(thisCall(c.procedureMethod(calls.getFirst())))));
         }
         if (type == null) {
+            if (frame != null && (frame.exitUsed || frame.cycleUsed)) {
+                // Without a loop, ending the iteration ends the PERFORM.
+                String label = frame.exitUsed ? frame.exitLabel : frame.cycleLabel;
+                if (frame.exitUsed && frame.cycleUsed) {
+                    body = new BlockStmt(NodeList.nodeList(new LabeledStmt(frame.cycleLabel, body)));
+                }
+                return List.of(new LabeledStmt(label, body));
+            }
             return body.getStatements().size() == 1 && p.getPerformStatementType() == PerformStatement.PerformStatementType.PROCEDURE
                     ? List.of(body.getStatement(0)) : List.of(body);
         }
+        if (frame != null && frame.cycleUsed) {
+            // EXIT PERFORM CYCLE ends this iteration: the loop's step and test still run.
+            body = new BlockStmt(NodeList.nodeList(new LabeledStmt(frame.cycleLabel, body)));
+        }
+        List<Statement> loop = loop(type, body, c);
+        if (frame != null && frame.exitUsed) {
+            Statement last = loop.getLast();
+            List<Statement> out = new ArrayList<>(loop.subList(0, loop.size() - 1));
+            out.add(new LabeledStmt(frame.exitLabel, last));
+            return out;
+        }
+        return loop;
+    }
+
+    /** The loop for TIMES / UNTIL / VARYING around {@code body}; its last statement is the loop itself. */
+    private static List<Statement> loop(PerformType type, BlockStmt body, TranslationContext c) throws HandlerException {
         return switch (type.getPerformTypeType()) {
             case TIMES -> {
                 Operand times = c.operand(type.getTimes().getTimesValueStmt());
@@ -519,17 +890,25 @@ public final class Builtins implements MappingRegistry.Catalog {
 
     private static List<Statement> stopRun(OpUnit u, TranslationContext c) throws HandlerException {
         StopStatement s = (StopStatement) u.statement();
-        if (s.getStopType() != StopStatement.StopType.STOP_RUN) {
-            throw HandlerException.notApplicable("only STOP RUN is handled; STOP literal / GIVING are not");
+        switch (s.getStopType()) {
+            case STOP_RUN -> { }
+            case STOP_RUN_AND_DISPLAY -> throw new HandlerException(HandlerException.Kind.MISSING_TARGET,
+                    "STOP literal shows the literal and waits for an operator reply; there is no operator console target");
+            case STOP_RUN_GIVING -> throw HandlerException.unsupported("STOP RUN GIVING / RETURNING is not supported");
         }
         return List.of(stmt(staticCall("ProgramSupport", "stopRun", self())));
     }
 
-    private static List<Statement> exit(OpUnit u, TranslationContext c) {
-        if (Facts.hasDirectToken(u.statement().getCtx(), "PROGRAM")) {
-            return List.of(stmt(staticCall("ProgramSupport", "exitProgram")));
-        }
-        return List.of(noOp("EXIT"));
+    private static List<Statement> exit(OpUnit u, TranslationContext c) throws HandlerException {
+        return switch (Facts.exitKind(u.statement())) {
+            case "program" -> List.of(stmt(staticCall("ProgramSupport", "exitProgram")));
+            case "paragraph" -> List.of(c.jump(TranslationContext.Jump.EXIT_PARAGRAPH));
+            case "section" -> List.of(c.jump(TranslationContext.Jump.EXIT_SECTION));
+            case "perform" -> List.of(c.jump(TranslationContext.Jump.EXIT_PERFORM));
+            case "perform_cycle" -> List.of(c.jump(TranslationContext.Jump.EXIT_PERFORM_CYCLE));
+            case "plain" -> List.of(noOp("EXIT"));
+            default -> throw HandlerException.unsupported("EXIT " + u.statement().getCtx().getText() + " is not supported");
+        };
     }
 
     private static Statement noOp(String verb) {

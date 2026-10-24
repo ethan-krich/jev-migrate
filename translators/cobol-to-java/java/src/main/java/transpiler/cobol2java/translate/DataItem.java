@@ -6,7 +6,11 @@ import transpiler.cobol2java.cobol.Picture;
 
 /** A WORKING-STORAGE entry and the Java field that represents it (if any). */
 public final class DataItem {
-    public enum Kind { ALPHANUMERIC, NUMERIC, GROUP, UNSUPPORTED }
+    /** CONDITION is a level-88 condition-name on its (elementary) parent. */
+    public enum Kind { ALPHANUMERIC, NUMERIC, GROUP, CONDITION, UNSUPPORTED }
+
+    /** One VALUE of a condition-name: a single value, or {@code from THRU thru}. */
+    public record ConditionValue(Operand from, Operand thru) {}
 
     private final String cobolName;
     private final Kind kind;
@@ -17,6 +21,8 @@ public final class DataItem {
     private final int line;
     private String javaName;
     private String initialValue;
+    private List<ConditionValue> conditionValues = List.of();
+    private Operand falseValue;
 
     DataItem(String cobolName, Kind kind, Picture picture, String unsupportedReason, DataItem parent, int line) {
         this.cobolName = cobolName;
@@ -44,6 +50,33 @@ public final class DataItem {
 
     public boolean isNumeric() {
         return kind == Kind.NUMERIC;
+    }
+
+    public boolean isCondition() {
+        return kind == Kind.CONDITION;
+    }
+
+    public boolean isGroup() {
+        return kind == Kind.GROUP;
+    }
+
+    public boolean isFiller() {
+        return cobolName.equalsIgnoreCase("FILLER");
+    }
+
+    /** The values of a condition-name, in source order. */
+    public List<ConditionValue> conditionValues() {
+        return conditionValues;
+    }
+
+    /** The {@code WHEN SET TO FALSE} value of a condition-name, or null. */
+    public Operand falseValue() {
+        return falseValue;
+    }
+
+    void condition(List<ConditionValue> values, Operand whenFalse) {
+        this.conditionValues = List.copyOf(values);
+        this.falseValue = whenFalse;
     }
 
     public Picture.Numeric numeric() {
@@ -91,12 +124,13 @@ public final class DataItem {
         this.initialValue = value;
     }
 
-    /** "alphanumeric" / "numeric" / "group" - the category exposed to mapping conditions. */
+    /** "alphanumeric" / "numeric" / "group" / "condition" - the category exposed to mapping conditions. */
     public String category() {
         return switch (kind) {
             case ALPHANUMERIC -> "alphanumeric";
             case NUMERIC -> "numeric";
             case GROUP -> "group";
+            case CONDITION -> "condition";
             case UNSUPPORTED -> "unsupported";
         };
     }

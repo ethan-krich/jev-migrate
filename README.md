@@ -118,20 +118,26 @@ equivalence fixtures.
 |---|---|---|
 | ✅ | IDENTIFICATION / DATA / PROCEDURE divisions, WORKING-STORAGE | one program per file, fixed / variable / tandem format |
 | ✅ | Debugging lines (`D` indicator) | comments unless `Dialect.debugging_lines` or `WITH DEBUGGING MODE` |
-| ✅ | `PIC X(n)`, `PIC [S]9(i)[V9(s)]` USAGE DISPLAY, levels 01–49 and 77, `VALUE` literal / ZERO / SPACE | default init: spaces / zero |
+| ✅ | `PIC X(n)`, `PIC [S]9(i)[V9(s)]` USAGE DISPLAY, levels 01–49 and 77, `VALUE` literal / figurative | default init: spaces / zero |
+| ✅ | Level 88 (values, `THRU`, `WHEN SET TO FALSE`) on elementary items; `SET cond TO TRUE / FALSE` | |
+| ✅ | Figuratives ZERO, SPACE, QUOTE, HIGH-/LOW-VALUE (need `Dialect.encoding`), `ALL "lit"` | |
+| ✅ | Identification paragraphs, SOURCE-/OBJECT-COMPUTER, SPECIAL-NAMES `DECIMAL-POINT IS COMMA`, `CLASS`, `ALPHABET`, mnemonic names | other clauses are decisions |
 | ✅ | `MOVE` (alphanumeric pad/truncate; numeric decimal alignment, high-/low-order truncation, sign drop; integer numeric → alphanumeric digits; figurative ZERO/SPACE) | per receiver |
 | ✅ | `ADD`, `SUBTRACT`, `MULTIPLY`, `DIVIDE` (TO/FROM/BY/INTO/GIVING), `ROUNDED`, `[NOT] ON SIZE ERROR` | exact `BigDecimal`; divide by zero is a size error |
 | ✅ | `COMPUTE` with `+ - *`, unary minus, parentheses | |
 | ✅ | `DISPLAY` literals and items, `WITH NO ADVANCING` | GnuCOBOL format (`+005`, `012.34`) |
-| ✅ | `IF`/`ELSE`, relation (`= < > <= >= NOT`), sign (`POSITIVE`/`NEGATIVE`/`ZERO`), `AND`/`OR`/`NOT`, parentheses | numeric, alphanumeric (space padded), figurative |
+| ✅ | `IF`/`ELSE`, `EVALUATE`, relation (`= < > <= >= NOT`), sign, abbreviated (`A = 1 OR 2`) and combined (`A = (1 OR 2)`) conditions, condition-names, class conditions on PIC X (`NUMERIC`, `ALPHABETIC[-UPPER/-LOWER]`, user CLASS) | ordered alphanumeric comparisons need `Dialect.collating_sequence` (ASCII) |
+| ✅ | `NEXT SENTENCE`, `EXIT PARAGRAPH / SECTION / PERFORM [CYCLE]` | exits that leave a PERFORMed range are decisions |
+| ✅ | `DIVIDE … REMAINDER`, `MOVE / ADD / SUBTRACT CORRESPONDING` | |
+| ✅ | `DISPLAY UPON CONSOLE / SYSERR`, `EXHIBIT [NAMED]`, `ACCEPT` from stdin and `FROM DATE / DAY / DAY-OF-WEEK / TIME` | |
 | ✅ | Paragraphs, sections, fall-through, `PERFORM` proc / inline, `TIMES`, `UNTIL`, single `VARYING`, `WITH TEST AFTER` | |
 | ✅ | `STOP RUN`, `GOBACK`, `EXIT`, `EXIT PROGRAM`, `CONTINUE`, `RETURN-CODE` → exit status | |
 | ✅ | `COPY` (copybook search path; decision lines map back to the original file), static `CALL 'literal'` of a program in the project (no USING) | persistent WORKING-STORAGE, RETURN-CODE propagation |
 | ◐ | Group items | declared (children become fields); referencing the group itself is unsupported |
 | ◐ | `REPLACE` statements | parsed by ProLeap; line numbers then fall back to the preprocessed source (warning `approximate_line_numbers`) |
-| ❌ | `OCCURS`, `REDEFINES`, `RENAMES`, level 88, `USAGE` other than DISPLAY, edited / `P` / `A` / `N` pictures, `SIGN`, `JUSTIFIED` | `unsupported_construct` |
-| ❌ | `/` and `**` in COMPUTE (implementation-defined intermediate precision), `DIVIDE … REMAINDER`, `CORRESPONDING` | `unsupported_construct` |
-| ❌ | `EVALUATE`, `GO TO`, `PERFORM … THRU`, `STRING`, `INSPECT`, `ACCEPT`, files, `CALL … USING`, dynamic `CALL`, `NEXT SENTENCE`, `DISPLAY UPON` | `missing_mapping` or `unsupported_construct` |
+| ❌ | `OCCURS`, `REDEFINES`, `RENAMES`, level 88 on groups, `USAGE` other than DISPLAY, edited / `P` / `A` / `N` pictures, `SIGN`, `JUSTIFIED` | `unsupported_construct` |
+| ❌ | `/` and `**` in COMPUTE (implementation-defined intermediate precision), EBCDIC collating sequence | `unsupported_construct` |
+| ❌ | `GO TO`, `PERFORM … THRU`, `STRING`, `INSPECT`, files, `CALL … USING`, dynamic `CALL`, `DISPLAY UPON` printer / other devices, `ACCEPT FROM` environment, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
 | ❌ | Tables, reference modification, intrinsic functions, special registers other than RETURN-CODE, free format / other dialects | |
 
 Known divergence: GnuCOBOL 3.2 prints an empty value for a `COMPUTE` receiver when it is displayed
@@ -158,7 +164,7 @@ Documentation: [architecture](docs/architecture.md) · [mapping API](docs/mappin
 
 | Component | Version | License | Use |
 |---|---|---|---|
-| ProLeap COBOL Parser | 4.0.0 (commit `d1bfe75`) | MIT | COBOL parsing and semantic graph (built from the submodule) |
+| ProLeap COBOL Parser | 4.0.0 (commit `d1bfe75`) | MIT | COBOL parsing and semantic graph (built from the submodule; `proleap/build.gradle.kts` extends a copy of the grammar with `EXIT PARAGRAPH/SECTION/PERFORM [CYCLE]` and `WHEN SET TO FALSE`) |
 | ANTLR | 4.7.2 | BSD-3-Clause | ProLeap's parser runtime |
 | JavaParser | 3.28.2 | Apache-2.0 / LGPL-3.0 (dual) | Java AST construction and printing |
 | Jackson Databind | 2.22.4 | Apache-2.0 | worker JSON |

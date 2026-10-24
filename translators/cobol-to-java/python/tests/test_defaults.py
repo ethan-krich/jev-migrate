@@ -9,7 +9,8 @@ def test_defaults_cover_the_supported_subset():
     m = default_mappings()
     assert {r.handler for r in m} == set(BUILTIN_HANDLERS)
     assert m.sources() == sorted({"MOVE", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "COMPUTE", "DISPLAY", "IF",
-                                  "PERFORM", "STOP", "GOBACK", "EXIT", "CONTINUE", "CALL"})
+                                  "PERFORM", "STOP", "GOBACK", "EXIT", "CONTINUE", "CALL", "SET", "EVALUATE",
+                                  "ACCEPT", "EXHIBIT"})
     m.validate()
 
 

@@ -62,7 +62,8 @@ def run_cobol(case: Case) -> Execution:
         compiled = subprocess.run(args, capture_output=True, text=True)
         if compiled.returncode != 0:
             raise AssertionError(f"cobc failed for {case.name}:\n{compiled.stderr}")
-        run = subprocess.run([str(exe)], capture_output=True, timeout=60, cwd=tmp, input=stdin(case))
+        run = subprocess.run([str(exe)], capture_output=True, timeout=60, cwd=tmp, input=stdin(case),
+                             env={**os.environ, **eq.get("env", {})})
         return Execution(run.stdout, run.returncode)
 
 

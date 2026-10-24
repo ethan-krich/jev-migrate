@@ -9,7 +9,7 @@ public sealed interface Operand {
     /** @param text the literal as written in the source (DISPLAY shows it this way, modulo sign) */
     record NumericLiteral(BigDecimal value, String text) implements Operand {
         public boolean isInteger() {
-            return value.stripTrailingZeros().scale() <= 0 && !text.contains(".");
+            return value.stripTrailingZeros().scale() <= 0 && !text.contains(".") && !text.contains(",");
         }
 
         public boolean isSigned() {
@@ -29,8 +29,24 @@ public sealed interface Operand {
 
     record AlphanumericLiteral(String value) implements Operand {}
 
-    /** ZERO(S/ES) or SPACE(S): {@code fill} is the repeated character. */
-    record Figurative(char fill, String name) implements Operand {}
+    /**
+     * A figurative constant: {@code pattern} repeated to the receiving length. ZERO, SPACE,
+     * QUOTE, HIGH-VALUE and LOW-VALUE have one-character patterns; {@code ALL "lit"} has the
+     * literal's characters.
+     */
+    record Figurative(String pattern, String name) implements Operand {
+        public boolean isZero() {
+            return name.equals("ZERO");
+        }
+
+        public boolean isSingle() {
+            return pattern.length() == 1;
+        }
+
+        public char fill() {
+            return pattern.charAt(0);
+        }
+    }
 
     /** A compound arithmetic expression (COMPUTE, conditions). */
     record Arithmetic(io.proleap.cobol.asg.metamodel.valuestmt.ArithmeticValueStmt stmt) implements Operand {}
@@ -42,7 +58,7 @@ public sealed interface Operand {
         return switch (this) {
             case Field f -> f.item().isNumeric();
             case NumericLiteral n -> true;
-            case Figurative f -> f.fill() == '0';
+            case Figurative f -> f.isZero();
             case Arithmetic a -> true;
             case ReturnCode r -> true;
             case AlphanumericLiteral a -> false;
