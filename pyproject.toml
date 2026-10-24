@@ -1,0 +1,29 @@
+[project]
+name = "transpiler-workspace"
+version = "0.1.0"
+description = "Workspace root: hybrid deterministic/probabilistic code translation (phase 1: deterministic COBOL to Java)"
+requires-python = ">=3.11"
+dependencies = ["transpiler", "cobol-to-java"]
+
+[dependency-groups]
+dev = [
+    "jsonschema>=4.23,<5",
+    "pytest>=8.3,<9",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["python", "translators/cobol-to-java/python"]
+
+[tool.uv.sources]
+transpiler = { workspace = true }
+cobol-to-java = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests", "translators/cobol-to-java/python/tests", "tests"]
+markers = [
+    "integration: needs the built C++ core and Java worker",
+    "equivalence: compares GnuCOBOL and generated Java behaviour",
+]

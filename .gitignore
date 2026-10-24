@@ -1,0 +1,19 @@
+# Build outputs (C++, Docker builds, examples)
+/build/
+# Gradle
+.gradle/
+translators/cobol-to-java/java/build/
+translators/cobol-to-java/java/*/build/
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+# Generated translation output
+/generated/
+transpile-report.json
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store

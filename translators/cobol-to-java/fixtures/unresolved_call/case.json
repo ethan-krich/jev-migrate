@@ -1,0 +1,8 @@
+{
+  "description": "CALL of a program outside the project is an unresolved cross-file dependency; nothing is written",
+  "expect": {
+    "status": "incomplete",
+    "decisions": [{"reason": "missing_target_api", "operation": "CALL", "line": 5, "candidates": []}]
+  },
+  "layout": {"base_package": "fixtures.unresolved"}
+}

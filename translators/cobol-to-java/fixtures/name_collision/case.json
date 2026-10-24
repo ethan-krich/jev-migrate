@@ -1,0 +1,5 @@
+{
+  "description": "Two programs that map to the same Java class are rejected, not renamed",
+  "expect": {"status": "incomplete", "diagnostics": {"a/ONE.cbl": ["class_collision", "duplicate_program_id"], "a/TWO.cbl": ["class_collision", "duplicate_program_id"]}},
+  "layout": {"base_package": "fixtures.collision"}
+}

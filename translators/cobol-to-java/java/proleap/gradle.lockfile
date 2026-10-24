@@ -1,0 +1,12 @@
+# This is a Gradle generated file for dependency locking.
+# Manual edits can break the build and are not advised.
+# This file is expected to be part of source control.
+com.ibm.icu:icu4j:61.1=antlrTool
+org.abego.treelayout:org.abego.treelayout.core:1.0.3=antlrTool
+org.antlr:ST4:4.1=antlrTool
+org.antlr:antlr-runtime:3.5.2=antlrTool
+org.antlr:antlr4-runtime:4.7.2=antlrTool,compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+org.antlr:antlr4:4.7.2=antlrTool
+org.glassfish:javax.json:1.0.4=antlrTool
+org.slf4j:slf4j-api:2.0.9=compileClasspath,runtimeClasspath,testCompileClasspath,testRuntimeClasspath
+empty=annotationProcessor,testAnnotationProcessor

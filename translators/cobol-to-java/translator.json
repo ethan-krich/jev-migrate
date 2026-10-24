@@ -1,0 +1,8 @@
+{
+  "name": "cobol-to-java",
+  "source_language": "cobol",
+  "target_language": "java",
+  "protocol": "transpiler-worker/1",
+  "command": ["{translator_dir}/java/build/install/cobol-to-java-worker/bin/cobol-to-java-worker"],
+  "startup_timeout_seconds": 60
+}

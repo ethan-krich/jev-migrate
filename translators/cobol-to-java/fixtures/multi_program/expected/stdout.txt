@@ -1,0 +1,7 @@
+main ACME     01200.50
+util call 01 sees own record [        ]
+after util rc=+000000004
+util call 02 sees own record [        ]
+after util rc=+000000008
+MONTH-END   
+after report rc=+000000000

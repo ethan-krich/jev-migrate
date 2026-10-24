@@ -1,0 +1,16 @@
+[project]
+name = "cobol-to-java"
+version = "0.1.0"
+description = "COBOL-to-Java language pair: default mappings, folder layout and translator location"
+requires-python = ">=3.11"
+dependencies = ["transpiler"]
+
+[project.entry-points."transpiler.language_pairs"]
+cobol-to-java = "cobol_to_java:language_pair"
+
+[tool.uv.sources]
+transpiler = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"

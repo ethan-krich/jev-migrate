@@ -1,0 +1,6 @@
+{
+  "description": "MOVE padding/truncation, arithmetic with ROUNDED and SIZE ERROR, DISPLAY formats, IF, PERFORM",
+  "expect": {"status": "ok"},
+  "equivalence": {"programs": ["BASICS.cbl"], "main_class": "fixtures.basics.Basics"},
+  "layout": {"base_package": "fixtures.basics"}
+}

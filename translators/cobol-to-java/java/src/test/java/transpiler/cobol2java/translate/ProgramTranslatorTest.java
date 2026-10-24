@@ -1,0 +1,151 @@
+package transpiler.cobol2java.translate;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static transpiler.cobol2java.TestSupport.compile;
+import static transpiler.cobol2java.TestSupport.defaultRules;
+import static transpiler.cobol2java.TestSupport.program;
+import static transpiler.cobol2java.TestSupport.translate;
+
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import transpiler.cobol2java.decision.Decision;
+import transpiler.cobol2java.decision.Reason;
+
+class ProgramTranslatorTest {
+    @TempDir
+    Path dir;
+
+    private static String java(ProgramTranslator.Result r) {
+        ProgramTranslator.pruneImports(r.compilationUnit());
+        return r.compilationUnit().toString();
+    }
+
+    @Test
+    void generatesCompilableClassWithFieldsAndEntryPoints() throws Exception {
+        var r = translate(dir, program("01 WS-NAME PIC X(5) VALUE 'AB'.\n01 WS-N PIC S9(3)V99 VALUE -1.5.",
+                "MAIN-PARA.", "    MOVE WS-NAME TO WS-NAME.", "    STOP RUN."), defaultRules());
+        String src = java(r);
+        assertTrue(r.decisions().isEmpty(), () -> r.decisions().toString());
+        assertTrue(src.contains("private final AlphanumericField wsName = new AlphanumericField(5, \"AB\");"), src);
+        assertTrue(src.contains("private final NumericField wsN = new NumericField(5, 2, true, \"-1.5\");"), src);
+        assertTrue(src.contains("public static void main(String[] args)"), src);
+        assertTrue(src.contains("paraMainPara();"), src);
+        assertEquals("", compile("test.gen.T", src));
+    }
+
+    @Test
+    void moveUsesRuntimeSemanticsNotAssignment() throws Exception {
+        var r = translate(dir, program("01 A PIC X(3).\n01 N PIC S9(3) VALUE -5.\n01 M PIC 9(3).",
+                "MOVE 'ABCDEF' TO A.", "MOVE N TO A.", "MOVE SPACES TO A.", "MOVE N TO M.", "MOVE ZERO TO M."), defaultRules());
+        String src = java(r);
+        assertTrue(src.contains("a.set(\"ABCDEF\");"), src);
+        assertTrue(src.contains("a.set(n);"), src);
+        assertTrue(src.contains("a.fill(' ');"), src);
+        assertTrue(src.contains("m.move(n);"), src);
+        assertTrue(src.contains("m.move(BigDecimal.ZERO);"), src);
+        assertFalse(src.substring(src.indexOf("procedureDivision()")).contains(" = "), src);
+        assertEquals("", compile("test.gen.T", src));
+    }
+
+    @Test
+    void moveWithSeveralReceiversIsMappedPerReceiver() throws Exception {
+        var r = translate(dir, program("01 A PIC X(3).\n01 M PIC 9(3).", "MOVE ZERO TO A M."), defaultRules());
+        String src = java(r);
+        assertTrue(src.contains("a.fill('0');") && src.contains("m.move(BigDecimal.ZERO);"), src);
+        assertEquals(2, r.statements());
+    }
+
+    @Test
+    void arithmeticWithSizeErrorEvaluatesOperandsOnce() throws Exception {
+        var r = translate(dir, program("01 A PIC 99.\n01 B PIC 99.",
+                "ADD A TO A B ON SIZE ERROR DISPLAY 'E'", "    NOT ON SIZE ERROR DISPLAY 'K' END-ADD."), defaultRules());
+        String src = java(r);
+        assertTrue(src.contains("BigDecimal addend1 = a.get();"), src);
+        assertTrue(src.contains("sizeError1 |= a.store(a.get().add(addend1), false, true);"), src);
+        assertTrue(src.contains("if (sizeError1)"), src);
+        assertEquals("", compile("test.gen.T", src));
+    }
+
+    @Test
+    void divideTruncatesOrRoundsAtEachReceiverScale() throws Exception {
+        var r = translate(dir, program("01 Q PIC 9V9.\n01 P PIC 9V99.", "DIVIDE 10 BY 3 GIVING Q P ROUNDED."), defaultRules());
+        String src = java(r);
+        assertTrue(src.contains("Arithmetic.divide(dividend1, divisor1, 1, false), false, false"), src);
+        assertTrue(src.contains("Arithmetic.divide(dividend1, divisor1, 2, true), true, false"), src);
+    }
+
+    @Test
+    void conditionsGroupAndBeforeOr() throws Exception {
+        var r = translate(dir, program("01 A PIC 9.\n01 B PIC X.",
+                "IF A = 1 OR A = 2 AND B = 'X' DISPLAY 'Y' END-IF."), defaultRules());
+        String src = java(r);
+        assertTrue(src.contains("Compare.numeric(a.get(), BigDecimal.ONE) == 0 || Compare.numeric(a.get(), "
+                + "new BigDecimal(\"2\")) == 0 && Compare.alphanumeric(b.get(), \"X\") == 0"), src);
+    }
+
+    @Test
+    void unsupportedConstructsBecomeDecisionsNotApproximations() throws Exception {
+        var r = translate(dir, program("01 T.\n   05 I PIC 9 OCCURS 3.\n01 P PIC S9 COMP-3.\n01 N PIC 99.",
+                "COMPUTE N = N / 2.", "GO TO X.", "X.", "    STOP RUN."), defaultRules());
+        List<String> got = r.decisions().stream().map(d -> d.reason().wire() + ":" + d.operation()).toList();
+        assertEquals(List.of("unsupported_construct:DATA", "unsupported_construct:DATA", "unsupported_construct:COMPUTE",
+                "missing_mapping:GO_TO"), got);
+        assertTrue(java(r).contains("// UNRESOLVED GO_TO: GO TO X"));
+    }
+
+    @Test
+    void callResolvesOnlyWithinTheProject() throws Exception {
+        String src = program("", "CALL 'SUB'.", "STOP RUN.");
+        var found = translate(dir, src, defaultRules(), Map.of("SUB", "test.gen.Sub"));
+        assertTrue(java(found).contains("ProgramSupport.call(this, test.gen.Sub.instance());"));
+        var missing = translate(dir, src, defaultRules());
+        assertEquals(Reason.MISSING_TARGET_API, missing.decisions().getFirst().reason());
+    }
+
+    @Test
+    void removedMappingOffersValidatedCandidatesAndApplies() throws Exception {
+        var rules = defaultRules();
+        rules.removeIf(n -> n.get("source").asText().equals("DISPLAY"));
+        var r = translate(dir, program("01 A PIC 9 VALUE 1.", "IF A = 1 DISPLAY 'one' END-IF."), rules);
+        Decision d = r.decisions().getFirst();
+        d.register("decision-1", "java");
+        assertEquals(Reason.MISSING_MAPPING, d.reason());
+        assertEquals(List.of("builtin:display"), d.candidates().stream().map(c -> c.id()).toList());
+        assertTrue(d.candidates().getFirst().preview().contains("Display.line(\"one\")"));
+        assertTrue(d.fingerprint().startsWith("sha256:"));
+        assertTrue(d.resolve("builtin:display").isEmpty());
+        String src = java(r);
+        assertFalse(src.contains("UNRESOLVED"), src);
+        assertTrue(src.contains("Display.line(\"one\");"), src);
+        assertEquals("", compile("test.gen.T", src));
+    }
+
+    @Test
+    void applyingAStructuralCandidateSurfacesNestedDecisions() throws Exception {
+        var rules = defaultRules();
+        rules.removeIf(n -> n.get("source").asText().equals("IF") || n.get("source").asText().equals("DISPLAY"));
+        var r = translate(dir, program("01 A PIC 9.", "IF A = 1 DISPLAY 'one' END-IF."), rules);
+        assertEquals(1, r.decisions().size(), "the nested DISPLAY is only raised once IF is resolved");
+        List<Decision> nested = r.decisions().getFirst().resolve("builtin:if");
+        assertEquals(1, nested.size());
+        assertEquals("DISPLAY", nested.getFirst().operation());
+        nested.getFirst().resolve("builtin:display");
+        assertFalse(java(r).contains("UNRESOLVED"));
+    }
+
+    @Test
+    void namesAreDeterministic() {
+        assertEquals("PayCalc", Names.className("PAY-CALC"));
+        assertEquals("_1abc", Names.fieldName("1ABC"));
+        assertEquals("class_", Names.fieldName("CLASS"));
+        assertEquals("para100Main", Names.methodName("para", "100-MAIN"));
+        assertEquals("month_end", Names.packageSegment("Month-End"));
+        assertEquals("_2024", Names.packageSegment("2024"));
+        assertFalse(Names.isValidPackage("com.example.class"));
+    }
+}

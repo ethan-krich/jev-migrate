@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://transpiler.local/protocol/worker.schema.json",
+  "title": "Worker protocol message",
+  "description": "One line of the newline-delimited JSON protocol between the orchestrator (stdin of the worker) and a translator worker (stdout). Diagnostics go to stderr only.",
+  "oneOf": [{"$ref": "#/$defs/request"}, {"$ref": "#/$defs/response"}, {"$ref": "#/$defs/event"}],
+  "$defs": {
+    "protocol": {"const": "transpiler-worker/1"},
+    "request": {
+      "type": "object",
+      "required": ["protocol", "id", "method"],
+      "not": {"required": ["type"]},
+      "properties": {
+        "protocol": {"$ref": "#/$defs/protocol"},
+        "id": {"type": "string", "minLength": 1, "description": "Correlation id, echoed by the response"},
+        "method": {"enum": ["initialize", "translate", "resolve", "finalize", "shutdown"]},
+        "session": {"type": "string", "description": "Required for every method except shutdown"},
+        "params": {"type": "object"}
+      },
+      "allOf": [
+        {"if": {"properties": {"method": {"const": "initialize"}}}, "then": {"properties": {"params": {"$ref": "#/$defs/initialize_params"}}}},
+        {"if": {"properties": {"method": {"const": "translate"}}}, "then": {"properties": {"params": {"$ref": "#/$defs/translate_params"}}}},
+        {"if": {"properties": {"method": {"const": "resolve"}}}, "then": {"properties": {"params": {"$ref": "#/$defs/resolve_params"}}}}
+      ]
+    },
+    "initialize_params": {
+      "type": "object",
+      "required": ["source_root", "output_root", "target_language", "files", "mappings"],
+      "properties": {
+        "source_root": {"type": "string", "description": "Absolute"},
+        "output_root": {"type": "string", "description": "Absolute; nothing is written outside it"},
+        "target_language": {"type": "string"},
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "role"],
+            "properties": {"path": {"type": "string"}, "role": {"enum": ["program", "copybook"]}}
+          }
+        },
+        "mappings": {"$ref": "mapping.schema.json"},
+        "layout": {"type": "object", "description": "Translator-specific folder convention"},
+        "options": {"type": "object", "description": "Translator-specific options"},
+        "copybook_paths": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "translate_params": {
+      "type": "object",
+      "properties": {"files": {"type": "array", "items": {"type": "string"}, "description": "Relative paths; default all programs"}}
+    },
+    "resolve_params": {
+      "type": "object",
+      "required": ["resolutions"],
+      "properties": {"resolutions": {"type": "array", "items": {"$ref": "decision.schema.json#/$defs/resolution"}}}
+    },
+    "response": {
+      "type": "object",
+      "required": ["protocol", "type", "id", "status"],
+      "properties": {
+        "protocol": {"$ref": "#/$defs/protocol"},
+        "type": {"const": "response"},
+        "id": {"type": ["string", "null"], "description": "null only when the request could not be parsed"},
+        "session": {"type": "string"},
+        "status": {"enum": ["ok", "incomplete", "error"]},
+        "result": {"type": "object"},
+        "error": {
+          "type": "object",
+          "required": ["code", "message"],
+          "properties": {
+            "code": {"enum": ["malformed_json", "invalid_request", "unsupported_protocol", "unknown_method", "unknown_session", "session_exists", "invalid_state", "invalid_params", "invalid_mapping", "internal_error"]},
+            "message": {"type": "string"},
+            "details": {}
+          }
+        }
+      },
+      "if": {"properties": {"status": {"const": "error"}}},
+      "then": {"required": ["error"]},
+      "else": {"required": ["result"], "properties": {"id": {"type": "string"}}}
+    },
+    "event": {
+      "type": "object",
+      "required": ["protocol", "type", "event", "data"],
+      "properties": {
+        "protocol": {"$ref": "#/$defs/protocol"},
+        "type": {"const": "event"},
+        "event": {"enum": ["ready", "progress"]},
+        "session": {"type": "string"},
+        "in_reply_to": {"type": "string"},
+        "data": {"type": "object"}
+      }
+    }
+  }
+}
