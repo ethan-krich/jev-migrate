@@ -1,0 +1,5 @@
+smith  30
+jones  25
+adams  30
+baker  25
+clark  40

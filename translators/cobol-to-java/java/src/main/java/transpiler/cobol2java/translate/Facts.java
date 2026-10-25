@@ -60,7 +60,16 @@ public final class Facts {
             Map.entry("UNSTRING", Set.of("delimited", "pointer", "tallying", "overflow")),
             Map.entry("INSPECT", Set.of("form")),
             Map.entry("GO_TO", Set.of("depending")),
-            Map.entry("ALTER", Set.of()));
+            Map.entry("ALTER", Set.of()),
+            Map.entry("OPEN", Set.of()),
+            Map.entry("CLOSE", Set.of()),
+            Map.entry("READ", Set.of("at_end", "into")),
+            Map.entry("WRITE", Set.of("from", "advancing")),
+            Map.entry("REWRITE", Set.of("from")),
+            Map.entry("SORT", Set.of("duplicates", "input_procedure", "output_procedure")),
+            Map.entry("MERGE", Set.of("output_procedure")),
+            Map.entry("RELEASE", Set.of("from")),
+            Map.entry("RETURN", Set.of("into")));
 
     private Facts() {}
 
@@ -234,6 +243,27 @@ public final class Facts {
                     .name().toLowerCase(Locale.ROOT));
             case "GO_TO" -> f.put("depending", ((io.proleap.cobol.asg.metamodel.procedure.gotostmt.GoToStatement) s).getGoToType()
                     == io.proleap.cobol.asg.metamodel.procedure.gotostmt.GoToStatement.GoToType.DEPENDING_ON);
+            case "READ" -> {
+                var r = (io.proleap.cobol.asg.metamodel.procedure.read.ReadStatement) s;
+                f.put("at_end", r.getAtEnd() != null);
+                f.put("into", r.getInto() != null);
+            }
+            case "WRITE" -> {
+                var w = (io.proleap.cobol.asg.metamodel.procedure.write.WriteStatement) s;
+                f.put("from", w.getFrom() != null);
+                f.put("advancing", w.getAdvancingPhrase() != null);
+            }
+            case "REWRITE" -> f.put("from", ((io.proleap.cobol.asg.metamodel.procedure.rewrite.RewriteStatement) s).getFrom() != null);
+            case "SORT" -> {
+                var so = (io.proleap.cobol.asg.metamodel.procedure.sort.SortStatement) s;
+                f.put("duplicates", so.getDuplicates() != null && so.getDuplicates().isDuplicatesInOrder());
+                f.put("input_procedure", so.getInputProcedure() != null);
+                f.put("output_procedure", so.getOutputProcedure() != null);
+            }
+            case "MERGE" -> f.put("output_procedure",
+                    ((io.proleap.cobol.asg.metamodel.procedure.merge.MergeStatement) s).getOutputProcedurePhrase() != null);
+            case "RELEASE" -> f.put("from", ((io.proleap.cobol.asg.metamodel.procedure.release.ReleaseStatement) s).getContentCall() != null);
+            case "RETURN" -> f.put("into", ((io.proleap.cobol.asg.metamodel.procedure.returnstmt.ReturnStatement) s).getInto() != null);
             case "SEARCH" -> {
                 var search = (io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement) s;
                 f.put("all", ((io.proleap.cobol.CobolParser.SearchStatementContext) s.getCtx()).ALL() != null);

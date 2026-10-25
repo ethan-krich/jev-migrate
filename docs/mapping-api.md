@@ -56,6 +56,13 @@ Only plain JSON crosses process boundaries: no callables, AST objects or Python 
 | `if` | IF | conditions incl. AND/OR precedence; `NEXT SENTENCE` branches |
 | `evaluate` | EVALUATE | if/else chain; `ALSO`, `THRU`, `ANY`, `NOT`, `TRUE`/`FALSE`, condition subjects, `OTHER` |
 | `perform` | PERFORM | procedure/inline, `THRU`, TIMES, UNTIL, VARYING [`AFTER`], TEST AFTER; `EXIT PERFORM [CYCLE]` inside inline bodies; overlapping or recursive ranges are `unsupported_construct` |
+| `open_file`, `close_file` | OPEN, CLOSE | SEQUENTIAL and LINE SEQUENTIAL files (`INPUT`, `OUTPUT`, `I-O` for SEQUENTIAL, `EXTEND`); paths from `Dialect.file_assignments` |
+| `read_file` | READ | sequential `READ [INTO] [AT END] [NOT AT END]`; GnuCOBOL FILE STATUS values (00, 06 long line split, 10, 35, 41, 42, 46, 47, …); an unhandled error status ends the run unit (status 1) unless the file has FILE STATUS |
+| `write_file`, `rewrite_file` | WRITE, REWRITE | `[FROM]`; LINE SEQUENTIAL strips trailing spaces and refuses control characters (status 71); `ADVANCING` has no default rule |
+| `sort` | SORT | `WITH DUPLICATES IN ORDER` required (otherwise `unsupported_construct` offering `sort_stable`); `USING` / `INPUT PROCEDURE`, `GIVING` / `OUTPUT PROCEDURE` |
+| `sort_stable` | SORT | candidate only: the same stable sort without `DUPLICATES IN ORDER` |
+| `merge` | MERGE | `USING` files in key order (ties in file order), `GIVING` / `OUTPUT PROCEDURE` |
+| `release`, `return_record` | RELEASE, RETURN | `RELEASE rec [FROM]`, `RETURN file [INTO] AT END` |
 | `go_to` | GO_TO | `GO TO p` and `GO TO p1 p2 … DEPENDING ON n` through the procedure dispatcher; a GO TO out of a PERFORMed range is `unsupported_construct` |
 | `alter` | ALTER | always an `unsupported_construct` decision offering `alter_goto` |
 | `alter_goto` | ALTER | candidate only: assigns the altered paragraph's GO TO target |
@@ -100,7 +107,26 @@ to `cobol_to_java.BUILTIN_HANDLERS` / `FACTS`.
 | UNSTRING | `delimited`, `pointer`, `tallying`, `overflow` |
 | INSPECT | `form` (`tallying`, `replacing`, `tallying_replacing`, `converting`) |
 | GO_TO | `depending` |
+| OPEN / CLOSE | (none) |
+| READ | `at_end`, `into` |
+| WRITE | `from`, `advancing` |
+| REWRITE | `from` |
+| SORT | `duplicates`, `input_procedure`, `output_procedure` |
+| MERGE | `output_procedure` |
+| RELEASE | `from` |
+| RETURN | `into` |
 | ALTER | (none) |
+
+## Intrinsic functions
+
+Function results are operands, not handlers. Exact functions are translated: `UPPER-CASE`,
+`LOWER-CASE`, `REVERSE`, `TRIM`, `LENGTH`, `MOD`, `REM`, `INTEGER`, `INTEGER-PART`, `ABS`,
+`MAX`, `MIN`, `SUM`, `ORD-MAX`, `ORD-MIN`, `NUMVAL`, `NUMVAL-C`, `ORD`, `CHAR`, `CURRENT-DATE`
+(through `Clock`), `INTEGER-OF-DATE`, `INTEGER-OF-DAY`, `DATE-OF-INTEGER`, `DAY-OF-INTEGER`.
+DISPLAY reproduces GnuCOBOL's form for text and integer results; DISPLAY of `ABS`, `MAX`, `MIN`,
+`SUM`, `NUMVAL[-C]` and non-integer `REM` is refused (MOVE them first). Floating-point functions
+(`SQRT`, `LOG`, trigonometry, `RANDOM`, statistics, `PRESENT-VALUE`, `ANNUITY`) are
+`unsupported_construct`.
 
 ## Procedure dispatcher
 
@@ -136,7 +162,7 @@ A key set both by `dialect=` and `options=` raises `TranspilerError`.
 | `sync_alignment` | `None` | whether SYNCHRONIZED inserts slack bytes before binary items (`False` only; `True` is a decision) |
 | `debugging_lines` | `False` | compile `D` lines (otherwise comments, as GnuCOBOL; `WITH DEBUGGING MODE` also enables them) |
 | `source_format` | `fixed` | `fixed`, `variable`, `tandem` |
-| `file_assignments` | `{}` | `ASSIGN TO` name → run-time path |
+| `file_assignments` | `{}` | `ASSIGN TO` name (literal text or word) → run-time path; an unmapped name is a `dialect:file_assignments` decision |
 | `when_compiled` | `None` | value of WHEN-COMPILED, `YYYY-MM-DDTHH:MM:SS` |
 
 A program that needs an unset setting gets exactly one `missing_mapping` decision whose

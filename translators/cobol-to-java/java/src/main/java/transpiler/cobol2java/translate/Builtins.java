@@ -121,6 +121,19 @@ public final class Builtins implements MappingRegistry.Catalog {
                 "ALTER is a decision: it changes a GO TO at run time; the candidate below is offered for review", Builtins::alter));
         register(Handler.of("alter_goto", "ALTER",
                 "ALTER as an assignment of the altered paragraph's GO TO target (candidate only)", Builtins::alterGoTo));
+        register(Handler.of("open_file", "OPEN", "OPEN INPUT / OUTPUT / I-O / EXTEND of SEQUENTIAL and LINE SEQUENTIAL files", Builtins::openFile));
+        register(Handler.of("close_file", "CLOSE", "CLOSE files", Builtins::closeFile));
+        register(Handler.of("read_file", "READ", "sequential READ [INTO] [AT END] [NOT AT END]", Builtins::readFile));
+        register(Handler.of("write_file", "WRITE", "WRITE record [FROM] (no ADVANCING)", Builtins::writeFile));
+        register(Handler.of("rewrite_file", "REWRITE", "REWRITE record [FROM] of a SEQUENTIAL file opened I-O", Builtins::rewriteFile));
+        register(Handler.of("sort", "SORT",
+                "SORT ... WITH DUPLICATES IN ORDER: stable sort, USING / INPUT PROCEDURE, GIVING / OUTPUT PROCEDURE", Builtins::sort));
+        register(Handler.of("sort_stable", "SORT",
+                "SORT without DUPLICATES IN ORDER as a stable sort (candidate only: equal keys may come out in another order)",
+                Builtins::sortStable));
+        register(Handler.of("merge", "MERGE", "MERGE ... USING files in key order, GIVING / OUTPUT PROCEDURE", Builtins::merge));
+        register(Handler.of("release", "RELEASE", "RELEASE sort record [FROM]", Builtins::release));
+        register(Handler.of("return_record", "RETURN", "RETURN sort file [INTO] AT END", Builtins::returnRecord));
         register(Handler.of("move_group", "MOVE",
                 "MOVE into a group item: the sending bytes as alphanumeric data, space-padded or cut", Builtins::moveToGroup));
         register(Handler.of("initialize", "INITIALIZE",
@@ -296,6 +309,7 @@ public final class Builtins implements MappingRegistry.Catalog {
             case Operand.Field f when f.numeric() ->
                 throw HandlerException.unsupported("MOVE of non-integer numeric " + f.item().cobolName() + " to alphanumeric is invalid COBOL");
             case Operand.AlphanumericLiteral a -> str(a.value());
+            case Operand.Computed v when !v.numeric() -> v.value();
             case Operand.NumericLiteral n when n.isInteger() -> str(n.unsignedText());
             case Operand.NumericLiteral n -> throw HandlerException.unsupported("MOVE of non-integer literal to alphanumeric is invalid COBOL");
             case Operand.Figurative f -> null;
@@ -623,6 +637,10 @@ public final class Builtins implements MappingRegistry.Catalog {
             case Operand.AlphanumericLiteral a -> str(a.value());
             case Operand.NumericLiteral n -> str(n.displayText());
             case Operand.Figurative f when !f.name().equals("ALL") -> str(f.pattern());
+            case Operand.Computed v when "text".equals(v.display()) -> v.value();
+            case Operand.Computed v when "integer".equals(v.display()) -> staticCall("Functions", "integerDisplay", v.value());
+            case Operand.Computed v when v.display() != null && v.display().startsWith("digits") ->
+                    staticCall("Functions", "digits", v.value(), integer(Integer.parseInt(v.display().substring(6))));
             default -> throw HandlerException.unsupported("DISPLAY of " + o.category() + " is not supported");
         };
     }
@@ -1488,6 +1506,7 @@ public final class Builtins implements MappingRegistry.Catalog {
             case Operand.Field f when f.integer() && !f.item().numeric().signed() && f.item().usage() == DataItem.Usage.DISPLAY ->
                     call(c.field(o), "bytes");
             case Operand.AlphanumericLiteral a -> str(a.value());
+            case Operand.Computed v when !v.numeric() -> v.value();
             case Operand.Figurative f when f.isSingle() -> str(f.pattern());
             case Operand.Figurative f -> str(f.pattern());
             default -> throw HandlerException.unsupported(o.category() + " as character data is not supported");
@@ -1805,5 +1824,313 @@ public final class Builtins implements MappingRegistry.Catalog {
                     AssignExpr.Operator.ASSIGN)));
         }
         return out;
+    }
+
+    // ------------------------------------------------------------- files
+
+    private static List<Statement> openFile(OpUnit u, TranslationContext c) throws HandlerException {
+        var o = (io.proleap.cobol.asg.metamodel.procedure.open.OpenStatement) u.statement();
+        // Phrases run in source order, as GnuCOBOL opens them.
+        List<Object[]> opens = new ArrayList<>();
+        for (var p : o.getInputPhrases()) {
+            for (var input : p.getInputs()) {
+                if (input.getInputType() != null) {
+                    throw HandlerException.unsupported("OPEN INPUT ... " + input.getInputType() + " is not supported");
+                }
+                opens.add(new Object[] {input.getCtx().getStart().getTokenIndex(), input.getFileCall(), "INPUT"});
+            }
+        }
+        for (var p : o.getOutputPhrases()) {
+            for (var output : p.getOutputs()) {
+                if (output.isNoRewind()) {
+                    throw HandlerException.unsupported("OPEN OUTPUT ... NO REWIND is not supported");
+                }
+                opens.add(new Object[] {output.getCtx().getStart().getTokenIndex(), output.getFileCall(), "OUTPUT"});
+            }
+        }
+        for (var p : o.getInputOutputPhrases()) {
+            for (Call f : p.getFileCalls()) {
+                opens.add(new Object[] {p.getCtx().getStart().getTokenIndex(), f, "IO"});
+            }
+        }
+        for (var p : o.getExtendPhrases()) {
+            for (Call f : p.getFileCalls()) {
+                opens.add(new Object[] {p.getCtx().getStart().getTokenIndex(), f, "EXTEND"});
+            }
+        }
+        opens.sort(java.util.Comparator.comparingInt(a -> (Integer) a[0]));
+        List<Statement> out = new ArrayList<>();
+        for (Object[] open : opens) {
+            var file = c.file((Call) open[1]);
+            if (file.sort()) {
+                throw HandlerException.unsupported("OPEN of a sort file");
+            }
+            if (file.lineSequential() && open[2].equals("IO")) {
+                throw HandlerException.unsupported("OPEN I-O of a LINE SEQUENTIAL file is not supported");
+            }
+            out.add(stmt(call(name(file.javaName()), "open", new com.github.javaparser.ast.expr.FieldAccessExpr(name("CobolFile"), (String) open[2]))));
+        }
+        return out;
+    }
+
+    private static List<Statement> closeFile(OpUnit u, TranslationContext c) throws HandlerException {
+        var close = (io.proleap.cobol.asg.metamodel.procedure.close.CloseStatement) u.statement();
+        List<Statement> out = new ArrayList<>();
+        for (var f : close.getCloseFiles()) {
+            if (f.getCloseFileType() != null) {
+                throw HandlerException.unsupported("CLOSE ... " + f.getCloseFileType() + " is not supported");
+            }
+            out.add(stmt(call(name(c.file(f.getFileCall()).javaName()), "close")));
+        }
+        return out;
+    }
+
+    private static List<Statement> readFile(OpUnit u, TranslationContext c) throws HandlerException {
+        var r = (io.proleap.cobol.asg.metamodel.procedure.read.ReadStatement) u.statement();
+        if (r.getKey() != null || r.getInvalidKeyPhrase() != null || r.getNotInvalidKeyPhrase() != null || r.getWith() != null) {
+            throw HandlerException.unsupported("READ with KEY, INVALID KEY or locking is not supported");
+        }
+        var file = c.file(r.getFileCall());
+        if (file.sort()) {
+            throw HandlerException.unsupported("READ of a sort file (use RETURN)");
+        }
+        boolean atEndPhrase = r.getAtEnd() != null;
+        Expression read = call(name(file.javaName()), "read", bool(atEndPhrase));
+        BlockStmt success = r.getNotAtEndPhrase() == null ? new BlockStmt() : c.nested(r.getNotAtEndPhrase());
+        if (r.getInto() != null) {
+            Operand into = c.operand(r.getInto().getIntoCall());
+            Statement move = storeAlphanumericOrGroup(into, call(name(file.javaName()), "data"), c);
+            // INTO moves only after a successful READ.
+            success.getStatements().addFirst(new IfStmt(call(name(file.javaName()), "succeeded"), new BlockStmt(NodeList.nodeList(move)), null));
+        }
+        if (!atEndPhrase && success.isEmpty()) {
+            return List.of(stmt(read));
+        }
+        BlockStmt atEnd = atEndPhrase ? c.nested(r.getAtEnd()) : new BlockStmt();
+        return List.of(success.isEmpty() ? new IfStmt(read, atEnd, null) : new IfStmt(read, atEnd, success));
+    }
+
+    /** MOVE of alphanumeric data into an alphanumeric item or a group (READ INTO). */
+    private static Statement storeAlphanumericOrGroup(Operand target, Expression value, TranslationContext c) throws HandlerException {
+        if (!(target instanceof Operand.Field t) || !t.alphanumeric() || t.edited()) {
+            throw HandlerException.unsupported("READ ... INTO " + target.category() + " is not supported");
+        }
+        return stmt(call(t.item().isGroup() && t.refmod() == null ? c.receiving(target) : c.field(target), "set", value));
+    }
+
+    /** The FD record a WRITE / REWRITE names and its file. */
+    private static Operand.Field fileRecord(Call recordCall, TranslationContext c) throws HandlerException {
+        Operand o = c.operand(recordCall);
+        if (!(o instanceof Operand.Field f) || f.refmod() != null || !f.subscripts().isEmpty() || f.item().parent() != null) {
+            throw HandlerException.unsupported(recordCall.getName() + " is not an FD record");
+        }
+        return f;
+    }
+
+    private static Expression recordView(Operand.Field record, TranslationContext c) throws HandlerException {
+        Expression f = c.field(record);
+        return record.item().isNumeric() || record.item().isEdited() ? call(f, "view") : f;
+    }
+
+    private static List<Statement> writeFile(OpUnit u, TranslationContext c) throws HandlerException {
+        var w = (io.proleap.cobol.asg.metamodel.procedure.write.WriteStatement) u.statement();
+        if (w.getAdvancingPhrase() != null || w.getAtEndOfPagePhrase() != null || w.getNotAtEndOfPagePhrase() != null
+                || w.getInvalidKeyPhrase() != null || w.getNotInvalidKeyPhrase() != null) {
+            throw HandlerException.unsupported("WRITE with ADVANCING, END-OF-PAGE or INVALID KEY is not supported");
+        }
+        Operand.Field record = fileRecord(w.getRecordCall(), c);
+        var file = c.fileOfRecord(record.item());
+        if (file.sort()) {
+            throw HandlerException.unsupported("WRITE of a sort record (use RELEASE)");
+        }
+        List<Statement> out = new ArrayList<>();
+        if (w.getFrom() != null) {
+            out.add(fromMove(record, c.operand(w.getFrom().getFromValueStmt()), c));
+        }
+        out.add(stmt(call(name(file.javaName()), "write", recordView(record, c))));
+        return out;
+    }
+
+    private static List<Statement> rewriteFile(OpUnit u, TranslationContext c) throws HandlerException {
+        var w = (io.proleap.cobol.asg.metamodel.procedure.rewrite.RewriteStatement) u.statement();
+        if (w.getInvalidKeyPhrase() != null || w.getNotInvalidKeyPhrase() != null) {
+            throw HandlerException.unsupported("REWRITE with INVALID KEY is not supported");
+        }
+        Operand.Field record = fileRecord(w.getRecordCall(), c);
+        var file = c.fileOfRecord(record.item());
+        if (file.lineSequential()) {
+            throw HandlerException.unsupported("REWRITE of a LINE SEQUENTIAL file is not supported");
+        }
+        List<Statement> out = new ArrayList<>();
+        if (w.getFrom() != null) {
+            out.add(fromMove(record, c.operand(w.getFrom().getFromCall()), c));
+        }
+        out.add(stmt(call(name(file.javaName()), "rewrite", recordView(record, c))));
+        return out;
+    }
+
+    /** WRITE / REWRITE ... FROM: a MOVE into the record first. */
+    private static Statement fromMove(Operand.Field record, Operand from, TranslationContext c) throws HandlerException {
+        if (record.item().isGroup()) {
+            Expression value = switch (from) {
+                case Operand.Field f when f.alphanumeric() -> call(c.field(from), "get");
+                case Operand.AlphanumericLiteral a -> str(a.value());
+                default -> throw HandlerException.unsupported("WRITE ... FROM " + from.category() + " into a group record is not supported");
+            };
+            return stmt(call(c.receiving(record), "set", value));
+        }
+        if (record.item().isNumeric()) {
+            return storeNumeric(c.field(record), from, c);
+        }
+        if (record.item().isEdited()) {
+            return storeEdited(c.field(record), record.item(), from, c);
+        }
+        return storeAlphanumeric(c.field(record), from, c);
+    }
+
+    // ------------------------------------------------------------- SORT / MERGE
+
+    /** PERFORM of an INPUT / OUTPUT PROCEDURE. */
+    private static Statement performProcedure(Call from, Call thru, TranslationContext c) throws HandlerException {
+        if (c.dispatcher()) {
+            return c.performRange(from, thru);
+        }
+        if (thru != null && !thru.getName().equalsIgnoreCase(from.getName())) {
+            throw HandlerException.unsupported("INPUT / OUTPUT PROCEDURE ... THRU outside the dispatcher form");
+        }
+        return stmt(thisCall(c.procedureMethod(from)));
+    }
+
+    private static List<Statement> sortKeys(Expression sortFile, List<?> onKeys, TranslationContext c) throws HandlerException {
+        List<Statement> out = new ArrayList<>();
+        out.add(stmt(call(sortFile, "begin")));
+        for (Object k : onKeys) {
+            boolean ascending;
+            List<Call> calls;
+            if (k instanceof io.proleap.cobol.asg.metamodel.procedure.sort.OnKey sk) {
+                ascending = sk.getOnKeyType() == io.proleap.cobol.asg.metamodel.procedure.sort.OnKey.OnKeyType.ASCENDING;
+                calls = sk.getKeyCalls();
+            } else {
+                var mk = (io.proleap.cobol.asg.metamodel.procedure.merge.OnKey) k;
+                ascending = mk.getOnKeyType() == io.proleap.cobol.asg.metamodel.procedure.merge.OnKey.OnKeyType.ASCENDING;
+                calls = mk.getKeyCalls();
+            }
+            for (Call key : calls) {
+                out.add(stmt(call(sortFile.clone(), "key", c.sortKey(c.dataItem(key), key.getCtx()), bool(ascending))));
+            }
+        }
+        return out;
+    }
+
+    private static Expression sortFile(Call call, TranslationContext c) throws HandlerException {
+        var f = c.file(call);
+        if (!f.sort()) {
+            throw HandlerException.unsupported(call.getName() + " is not an SD file");
+        }
+        return name(f.javaName());
+    }
+
+    private static Expression plainFile(Call call, TranslationContext c) throws HandlerException {
+        var f = c.file(call);
+        if (f.sort()) {
+            throw HandlerException.unsupported(call.getName() + " is a sort file");
+        }
+        return name(f.javaName());
+    }
+
+    private static List<Statement> sort(OpUnit u, TranslationContext c) throws HandlerException {
+        var s = (io.proleap.cobol.asg.metamodel.procedure.sort.SortStatement) u.statement();
+        if (s.getDuplicates() == null || !s.getDuplicates().isDuplicatesInOrder()) {
+            throw HandlerException.unprovable("SORT without WITH DUPLICATES IN ORDER: records with equal keys may come out "
+                    + "in any order, and their keys cannot be proven unique");
+        }
+        return sortStable(u, c);
+    }
+
+    private static List<Statement> sortStable(OpUnit u, TranslationContext c) throws HandlerException {
+        var s = (io.proleap.cobol.asg.metamodel.procedure.sort.SortStatement) u.statement();
+        if (s.getCollatingSequence() != null) {
+            throw HandlerException.unsupported("SORT ... COLLATING SEQUENCE is not supported");
+        }
+        Expression sf = sortFile(s.getFileCall(), c);
+        List<Statement> out = new ArrayList<>(sortKeys(sf, s.getOnKeys(), c));
+        if (s.getInputProcedure() != null) {
+            var p = s.getInputProcedure();
+            out.add(performProcedure(p.getProcedureCall(), p.getInputThrough() == null ? null : p.getInputThrough().getProcedureCall(), c));
+        } else {
+            for (var using : s.getUsingPhrases()) {
+                for (Call f : using.getFileCalls()) {
+                    out.add(stmt(call(sf.clone(), "using", plainFile(f, c))));
+                }
+            }
+        }
+        out.add(stmt(call(sf.clone(), "sort")));
+        output(sf, s.getOutputProcedure() == null ? null : s.getOutputProcedure().getProcedureCall(),
+                s.getOutputProcedure() == null || s.getOutputProcedure().getOutputThrough() == null ? null
+                        : s.getOutputProcedure().getOutputThrough().getProcedureCall(),
+                s.getGivingPhrases().stream().flatMap(g -> g.getGivings().stream()).map(g -> g.getFileCall()).toList(), out, c);
+        return out;
+    }
+
+    private static void output(Expression sf, Call procedure, Call thru, List<Call> givings, List<Statement> out, TranslationContext c)
+            throws HandlerException {
+        if (procedure != null) {
+            out.add(performProcedure(procedure, thru, c));
+            return;
+        }
+        if (givings.size() != 1) {
+            throw HandlerException.unsupported("GIVING more than one file is not supported");
+        }
+        out.add(stmt(call(sf.clone(), "giving", plainFile(givings.getFirst(), c))));
+    }
+
+    private static List<Statement> merge(OpUnit u, TranslationContext c) throws HandlerException {
+        var m = (io.proleap.cobol.asg.metamodel.procedure.merge.MergeStatement) u.statement();
+        if (m.getCollatingSequencePhrase() != null) {
+            throw HandlerException.unsupported("MERGE ... COLLATING SEQUENCE is not supported");
+        }
+        Expression sf = sortFile(m.getFileCall(), c);
+        List<Statement> out = new ArrayList<>(sortKeys(sf, m.getOnKeys(), c));
+        NodeList<Expression> inputs = new NodeList<>();
+        for (var using : m.getUsingPhrases()) {
+            for (Call f : using.getFileCalls()) {
+                inputs.add(plainFile(f, c));
+            }
+        }
+        out.add(stmt(new com.github.javaparser.ast.expr.MethodCallExpr(sf.clone(), "merge", inputs)));
+        var op = m.getOutputProcedurePhrase();
+        output(sf, op == null ? null : op.getProcedureCall(), op == null || op.getOutputThrough() == null ? null : op.getOutputThrough().getProcedureCall(),
+                m.getGivingPhrases().stream().flatMap(g -> g.getGivings().stream()).map(g -> g.getFileCall()).toList(), out, c);
+        return out;
+    }
+
+    private static List<Statement> release(OpUnit u, TranslationContext c) throws HandlerException {
+        var r = (io.proleap.cobol.asg.metamodel.procedure.release.ReleaseStatement) u.statement();
+        Operand.Field record = fileRecord(r.getRecordCall(), c);
+        var file = c.fileOfRecord(record.item());
+        if (!file.sort()) {
+            throw HandlerException.unsupported("RELEASE of a record that is not a sort record");
+        }
+        List<Statement> out = new ArrayList<>();
+        if (r.getContentCall() != null) {
+            out.add(fromMove(record, c.operand(r.getContentCall()), c));
+        }
+        out.add(stmt(call(name(file.javaName()), "release")));
+        return out;
+    }
+
+    private static List<Statement> returnRecord(OpUnit u, TranslationContext c) throws HandlerException {
+        var r = (io.proleap.cobol.asg.metamodel.procedure.returnstmt.ReturnStatement) u.statement();
+        Expression sf = sortFile(r.getFileCall(), c);
+        BlockStmt atEnd = r.getAtEndPhrase() == null ? new BlockStmt() : c.nested(r.getAtEndPhrase());
+        BlockStmt success = r.getNotAtEndPhrase() == null ? new BlockStmt() : c.nested(r.getNotAtEndPhrase());
+        if (r.getInto() != null) {
+            var f = c.file(r.getFileCall());
+            Operand.Field record = new Operand.Field(f.records().getFirst());
+            success.getStatements().addFirst(storeAlphanumericOrGroup(c.operand(r.getInto().getIntoCall()),
+                    call(record.item().isGroup() ? c.field(record) : call(c.field(record), "view"), "get"), c));
+        }
+        Expression ret = call(sf, "returnRecord", bool(r.getAtEndPhrase() != null));
+        return List.of(success.isEmpty() ? new IfStmt(ret, atEnd, null) : new IfStmt(ret, atEnd, success));
     }
 }

@@ -1,0 +1,8 @@
+{
+  "description": "LINE SEQUENTIAL and SEQUENTIAL files: OPEN INPUT / OUTPUT / EXTEND / I-O, READ [INTO] AT END, WRITE, REWRITE, CLOSE, FILE STATUS values, long lines split with status 06, and an unhandled OPEN error ending the run unit",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native",
+              "file_assignments": {"in.txt": "in.txt", "out.txt": "out.txt", "bin.dat": "bin.dat", "nope.txt": "nope.txt"}},
+  "equivalence": {"programs": ["FILES.cbl"], "main_class": "fixtures.files.Files"},
+  "layout": {"base_package": "fixtures.files"}
+}

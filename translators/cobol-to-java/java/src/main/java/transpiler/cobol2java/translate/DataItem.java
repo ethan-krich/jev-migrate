@@ -43,6 +43,7 @@ public final class DataItem {
     private boolean blankWhenZero;
     private boolean initialIsNumber;
     private boolean linkage;
+    private boolean fileRecord;
     private int occurs;
     private int occursMin;
     private DataItem dependingOn;
@@ -292,6 +293,15 @@ public final class DataItem {
     /** Whether this item is in the LINKAGE SECTION (its storage is the caller's). */
     public boolean linkage() {
         return record().linkage;
+    }
+
+    /** Whether this item is in a FILE SECTION record (its bytes are the file's record area, not initialised). */
+    public boolean fileRecord() {
+        return record().fileRecord;
+    }
+
+    void markFileRecord() {
+        this.fileRecord = true;
     }
 
     void markLinkage() {

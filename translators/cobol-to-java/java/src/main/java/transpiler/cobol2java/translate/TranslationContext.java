@@ -58,6 +58,18 @@ public interface TranslationContext {
     /** The field holding the GO TO target of a paragraph named by ALTER. */
     String alteredField(Call paragraph) throws HandlerException;
 
+    /** A file of the program: its Java field, whether it is LINE SEQUENTIAL, and its records. */
+    record FileRef(String javaName, boolean lineSequential, boolean sort, java.util.List<DataItem> records) {}
+
+    /** A SORT / MERGE key: a lambda reading it from a record's bytes ({@code s -> view(s).get()}). */
+    Expression sortKey(DataItem key, ParserRuleContext where) throws HandlerException;
+
+    /** The file a statement names (OPEN, CLOSE, READ). */
+    FileRef file(Call fileCall) throws HandlerException;
+
+    /** The file whose record a WRITE / REWRITE names. */
+    FileRef fileOfRecord(DataItem record) throws HandlerException;
+
     /** The method implementing a paragraph or section named by PERFORM. */
     String procedureMethod(Call call) throws HandlerException;
 

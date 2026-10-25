@@ -92,11 +92,11 @@ class ProgramTranslatorTest {
     @Test
     void unsupportedConstructsBecomeDecisionsNotApproximations() throws Exception {
         var r = translate(dir, program("01 F COMP-1.\n01 P POINTER.\n01 N PIC 99.",
-                "COMPUTE N = N / 2.", "SORT F ON ASCENDING KEY N USING F GIVING F.", "    STOP RUN."), defaultRules());
+                "COMPUTE N = N / 2.", "CANCEL 'X'.", "    STOP RUN."), defaultRules());
         List<String> got = r.decisions().stream().map(d -> d.reason().wire() + ":" + d.operation()).toList();
         assertEquals(List.of("unsupported_construct:DATA", "unsupported_construct:DATA", "unsupported_construct:COMPUTE",
-                "missing_mapping:SORT"), got);
-        assertTrue(java(r).contains("// UNRESOLVED SORT: SORT F"));
+                "missing_mapping:CANCEL"), got);
+        assertTrue(java(r).contains("// UNRESOLVED CANCEL: CANCEL 'X'"));
     }
 
     @Test

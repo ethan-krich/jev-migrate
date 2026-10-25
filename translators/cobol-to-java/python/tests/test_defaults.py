@@ -13,7 +13,8 @@ def test_defaults_cover_the_supported_subset():
     assert m.sources() == sorted({"MOVE", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "COMPUTE", "DISPLAY", "IF",
                                   "PERFORM", "STOP", "GOBACK", "EXIT", "CONTINUE", "CALL", "SET", "EVALUATE",
                                   "ACCEPT", "EXHIBIT", "INITIALIZE", "SEARCH", "STRING", "UNSTRING",
-                                  "INSPECT", "GO_TO", "ALTER"})
+                                  "INSPECT", "GO_TO", "ALTER", "OPEN", "CLOSE", "READ", "WRITE",
+                                  "REWRITE", "SORT", "MERGE", "RELEASE", "RETURN"})
     m.validate()
 
 

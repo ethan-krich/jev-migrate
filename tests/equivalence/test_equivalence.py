@@ -38,7 +38,7 @@ def test_java_matches_cobol(case: Case, tmp_path: Path, built) -> None:
         copybook_paths=[case.path / p for p in case.spec.get("copybook_paths", [])],
     )
     assert result.ok, result.summary()
-    java = run_java(tmp_path, case.equivalence["main_class"], stdin(case), case.equivalence.get("env"))
+    java = run_java(tmp_path, case.equivalence["main_class"], stdin(case), case.equivalence.get("env"), case)
 
     version = cobc_version()
     if version is not None:

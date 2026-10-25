@@ -1,0 +1,8 @@
+{
+  "description": "Exact intrinsic functions: UPPER-CASE, LOWER-CASE, REVERSE, TRIM, LENGTH, MOD, REM, INTEGER, INTEGER-PART, ABS, MAX, MIN, SUM, ORD-MAX, ORD-MIN, NUMVAL, NUMVAL-C, ORD, CHAR, CURRENT-DATE, the integer date functions",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "out_of_range": "fail"},
+  "equivalence": {"programs": ["FUNCS.cbl"], "main_class": "fixtures.functions.Funcs",
+                  "env": {"COB_CURRENT_DATE": "2024/03/05 13:14:15"}},
+  "layout": {"base_package": "fixtures.functions"}
+}

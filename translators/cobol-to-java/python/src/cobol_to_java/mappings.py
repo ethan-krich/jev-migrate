@@ -38,6 +38,16 @@ BUILTIN_HANDLERS = MappingProxyType({
     "initialize": "INITIALIZE",
     "string": "STRING",
     "go_to": "GO_TO",
+    "open_file": "OPEN",
+    "close_file": "CLOSE",
+    "read_file": "READ",
+    "write_file": "WRITE",
+    "rewrite_file": "REWRITE",
+    "sort": "SORT",
+    "sort_stable": "SORT",
+    "merge": "MERGE",
+    "release": "RELEASE",
+    "return_record": "RETURN",
     "alter": "ALTER",
     "alter_goto": "ALTER",
     "unstring": "UNSTRING",
@@ -51,7 +61,7 @@ BUILTIN_HANDLERS = MappingProxyType({
 
 # Handlers that no default rule selects: the worker offers them as candidates on a decision
 # (they are correct only under conditions it cannot prove, e.g. SEARCH ALL key order).
-CANDIDATE_HANDLERS = frozenset({"search_all_binary", "search_all_linear", "alter_goto"})
+CANDIDATE_HANDLERS = frozenset({"search_all_binary", "search_all_linear", "alter_goto", "sort_stable"})
 
 # Facts the worker computes per operation instance; usable as `when` condition keys.
 FACTS = MappingProxyType({
@@ -77,6 +87,15 @@ FACTS = MappingProxyType({
     "UNSTRING": frozenset({"delimited", "pointer", "tallying", "overflow"}),
     "INSPECT": frozenset({"form"}),
     "GO_TO": frozenset({"depending"}),
+    "OPEN": frozenset(),
+    "CLOSE": frozenset(),
+    "READ": frozenset({"at_end", "into"}),
+    "WRITE": frozenset({"from", "advancing"}),
+    "REWRITE": frozenset({"from"}),
+    "SORT": frozenset({"duplicates", "input_procedure", "output_procedure"}),
+    "MERGE": frozenset({"output_procedure"}),
+    "RELEASE": frozenset({"from"}),
+    "RETURN": frozenset({"into"}),
     "ALTER": frozenset(),
 })
 
@@ -129,6 +148,15 @@ DEFAULT_RULES: tuple[tuple[str, str, str, dict, str], ...] = (
     ("cobol.string", "STRING", "string", {}, "STRING ... INTO"),
     ("cobol.unstring", "UNSTRING", "unstring", {}, "UNSTRING ... INTO alphanumeric items"),
     ("cobol.inspect", "INSPECT", "inspect", {}, "INSPECT TALLYING / REPLACING / CONVERTING"),
+    ("cobol.open", "OPEN", "open_file", {}, "OPEN sequential files"),
+    ("cobol.close", "CLOSE", "close_file", {}, "CLOSE files"),
+    ("cobol.read", "READ", "read_file", {}, "sequential READ"),
+    ("cobol.write", "WRITE", "write_file", {"advancing": False}, "WRITE (ADVANCING has no target yet)"),
+    ("cobol.rewrite", "REWRITE", "rewrite_file", {}, "REWRITE of a SEQUENTIAL file"),
+    ("cobol.sort", "SORT", "sort", {}, "SORT (a decision without WITH DUPLICATES IN ORDER; sort_stable candidate)"),
+    ("cobol.merge", "MERGE", "merge", {}, "MERGE of files in key order"),
+    ("cobol.release", "RELEASE", "release", {}, "RELEASE to a sort file"),
+    ("cobol.return", "RETURN", "return_record", {}, "RETURN from a sort file"),
     ("cobol.go_to", "GO_TO", "go_to", {}, "GO TO / GO TO DEPENDING ON (procedure dispatcher)"),
     ("cobol.alter", "ALTER", "alter", {}, "ALTER (a decision; the alter_goto candidate needs review)"),
     ("cobol.set.index", "SET", "set_index", {"form": ("to", "up_by", "down_by")}, "SET index TO / UP BY / DOWN BY"),

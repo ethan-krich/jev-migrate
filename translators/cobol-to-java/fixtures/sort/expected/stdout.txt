@@ -1,0 +1,15 @@
+[clark  40 ]
+[adams  30 ]
+[smith  30 ]
+[baker  25 ]
+[jones  25 ]
+returned [cat    01 ] 01
+returned [amy    07 ] 07
+returned [zed    09 ] 09
+returned [bob    09 ] 09
+returned [a 1       ]   
+returned [b 2       ]   
+returned [c 3       ]   
+returned [c 3       ]   
+returned [d 4       ]   
+returned [e 5       ]   

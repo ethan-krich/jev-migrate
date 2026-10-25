@@ -193,6 +193,26 @@ public final class ProgramTranslator implements TranslationContext {
     private final Map<String, DataItem.IndexName> indexesByName = new HashMap<>();
     /** USAGE written on a group, which its subordinate items inherit. */
     private final Map<DataItem, String> inheritedUsage = new IdentityHashMap<>();
+    /** A file: SELECT and FD together. {@code problem} is set when it cannot be translated (its decision is recorded). */
+    private static final class FileInfo {
+        final String cobolName;
+        final ParserRuleContext ctx;
+        String javaName;
+        String path;
+        String assigned;
+        boolean sort;
+        boolean lineSequential = true;
+        CobolParser.QualifiedDataNameContext statusName;
+        DataItem status;
+        final List<DataItem> records = new ArrayList<>();
+
+        FileInfo(String cobolName, ParserRuleContext ctx) {
+            this.cobolName = cobolName;
+            this.ctx = ctx;
+        }
+    }
+
+    private final Map<String, FileInfo> files = new LinkedHashMap<>();
     /** Java field holding each LINKAGE record's binding. */
     private final Map<DataItem, String> parameterFields = new IdentityHashMap<>();
     /** Java field of each record's Storage. */
@@ -252,13 +272,16 @@ public final class ProgramTranslator implements TranslationContext {
         cu.addImport(in.runtimePackage() + ".Arithmetic");
         cu.addImport(in.runtimePackage() + ".Bounds");
         cu.addImport(in.runtimePackage() + ".Clock");
+        cu.addImport(in.runtimePackage() + ".CobolFile");
         cu.addImport(in.runtimePackage() + ".CobolProgram");
         cu.addImport(in.runtimePackage() + ".Compare");
         cu.addImport(in.runtimePackage() + ".Display");
         cu.addImport(in.runtimePackage() + ".EditedField");
+        cu.addImport(in.runtimePackage() + ".Functions");
         cu.addImport(in.runtimePackage() + ".NumericField");
         cu.addImport(in.runtimePackage() + ".PerformStack");
         cu.addImport(in.runtimePackage() + ".ProgramSupport");
+        cu.addImport(in.runtimePackage() + ".SortFile");
         cu.addImport(in.runtimePackage() + ".Storage");
         cu.addImport(in.runtimePackage() + ".StringOps");
         cu.addImport(BigDecimal.class);
@@ -287,7 +310,7 @@ public final class ProgramTranslator implements TranslationContext {
         var env = in.unit().getEnvironmentDivision();
         if (env != null) {
             if (env.getInputOutputSection() != null) {
-                dataDecision(env.getInputOutputSection().getCtx(), "ENVIRONMENT", "INPUT-OUTPUT SECTION (files) is not supported");
+                fileControl(env.getInputOutputSection());
             }
             if (env.getSpecialNamesParagraph() != null) {
                 specialNames((CobolParser.SpecialNamesParagraphContext) env.getSpecialNamesParagraph().getCtx());
@@ -300,9 +323,6 @@ public final class ProgramTranslator implements TranslationContext {
         var data = in.unit().getDataDivision();
         if (data == null) {
             return;
-        }
-        if (data.getFileSection() != null) {
-            dataDecision(data.getFileSection().getCtx(), "DATA", "FILE SECTION is not supported");
         }
         if (data.getLocalStorageSection() != null) {
             dataDecision(data.getLocalStorageSection().getCtx(), "DATA", "LOCAL-STORAGE SECTION is not supported");
@@ -356,6 +376,9 @@ public final class ProgramTranslator implements TranslationContext {
             buildItem(e, null);
             roots.add(items.get(e));
         }
+        if (data.getFileSection() != null) {
+            fileSection(data.getFileSection());
+        }
         if (data.getLinkageSection() != null) {
             for (DataDescriptionEntry e : data.getLinkageSection().getRootDataDescriptionEntries()) {
                 buildItem(e, null);
@@ -376,7 +399,150 @@ public final class ProgramTranslator implements TranslationContext {
         for (PendingTable t : tables) {
             checkTable(t.item(), t.entry());
         }
+        for (FileInfo f : List.copyOf(files.values())) {
+            String problem = null;
+            if (!f.sort) {
+                f.path = in.dialect().fileAssignments().get(f.assigned);
+                if (f.path == null) {
+                    // The project must say where the file is; it is never guessed.
+                    Decision.Plan none = id -> {
+                        throw new IllegalArgumentException("decision has no candidates");
+                    };
+                    root.add(new Decision(Reason.MISSING_MAPPING, "dialect:file_assignments", "ASSIGN TO '" + f.assigned + "' (file "
+                            + f.cobolName + ") has no entry in Dialect.file_assignments", location(f.ctx), in.programId(),
+                            Map.of("field", "file_assignments", "name", f.assigned), null, List.of(), null, id -> none.apply(id)));
+                    statements++;
+                    files.remove(f.cobolName);
+                    continue;
+                }
+            }
+            if (f.statusName != null) {
+                f.status = resolveData(f.statusName);
+                if (f.status == null || f.status.size() != 2 || !(f.status.isAlphanumeric() || f.status.isGroup()) || f.status.hasAccessor()) {
+                    problem = "FILE STATUS must be a two-character alphanumeric WORKING-STORAGE item";
+                }
+            }
+            if (problem == null && f.records.isEmpty()) {
+                problem = "the file has no FD record";
+            }
+            if (problem == null && !f.lineSequential && f.records.stream().map(DataItem::totalSize).distinct().count() > 1) {
+                problem = "SEQUENTIAL files with records of different sizes are not supported";
+            }
+            if (problem != null) {
+                dataDecision(f.ctx, "ENVIRONMENT", f.cobolName + ": " + problem);
+                files.remove(f.cobolName);
+            }
+        }
         checkByteImages();
+    }
+
+    /** SELECT entries: ASSIGN through Dialect.file_assignments, SEQUENTIAL / LINE SEQUENTIAL organisation, FILE STATUS. */
+    private void fileControl(io.proleap.cobol.asg.metamodel.environment.inputoutput.InputOutputSection section) {
+        if (section.getIoControlParagraph() != null) {
+            dataDecision(section.getIoControlParagraph().getCtx(), "ENVIRONMENT", "I-O-CONTROL (SAME RECORD AREA, RERUN, APPLY) is not supported");
+        }
+        if (section.getFileControlParagraph() == null) {
+            return;
+        }
+        for (var entry : section.getFileControlParagraph().getFileControlEntries()) {
+            var ctx = (CobolParser.FileControlEntryContext) entry.getCtx();
+            FileInfo f = new FileInfo(entry.getName().toUpperCase(Locale.ROOT), ctx);
+            String problem = null;
+            var org = entry.getOrganizationClause();
+            if (org != null) {
+                var oc = (CobolParser.OrganizationClauseContext) org.getCtx();
+                if (oc.INDEXED() != null) {
+                    dataDecision(ctx, "ENVIRONMENT", entry.getName() + ": INDEXED files have no target (key-value adapter needed)",
+                            Reason.MISSING_TARGET_API);
+                    continue;
+                }
+                if (oc.RELATIVE() != null) {
+                    problem = "RELATIVE files are not supported";
+                }
+                f.lineSequential = oc.LINE() != null;
+            }
+            var access = entry.getAccessModeClause();
+            if (problem == null && access != null && access.getMode() != io.proleap.cobol.asg.metamodel.environment.inputoutput.filecontrol.AccessModeClause.Mode.SEQUENTIAL) {
+                problem = "ACCESS MODE " + access.getMode() + " is not supported";
+            }
+            if (problem == null && (entry.getRecordKeyClause() != null || entry.getRelativeKeyClause() != null
+                    || entry.getAlternateRecordKeyClause() != null || entry.getPasswordClause() != null
+                    || entry.getPaddingCharacterClause() != null || entry.getRecordDelimiterClause() != null)) {
+                problem = "SELECT clause " + ctx.getText() + " is not supported";
+            }
+            var status = entry.getFileStatusClause();
+            if (problem == null && status != null) {
+                var sc = (CobolParser.FileStatusClauseContext) status.getCtx();
+                if (sc.qualifiedDataName().size() > 1) {
+                    problem = "FILE STATUS with a second (extended) status item is not supported";
+                } else {
+                    f.statusName = sc.qualifiedDataName().getFirst();
+                }
+            }
+            String assigned = null;
+            var assign = entry.getAssignClause();
+            if (problem == null) {
+                var ac = (CobolParser.AssignClauseContext) assign.getCtx();
+                if (ac.literal() != null && ac.literal().NONNUMERICLITERAL() != null) {
+                    String t = ac.literal().getText();
+                    assigned = t.substring(1, t.length() - 1);
+                } else if (ac.assignmentName() != null && ac.DYNAMIC() == null && ac.EXTERNAL() == null) {
+                    assigned = ac.assignmentName().getText();
+                } else {
+                    problem = "ASSIGN " + ac.getText().substring(6) + " is not supported (only a name or literal)";
+                }
+            }
+            if (problem != null) {
+                dataDecision(ctx, "ENVIRONMENT", entry.getName() + ": " + problem);
+                continue;
+            }
+            f.assigned = assigned;
+            files.put(f.cobolName, f);
+        }
+    }
+
+    /** FD entries: their records share the record area (the first record's storage) and are not initialised. */
+    private void fileSection(io.proleap.cobol.asg.metamodel.data.file.FileSection section) {
+        for (var fd : section.getFileDescriptionEntries()) {
+            String name = fd.getName().toUpperCase(Locale.ROOT);
+            FileInfo f = files.get(name);
+            String problem = null;
+            if (f != null) {
+                f.sort = ((CobolParser.FileDescriptionEntryContext) fd.getCtx()).SD() != null;
+            }
+            if (fd.getLinageClause() != null) {
+                problem = "LINAGE is not supported";
+            } else if (fd.getExternalClause() != null || fd.getGlobalClause() != null) {
+                problem = "EXTERNAL / GLOBAL files are not supported";
+            } else if (fd.getCodeSetClause() != null || fd.getReportClause() != null) {
+                problem = "CODE-SET / REPORT files are not supported";
+            } else if (fd.getRecordContainsClause() != null
+                    && ((CobolParser.RecordContainsClauseContext) fd.getRecordContainsClause().getCtx()).getText().toUpperCase(Locale.ROOT).contains("DEPENDING")) {
+                problem = "RECORD VARYING ... DEPENDING ON is not supported";
+            }
+            DataItem base = null;
+            for (DataDescriptionEntry e : fd.getRootDataDescriptionEntries()) {
+                buildItem(e, null);
+                DataItem item = items.get(e);
+                item.markFileRecord();
+                roots.add(item);
+                if (base == null) {
+                    base = item;
+                } else if (item.redefines() == null) {
+                    item.redefines(base);
+                }
+                if (e instanceof DataDescriptionEntryGroup g && hasValue(g)) {
+                    dataDecision(e.getCtx(), "DATA", item.cobolName() + ": VALUE in the FILE SECTION is not supported");
+                }
+                if (f != null) {
+                    f.records.add(item);
+                }
+            }
+            if (problem != null) {
+                dataDecision(fd.getCtx(), "DATA", fd.getName() + ": " + problem);
+                files.remove(name);
+            }
+        }
     }
 
     /** OCCURS [min TO] max [DEPENDING ON item] [ASCENDING/DESCENDING KEY ...] [INDEXED BY ...]. */
@@ -1011,7 +1177,7 @@ public final class ProgramTranslator implements TranslationContext {
             if (item.hasAccessor()) {
                 String storage = storageField(cls, record, storages, sizes);
                 accessors.add(item);
-                if (!item.isGroup() && !item.inRedefines()) {
+                if (!item.isGroup() && !item.inRedefines() && !item.fileRecord()) {
                     cls.addMember(tableInitializer(item, storage));
                 }
                 for (DataItem.IndexName idx : item.indexes()) {
@@ -1026,13 +1192,29 @@ public final class ProgramTranslator implements TranslationContext {
                         .setLineComment(" INDEX " + idx.cobolName() + " of " + item.cobolName());
             }
             Expression init;
-            if (item == record && !item.isGroup() && plain(item) && roots.stream().noneMatch(r -> r.redefines() == item)) {
+            if (item == record && !item.isGroup() && plain(item) && !item.fileRecord() && roots.stream().noneMatch(r -> r.redefines() == item)) {
                 init = standalone(item);
             } else {
                 init = view(item, name(storageField(cls, record, storages, sizes)));
             }
             var field = cls.addFieldWithInitializer(javaType(item), item.javaName(), init, Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL);
             field.setLineComment(" " + item.cobolName() + " (line " + item.line() + ")");
+        }
+        for (FileInfo f : files.values()) {
+            DataItem base = storageRoot(f.records.getFirst());
+            String storage = storageField(cls, base, storages, sizes);
+            int size = sizes.get(base);
+            f.javaName = allocateField(Names.fieldName(f.cobolName));
+            if (f.sort) {
+                cls.addFieldWithInitializer("SortFile", f.javaName, create("SortFile", str(f.cobolName),
+                        create("AlphanumericField", name(storage), integer(0), integer(size))), Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL)
+                        .setLineComment(" SD " + f.cobolName);
+                continue;
+            }
+            Expression status = f.status == null ? new NullLiteralExpr() : name(f.status.javaName());
+            cls.addFieldWithInitializer("CobolFile", f.javaName, create("CobolFile", str(f.cobolName), str(f.path), Ast.bool(f.lineSequential),
+                    create("AlphanumericField", name(storage), integer(0), integer(size)), status), Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL)
+                    .setLineComment(" FD " + f.cobolName + (f.lineSequential ? " (LINE SEQUENTIAL)" : " (SEQUENTIAL)"));
         }
         for (DataItem item : accessors) {
             addAccessor(cls, item, storages.get(storageRoot(item.record())));
@@ -1218,7 +1400,7 @@ public final class ProgramTranslator implements TranslationContext {
             return create("AlphanumericField", storage, integer(item.offset()), integer(Math.max(1, item.size())));
         }
         Expression v = viewConstructor(item, storage, integer(item.offset()));
-        if (item.inRedefines()) {
+        if (item.inRedefines() || item.fileRecord()) {
             return v;
         }
         return initialCall(item, v);
@@ -1896,11 +2078,15 @@ public final class ProgramTranslator implements TranslationContext {
 
     /** Records a declaration-level construct that blocks translation (no candidates). */
     private void dataDecision(ParserRuleContext ctx, String operation, String message) {
+        dataDecision(ctx, operation, message, Reason.UNSUPPORTED_CONSTRUCT);
+    }
+
+    private void dataDecision(ParserRuleContext ctx, String operation, String message, Reason reason) {
         statements++;
         Decision.Plan none = id -> {
             throw new IllegalArgumentException("decision has no candidates");
         };
-        sink.add(new Decision(Reason.UNSUPPORTED_CONSTRUCT, operation, message, location(ctx), in.programId(),
+        sink.add(new Decision(reason, operation, message, location(ctx), in.programId(),
                 Map.of(), null, List.of(), null, none));
     }
 
@@ -2088,11 +2274,250 @@ public final class ProgramTranslator implements TranslationContext {
             }
             return new Operand.Register("callParameters");
         }
+        if (u instanceof io.proleap.cobol.asg.metamodel.call.FunctionCall) {
+            var f = firstOf(call.getCtx(), CobolParser.FunctionCallContext.class);
+            if (f == null) {
+                throw HandlerException.unsupported("function " + call.getName() + " cannot be read");
+            }
+            return functionOperand(f);
+        }
         if (u instanceof DataDescriptionEntryCall || u.getCallType() == Call.CallType.UNDEFINED_CALL) {
             return dataOperand(call);
         }
         throw HandlerException.unsupported(call.getName() + " (" + call.getCallType()
                 + ") is not supported: functions and special registers other than RETURN-CODE");
+    }
+
+    /** Float-valued intrinsics: their results are not bit-exact, so they stay decisions (saved for Jev). */
+    private static final Set<String> FLOAT_FUNCTIONS = Set.of("SQRT", "LOG", "LOG10", "EXP", "EXP10", "SIN", "COS", "TAN", "ASIN", "ACOS",
+            "ATAN", "RANDOM", "VARIANCE", "STANDARD-DEVIATION", "PRESENT-VALUE", "ANNUITY", "MEAN", "MEDIAN", "MIDRANGE", "RANGE",
+            "PI", "E", "FACTORIAL");
+
+    /** An intrinsic function, read from the parse tree (ProLeap keeps no arguments). */
+    private Operand functionOperand(CobolParser.FunctionCallContext f) throws HandlerException {
+        String fn = f.functionName().getText().toUpperCase(Locale.ROOT);
+        if (FLOAT_FUNCTIONS.contains(fn)) {
+            throw HandlerException.unsupported("FUNCTION " + fn + " is computed in floating point; its result is not bit-exact");
+        }
+        List<Operand> args = new ArrayList<>();
+        var raw = f.argument();
+        for (int i = 0; i < raw.size(); i++) {
+            var a = raw.get(i);
+            DataItem table = tableArgument(a);
+            if (table != null) {
+                // ProLeap's grammar splits "V(1)" into the arguments "V" and "(1)"; a table item
+                // cannot be an argument without its subscripts, so the groups that follow are its subscripts.
+                List<Operand.Subscript> subs = new ArrayList<>();
+                while (subs.size() < table.dimensions().size() && i + 1 < raw.size() && parenthesized(raw.get(i + 1)) != null) {
+                    subs.add(position(parenthesized(raw.get(++i))));
+                }
+                if (subs.size() != table.dimensions().size()) {
+                    throw HandlerException.unsupported(table.cobolName() + " needs " + table.dimensions().size() + " subscript(s)");
+                }
+                for (Operand.Subscript sub : subs) {
+                    if (sub.value() != null) {
+                        requireRangeCheck(table.cobolName() + " subscript");
+                    }
+                }
+                args.add(new Operand.Field(table, List.copyOf(subs), null));
+                continue;
+            }
+            args.add(argument(a));
+        }
+        Operand result = switch (fn) {
+            case "UPPER-CASE", "LOWER-CASE", "REVERSE" -> {
+                arity(fn, args, 1);
+                yield new Operand.Computed(staticCall("Functions", switch (fn) {
+                    case "UPPER-CASE" -> "upperCase";
+                    case "LOWER-CASE" -> "lowerCase";
+                    default -> "reverse";
+                }, textOf(args.getFirst(), fn)), false, "text");
+            }
+            case "TRIM" -> {
+                arity(fn, args, 1);
+                yield new Operand.Computed(staticCall("Functions", "trim", textOf(args.getFirst(), fn), integer(0)), false, "text");
+            }
+            case "LENGTH" -> {
+                arity(fn, args, 1);
+                yield switch (args.getFirst()) {
+                    case Operand.Field fd when fd.refmod() == null && !(fd.item().isGroup() && fd.item().variableTable() != null) ->
+                            new Operand.NumericLiteral(BigDecimal.valueOf(fd.item().size()), Integer.toString(fd.item().size()));
+                    case Operand.AlphanumericLiteral a -> new Operand.NumericLiteral(BigDecimal.valueOf(a.value().length()),
+                            Integer.toString(a.value().length()));
+                    case Operand.Computed c when !c.numeric() -> new Operand.Computed(staticCall("BigDecimal", "valueOf",
+                            call(c.value(), "length")), true, "integer");
+                    default -> throw HandlerException.unsupported("FUNCTION LENGTH of " + args.getFirst().category() + " is not supported");
+                };
+            }
+            case "MOD", "REM" -> {
+                arity(fn, args, 2);
+                boolean integral = args.stream().allMatch(ProgramTranslator::isIntegral);
+                if (fn.equals("MOD") && !integral) {
+                    throw HandlerException.unsupported("FUNCTION MOD needs integer arguments");
+                }
+                yield new Operand.Computed(staticCall("Functions", fn.equals("MOD") ? "mod" : "rem", numberOf(args.get(0), fn),
+                        numberOf(args.get(1), fn)), true, integral ? "integer" : null);
+            }
+            case "INTEGER", "INTEGER-PART" -> {
+                arity(fn, args, 1);
+                yield new Operand.Computed(staticCall("Functions", fn.equals("INTEGER") ? "integer" : "integerPart",
+                        numberOf(args.getFirst(), fn)), true, "integer");
+            }
+            case "ABS" -> {
+                arity(fn, args, 1);
+                yield new Operand.Computed(staticCall("Functions", "abs", numberOf(args.getFirst(), fn)), true, null);
+            }
+            case "MAX", "MIN", "SUM", "ORD-MAX", "ORD-MIN" -> {
+                if (args.isEmpty()) {
+                    throw HandlerException.unsupported("FUNCTION " + fn + " needs arguments");
+                }
+                NodeList<Expression> values = new NodeList<>();
+                for (Operand a : args) {
+                    values.add(numberOf(a, fn));
+                }
+                String method = switch (fn) {
+                    case "MAX" -> "max";
+                    case "MIN" -> "min";
+                    case "SUM" -> "sum";
+                    case "ORD-MAX" -> "ordMax";
+                    default -> "ordMin";
+                };
+                Expression e = new com.github.javaparser.ast.expr.MethodCallExpr(name("Functions"), method, values);
+                yield fn.startsWith("ORD") ? new Operand.Computed(staticCall("BigDecimal", "valueOf", e), true, "integer")
+                        : new Operand.Computed(e, true, null);
+            }
+            case "NUMVAL", "NUMVAL-C" -> {
+                arity(fn, args, 1);
+                yield new Operand.Computed(staticCall("Functions", fn.equals("NUMVAL") ? "numval" : "numvalC", textOf(args.getFirst(), fn)),
+                        true, null);
+            }
+            case "ORD" -> {
+                arity(fn, args, 1);
+                yield new Operand.Computed(staticCall("BigDecimal", "valueOf", staticCall("Functions", "ord", textOf(args.getFirst(), fn))),
+                        true, "integer");
+            }
+            case "CHAR" -> {
+                arity(fn, args, 1);
+                yield new Operand.Computed(staticCall("Functions", "charOf", call(numberOf(args.getFirst(), fn), "intValue")), false, "text");
+            }
+            case "INTEGER-OF-DATE", "INTEGER-OF-DAY", "DATE-OF-INTEGER", "DAY-OF-INTEGER" -> {
+                arity(fn, args, 1);
+                String method = switch (fn) {
+                    case "INTEGER-OF-DATE" -> "integerOfDate";
+                    case "INTEGER-OF-DAY" -> "integerOfDay";
+                    case "DATE-OF-INTEGER" -> "dateOfInteger";
+                    default -> "dayOfInteger";
+                };
+                yield new Operand.Computed(staticCall("Functions", method, numberOf(args.getFirst(), fn)), true,
+                        fn.equals("DATE-OF-INTEGER") ? "digits8" : fn.equals("DAY-OF-INTEGER") ? "digits7" : "integer");
+            }
+            case "CURRENT-DATE" -> {
+                arity(fn, args, 0);
+                yield new Operand.Computed(staticCall("Functions", "currentDate"), false, "text");
+            }
+            default -> throw HandlerException.unsupported("FUNCTION " + fn + " is not supported");
+        };
+        if (f.referenceModifier() != null) {
+            if (!(result instanceof Operand.Computed c) || c.numeric()) {
+                throw HandlerException.unsupported("reference modification of FUNCTION " + fn + " is not supported");
+            }
+            var rm = f.referenceModifier();
+            Operand.Subscript start = position(rm.characterPosition().arithmeticExpression());
+            Operand.Subscript length = rm.length() == null ? null : position(rm.length().arithmeticExpression());
+            if (start.value() != null || length == null || length.value() != null) {
+                throw HandlerException.unsupported("reference modification of a function result needs literal (start:length)");
+            }
+            result = new Operand.Computed(staticCall("Functions", "substring", c.value(), integer(start.offset()), integer(length.offset())),
+                    false, "text");
+        }
+        return result;
+    }
+
+    /** A plain (unsubscripted) name of a table item as a function argument, or null. */
+    private DataItem tableArgument(CobolParser.ArgumentContext a) {
+        var id = a.identifier();
+        if (id == null || id.qualifiedDataName() == null) {
+            return null;
+        }
+        DataItem item = resolveData(id.qualifiedDataName());
+        return item != null && !item.dimensions().isEmpty() ? item : null;
+    }
+
+    /** The expression inside an argument written {@code (expression)}, or null. */
+    private static CobolParser.ArithmeticExpressionContext parenthesized(CobolParser.ArgumentContext a) {
+        var e = a.arithmeticExpression();
+        if (e == null || !e.plusMinus().isEmpty() || !e.multDivs().multDiv().isEmpty() || !e.multDivs().powers().power().isEmpty()
+                || e.multDivs().powers().PLUSCHAR() != null || e.multDivs().powers().MINUSCHAR() != null) {
+            return null;
+        }
+        return e.multDivs().powers().basis().arithmeticExpression();
+    }
+
+    private static void arity(String fn, List<Operand> args, int n) throws HandlerException {
+        if (args.size() != n) {
+            throw HandlerException.unsupported("FUNCTION " + fn + " with " + args.size() + " arguments is not supported");
+        }
+    }
+
+    private static boolean isIntegral(Operand o) {
+        return switch (o) {
+            case Operand.NumericLiteral n -> n.isInteger();
+            case Operand.Field f -> f.integer();
+            case Operand.Computed c -> "integer".equals(c.display()) || (c.display() != null && c.display().startsWith("digits"));
+            default -> false;
+        };
+    }
+
+    private Expression textOf(Operand o, String fn) throws HandlerException {
+        Expression e = alphanumericSide(o, new Operand.AlphanumericLiteral(""));
+        if (e == null) {
+            throw HandlerException.unsupported("FUNCTION " + fn + " of " + o.category() + " is not supported");
+        }
+        return e;
+    }
+
+    private Expression numberOf(Operand o, String fn) throws HandlerException {
+        if (!o.isNumericValued()) {
+            throw HandlerException.unsupported("FUNCTION " + fn + " of " + o.category() + " is not supported (numeric arguments)");
+        }
+        return numeric(o);
+    }
+
+    /** One function argument: a literal, a data reference, a nested function, or {@code -n}. */
+    private Operand argument(CobolParser.ArgumentContext a) throws HandlerException {
+        if (a.literal() != null) {
+            return literal(a.literal());
+        }
+        if (a.identifier() != null) {
+            var id = a.identifier();
+            if (id.functionCall() != null) {
+                return functionOperand(id.functionCall());
+            }
+            if (id.specialRegister() != null) {
+                throw HandlerException.unsupported("special register as a function argument is not supported");
+            }
+            return dataOperand(id, null);
+        }
+        if (a.qualifiedDataName() != null && a.integerLiteral() == null) {
+            return dataOperand(a.qualifiedDataName(), null);
+        }
+        if (a.arithmeticExpression() != null) {
+            var e = a.arithmeticExpression();
+            var md = e.multDivs();
+            if (e.plusMinus().isEmpty() && md.multDiv().isEmpty() && md.powers().power().isEmpty()) {
+                var basis = md.powers().basis();
+                Operand inner = basis.literal() != null ? literal(basis.literal())
+                        : basis.identifier() != null && basis.identifier().functionCall() != null ? functionOperand(basis.identifier().functionCall())
+                        : basis.identifier() != null ? dataOperand(basis.identifier(), null) : null;
+                if (inner != null && md.powers().MINUSCHAR() == null) {
+                    return inner;
+                }
+                if (inner instanceof Operand.NumericLiteral n) {
+                    return new Operand.NumericLiteral(n.value().negate(), "-" + n.text());
+                }
+            }
+        }
+        throw HandlerException.unsupported("function argument " + a.getText() + " is not supported");
     }
 
     /** LENGTH OF item: its size in bytes, known at translation time unless it varies with OCCURS DEPENDING ON. */
@@ -2110,12 +2535,15 @@ public final class ProgramTranslator implements TranslationContext {
      * first item with that name whatever its qualifiers, and drops reference modification.
      */
     private Operand dataOperand(Call call) throws HandlerException {
-        ParserRuleContext ctx = call.getCtx();
+        return dataOperand(call.getCtx(), call);
+    }
+
+    private Operand dataOperand(ParserRuleContext ctx, Call call) throws HandlerException {
         var table = firstOf(ctx, CobolParser.TableCallContext.class);
         var q = table != null ? table.qualifiedDataName() : firstOf(ctx, CobolParser.QualifiedDataNameContext.class);
         DataItem item;
         if (q == null) {
-            item = call.unwrap() instanceof DataDescriptionEntryCall d ? items.get(d.getDataDescriptionEntry()) : null;
+            item = call != null && call.unwrap() instanceof DataDescriptionEntryCall d ? items.get(d.getDataDescriptionEntry()) : null;
         } else {
             Operand named = resolveName(q);
             if (named instanceof Operand.Index idx) {
@@ -2124,7 +2552,7 @@ public final class ProgramTranslator implements TranslationContext {
             item = named == null ? null : ((Operand.Field) named).item();
         }
         if (item == null) {
-            throw HandlerException.unsupported(call.getName() + " is not a WORKING-STORAGE item");
+            throw HandlerException.unsupported((call != null ? call.getName() : ctx.getText()) + " is not a data item");
         }
         if (item.kind() == DataItem.Kind.UNSUPPORTED) {
             throw HandlerException.unsupported(item.cobolName() + ": " + item.unsupportedReason());
@@ -2382,6 +2810,7 @@ public final class ProgramTranslator implements TranslationContext {
             case Operand.ReturnCode r -> call(name("returnCode"), "get");
             case Operand.Index i -> staticCall("BigDecimal", "valueOf", name(i.index().javaName()));
             case Operand.Register r -> staticCall("BigDecimal", "valueOf", name(r.javaName()));
+            case Operand.Computed c when c.numeric() -> c.value().clone();
             case Operand.NumericLiteral n -> decimal(n.value().toPlainString());
             case Operand.Figurative f when f.isZero() -> decimal("0");
             case Operand.Arithmetic a -> arithmetic(a.stmt());
@@ -2654,9 +3083,10 @@ public final class ProgramTranslator implements TranslationContext {
      */
     private Expression alphanumericSide(Operand o, Operand other) throws HandlerException {
         boolean otherAlpha = other instanceof Operand.AlphanumericLiteral
-                || other instanceof Operand.Field f && f.alphanumeric();
+                || other instanceof Operand.Field f && f.alphanumeric() || other instanceof Operand.Computed c && !c.numeric();
         return switch (o) {
             case Operand.Field f when f.alphanumeric() -> call(field(f), "get");
+            case Operand.Computed c when !c.numeric() -> c.value().clone();
             case Operand.AlphanumericLiteral a -> str(a.value());
             case Operand.Field f when otherAlpha && f.integer() && !f.item().numeric().signed() ->
                     call(field(f), "digits");
@@ -2845,6 +3275,40 @@ public final class ProgramTranslator implements TranslationContext {
             throw HandlerException.unsupported("CLASS members other than nonnumeric literals are not supported");
         }
         return a.value();
+    }
+
+    @Override
+    public FileRef file(Call fileCall) throws HandlerException {
+        FileInfo f = files.get(fileCall.getName().toUpperCase(Locale.ROOT));
+        if (f == null || f.javaName == null) {
+            throw HandlerException.unsupported("file " + fileCall.getName() + " is not a supported file");
+        }
+        return new FileRef(f.javaName, f.lineSequential, f.sort, List.copyOf(f.records));
+    }
+
+    @Override
+    public FileRef fileOfRecord(DataItem record) throws HandlerException {
+        for (FileInfo f : files.values()) {
+            if (f.records.contains(record) && f.javaName != null) {
+                return new FileRef(f.javaName, f.lineSequential, f.sort, List.copyOf(f.records));
+            }
+        }
+        throw HandlerException.unsupported(record.cobolName() + " is not a record of a supported file");
+    }
+
+    @Override
+    public Expression sortKey(DataItem key, ParserRuleContext where) throws HandlerException {
+        if (!key.fileRecord() || key.hasAccessor() || key.kind() == DataItem.Kind.UNSUPPORTED || key.isCondition()) {
+            throw HandlerException.unsupported("KEY " + key.cobolName() + " must be an item of the sort record outside any table");
+        }
+        boolean numeric = key.isNumeric();
+        if (!numeric) {
+            requireCollatingSequence(RelationalOperatorType.GREATER, where);
+        }
+        Expression view = key.isGroup() ? create("AlphanumericField", name("s"), integer(key.offset()), integer(key.size()))
+                : viewConstructor(key, name("s"), integer(key.offset()));
+        return new com.github.javaparser.ast.expr.LambdaExpr(new Parameter(new com.github.javaparser.ast.type.UnknownType(), "s"),
+                call(view, "get"));
     }
 
     @Override

@@ -97,6 +97,15 @@ public final class TestSupport {
         rules.add(rule("cobol.initialize", "INITIALIZE", "initialize", Map.of(), 100));
         rules.add(rule("cobol.string", "STRING", "string", Map.of(), 100));
         rules.add(rule("cobol.go_to", "GO_TO", "go_to", Map.of(), 100));
+        rules.add(rule("cobol.open", "OPEN", "open_file", Map.of(), 100));
+        rules.add(rule("cobol.close", "CLOSE", "close_file", Map.of(), 100));
+        rules.add(rule("cobol.read", "READ", "read_file", Map.of(), 100));
+        rules.add(rule("cobol.write", "WRITE", "write_file", Map.of("advancing", false), 100));
+        rules.add(rule("cobol.rewrite", "REWRITE", "rewrite_file", Map.of(), 100));
+        rules.add(rule("cobol.sort", "SORT", "sort", Map.of(), 100));
+        rules.add(rule("cobol.merge", "MERGE", "merge", Map.of(), 100));
+        rules.add(rule("cobol.release", "RELEASE", "release", Map.of(), 100));
+        rules.add(rule("cobol.return", "RETURN", "return_record", Map.of(), 100));
         rules.add(rule("cobol.alter", "ALTER", "alter", Map.of(), 100));
         rules.add(rule("cobol.unstring", "UNSTRING", "unstring", Map.of(), 100));
         rules.add(rule("cobol.inspect", "INSPECT", "inspect", Map.of(), 100));

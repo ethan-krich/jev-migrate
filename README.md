@@ -143,8 +143,12 @@ equivalence fixtures.
 | ◐ | `REPLACE` statements | parsed by ProLeap; line numbers then fall back to the preprocessed source (warning `approximate_line_numbers`) |
 | ❌ | `RENAMES`, level 88 on groups, `COMP-1` / `COMP-2`, `POINTER`, `ADDRESS OF`, `P` / `N` pictures, a fixed sign before a floating currency string, `EXTERNAL`, `GLOBAL`, nested programs, `IS RECURSIVE`, `CALL … BY VALUE` | `unsupported_construct` |
 | ❌ | `/` and `**` in COMPUTE (implementation-defined intermediate precision), EBCDIC collating sequence | `unsupported_construct` |
-| ❌ | Files, dynamic `CALL`, `DISPLAY UPON` printer / other devices, `ACCEPT FROM` environment, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
-| ❌ | Intrinsic functions, `TALLY` and other special registers, free format / other dialects | |
+| ✅ | SEQUENTIAL and LINE SEQUENTIAL files: `OPEN`, `READ [INTO]`, `WRITE [FROM]`, `REWRITE`, `CLOSE`, `FILE STATUS` | paths from `Dialect.file_assignments`; GnuCOBOL status values |
+| ✅ | `SORT … WITH DUPLICATES IN ORDER`, `MERGE`, `RELEASE`, `RETURN`, `USING` / `GIVING` / INPUT and OUTPUT PROCEDURE | SORT without DUPLICATES IN ORDER is a decision with a stable-sort candidate |
+| ✅ | Exact intrinsic functions (see docs/mapping-api.md) | floating-point functions are decisions |
+| ❌ | INDEXED (`missing_target_api`) and RELATIVE files, `ACCESS RANDOM / DYNAMIC`, `WRITE … ADVANCING`, `LINAGE`, `USE` declaratives, `SAME RECORD AREA` | decisions |
+| ❌ | Dynamic `CALL`, `DISPLAY UPON` printer / other devices, `ACCEPT FROM` environment, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
+| ❌ | `TALLY` and other special registers, free format / other dialects | |
 
 Known divergence: GnuCOBOL 3.2 prints an empty value for a `COMPUTE` receiver when it is displayed
 *inside that statement's own* `ON SIZE ERROR` phrase. The translation prints the (unchanged) value.
