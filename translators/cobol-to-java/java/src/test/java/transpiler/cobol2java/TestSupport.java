@@ -90,7 +90,14 @@ public final class TestSupport {
                 Map.of("from", List.of("date", "date_yyyymmdd", "day", "day_yyyyddd", "day_of_week", "time")), 100));
         rules.add(rule("cobol.exhibit", "EXHIBIT", "exhibit", Map.of("changed", false), 100));
         rules.add(rule("cobol.move.to_group", "MOVE", "move_group", Map.of("target_category", "group"), 100));
+        rules.add(rule("cobol.move.to_edited", "MOVE", "move_to_edited",
+                Map.of("target_category", List.of("numeric_edited", "alphanumeric_edited")), 100));
+        rules.add(rule("cobol.move.from_edited", "MOVE", "move_from_edited",
+                Map.of("source_category", "numeric_edited", "target_category", "numeric"), 100));
         rules.add(rule("cobol.initialize", "INITIALIZE", "initialize", Map.of(), 100));
+        rules.add(rule("cobol.string", "STRING", "string", Map.of(), 100));
+        rules.add(rule("cobol.unstring", "UNSTRING", "unstring", Map.of(), 100));
+        rules.add(rule("cobol.inspect", "INSPECT", "inspect", Map.of(), 100));
         rules.add(rule("cobol.set.index", "SET", "set_index", Map.of("form", List.of("to", "up_by", "down_by")), 100));
         rules.add(rule("cobol.search", "SEARCH", "search", Map.of("all", false), 100));
         rules.add(rule("cobol.search_all", "SEARCH", "search_all", Map.of("all", true), 100));

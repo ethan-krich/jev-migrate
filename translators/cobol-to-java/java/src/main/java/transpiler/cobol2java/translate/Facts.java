@@ -55,7 +55,10 @@ public final class Facts {
             Map.entry("ACCEPT", Set.of("from")),
             Map.entry("EXHIBIT", Set.of("named", "changed")),
             Map.entry("INITIALIZE", Set.of("replacing", "to_value", "with_filler", "then_default")),
-            Map.entry("SEARCH", Set.of("all", "varying", "at_end")));
+            Map.entry("SEARCH", Set.of("all", "varying", "at_end")),
+            Map.entry("STRING", Set.of("pointer", "overflow")),
+            Map.entry("UNSTRING", Set.of("delimited", "pointer", "tallying", "overflow")),
+            Map.entry("INSPECT", Set.of("form")));
 
     private Facts() {}
 
@@ -213,6 +216,20 @@ public final class Facts {
                 f.put("with_filler", init.FILLER() != null);
                 f.put("then_default", init.DEFAULT() != null);
             }
+            case "STRING" -> {
+                var st = (io.proleap.cobol.asg.metamodel.procedure.string.StringStatement) s;
+                f.put("pointer", st.getWithPointerPhrase() != null);
+                f.put("overflow", st.getOnOverflowPhrase() != null || st.getNotOnOverflowPhrase() != null);
+            }
+            case "UNSTRING" -> {
+                var un = (io.proleap.cobol.asg.metamodel.procedure.unstring.UnstringStatement) s;
+                f.put("delimited", un.getSending().getDelimitedByPhrase() != null);
+                f.put("pointer", un.getWithPointerPhrase() != null);
+                f.put("tallying", un.getTallyingPhrase() != null);
+                f.put("overflow", un.getOnOverflowPhrase() != null || un.getNotOnOverflowPhrase() != null);
+            }
+            case "INSPECT" -> f.put("form", ((io.proleap.cobol.asg.metamodel.procedure.inspect.InspectStatement) s).getInspectType()
+                    .name().toLowerCase(Locale.ROOT));
             case "SEARCH" -> {
                 var search = (io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement) s;
                 f.put("all", ((io.proleap.cobol.CobolParser.SearchStatementContext) s.getCtx()).ALL() != null);

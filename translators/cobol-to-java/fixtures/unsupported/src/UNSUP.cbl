@@ -4,10 +4,10 @@
        WORKING-STORAGE SECTION.
        01 TBL.
           05 ITEM    PIC 9 OCCURS 3.
-       01 PACKED     PIC S9(5) COMP-3.
+       01 FLOATING   COMP-1.
        01 FLAG       PIC X VALUE "Y".
           88 IS-YES  VALUE "Y".
-       01 EDITED     PIC ZZ9.
+       01 EDITED     PIC -$$9.99.
        01 N          PIC 99.
        01 ENV-VAL    PIC X(10).
        PROCEDURE DIVISION.

@@ -137,6 +137,8 @@ public final class ProgramTranslator implements TranslationContext {
     private final List<PendingTable> tables = new ArrayList<>();
     private final Map<Object, DataItem.IndexName> indexNames = new IdentityHashMap<>();
     private final Map<String, DataItem.IndexName> indexesByName = new HashMap<>();
+    /** USAGE written on a group, which its subordinate items inherit. */
+    private final Map<DataItem, String> inheritedUsage = new IdentityHashMap<>();
     /** Java field of each record's Storage. */
     private final Map<DataItem, String> storageNames = new IdentityHashMap<>();
     /** The statement being translated, for decisions raised while resolving its operands. */
@@ -168,9 +170,11 @@ public final class ProgramTranslator implements TranslationContext {
     private Section currentSection;
     private int statements;
     private int translated;
+    private final boolean binaryTruncate;
 
     public ProgramTranslator(Input input) {
         this.in = input;
+        this.binaryTruncate = input.dialect().binaryTruncate();
     }
 
     public Result translate() {
@@ -183,9 +187,11 @@ public final class ProgramTranslator implements TranslationContext {
         cu.addImport(in.runtimePackage() + ".CobolProgram");
         cu.addImport(in.runtimePackage() + ".Compare");
         cu.addImport(in.runtimePackage() + ".Display");
+        cu.addImport(in.runtimePackage() + ".EditedField");
         cu.addImport(in.runtimePackage() + ".NumericField");
         cu.addImport(in.runtimePackage() + ".ProgramSupport");
         cu.addImport(in.runtimePackage() + ".Storage");
+        cu.addImport(in.runtimePackage() + ".StringOps");
         cu.addImport(BigDecimal.class);
 
         ClassOrInterfaceDeclaration cls = cu.addClass(in.className(), Modifier.Keyword.PUBLIC, Modifier.Keyword.FINAL);
@@ -440,6 +446,14 @@ public final class ProgramTranslator implements TranslationContext {
         boolean hasChildren = g.getDataDescriptionEntries().stream().anyMatch(ProgramTranslator::isStorageEntry);
         DataItem.Kind kind = null;
         Picture picture = null;
+        String declared = effectiveUsage(g, parent);
+        if (problem == null) {
+            problem = usageProblem(declared);
+        }
+        DataItem.Usage usage = usage(declared);
+        if (problem == null && g.getSynchronizedClause() != null && !hasChildren && usage != DataItem.Usage.DISPLAY) {
+            problem = synchronizedProblem(g);
+        }
         if (problem == null) {
             if (hasChildren) {
                 if (g.getPictureClause() != null) {
@@ -451,6 +465,14 @@ public final class ProgramTranslator implements TranslationContext {
                 } else {
                     kind = DataItem.Kind.GROUP;
                 }
+            } else if (usage == DataItem.Usage.INDEX) {
+                if (g.getPictureClause() != null || g.getValueClause() != null) {
+                    problem = "USAGE INDEX takes no PICTURE or VALUE";
+                } else {
+                    // An index data item: a native 4-byte integer, shown as S9(9).
+                    picture = new Picture.Numeric(9, 0, true);
+                    kind = DataItem.Kind.NUMERIC;
+                }
             } else if (g.getPictureClause() == null) {
                 problem = "an elementary item without PICTURE is not supported";
             } else {
@@ -459,8 +481,33 @@ public final class ProgramTranslator implements TranslationContext {
                     problem = pic.unsupportedReason();
                 } else {
                     picture = pic.picture().get();
-                    kind = picture instanceof Picture.Numeric ? DataItem.Kind.NUMERIC : DataItem.Kind.ALPHANUMERIC;
+                    if (g.getBlankWhenZeroClause() != null && usage == DataItem.Usage.DISPLAY
+                            && picture instanceof Picture.Numeric n && !n.signed()) {
+                        // BLANK WHEN ZERO makes a numeric DISPLAY item numeric-edited.
+                        String digits = "9".repeat(n.digits() - n.scale()) + (n.scale() > 0 ? "V" + "9".repeat(n.scale()) : "");
+                        picture = new Picture.Edited(digits, true, n.digits());
+                    }
+                    kind = switch (picture) {
+                        case Picture.Numeric n -> DataItem.Kind.NUMERIC;
+                        case Picture.Edited ed -> DataItem.Kind.EDITED;
+                        case Picture.Alphanumeric a -> DataItem.Kind.ALPHANUMERIC;
+                    };
                     problem = elementaryClauses(g, picture);
+                    if (problem == null && g.getBlankWhenZeroClause() != null && !(picture instanceof Picture.Edited ed && ed.numeric())) {
+                        problem = "BLANK WHEN ZERO on an item that is not unsigned numeric or numeric-edited";
+                    }
+                    if (problem == null && picture instanceof Picture.Edited && usage != DataItem.Usage.DISPLAY) {
+                        problem = "an edited item must be USAGE DISPLAY";
+                    }
+                    if (problem == null && usage != DataItem.Usage.DISPLAY) {
+                        if (!(picture instanceof Picture.Numeric n)) {
+                            problem = "USAGE " + declared + " needs a numeric PICTURE";
+                        } else if (g.getSignClause() != null) {
+                            problem = "SIGN clause on a USAGE " + declared + " item";
+                        } else if (usage != DataItem.Usage.PACKED && n.digits() > 18) {
+                            problem = "binary item with more than 18 digits";
+                        }
+                    }
                 }
             }
         }
@@ -471,6 +518,14 @@ public final class ProgramTranslator implements TranslationContext {
         } else {
             item = new DataItem(name, kind, picture, null, parent, line);
             item.redefines(redefined);
+            if (kind == DataItem.Kind.NUMERIC) {
+                item.usage(usage);
+            }
+            if (kind == DataItem.Kind.GROUP && declaredUsage(g) != null) {
+                inheritedUsage.put(item, declared);
+            } else if (kind == DataItem.Kind.GROUP && parent != null && inheritedUsage.containsKey(parent)) {
+                inheritedUsage.put(item, inheritedUsage.get(parent));
+            }
             if (!g.getOccursClauses().isEmpty()) {
                 tables.add(new PendingTable(item, g));
             }
@@ -479,6 +534,7 @@ public final class ProgramTranslator implements TranslationContext {
                         g.getSignClause().isSeparate());
             }
             item.justified(g.getJustifiedClause() != null);
+            item.blankWhenZero(g.getBlankWhenZeroClause() != null);
             if (kind != DataItem.Kind.GROUP) {
                 String valueProblem = initialValue(item, g);
                 if (valueProblem != null) {
@@ -488,7 +544,7 @@ public final class ProgramTranslator implements TranslationContext {
         }
         items.put(e, item);
         // Every elementary item (FILLER too: its bytes are initialised) and every named group gets a view.
-        if (item.isAlphanumeric() || item.isNumeric() || (item.isGroup() && !item.isFiller())) {
+        if (item.isAlphanumeric() || item.isNumeric() || item.isEdited() || (item.isGroup() && !item.isFiller())) {
             item.javaName(allocateField(Names.fieldName(name)));
             fieldOrder.add(item);
         }
@@ -523,6 +579,19 @@ public final class ProgramTranslator implements TranslationContext {
             }
         }
         return null;
+    }
+
+    /**
+     * SYNCHRONIZED on a binary item: no slack bytes (GnuCOBOL's default) when the project says
+     * so; aligned layouts are not implemented.
+     */
+    private String synchronizedProblem(DataDescriptionEntryGroup g) {
+        try {
+            boolean align = require("sync_alignment", in.dialect().syncAlignment(), g.getCtx(), "SYNCHRONIZED");
+            return align ? "SYNCHRONIZED with slack bytes (Dialect.sync_alignment = true) is not supported" : null;
+        } catch (HandlerException e) {
+            return null;
+        }
     }
 
     /** SIGN only on signed numeric items, JUSTIFIED only on alphanumeric ones (as GnuCOBOL requires). */
@@ -573,7 +642,13 @@ public final class ProgramTranslator implements TranslationContext {
     private int layout(DataItem item, int offset) {
         int size = switch (item.kind()) {
             case ALPHANUMERIC -> item.alphanumeric().length();
-            case NUMERIC -> item.numeric().digits() + (item.signSeparate() ? 1 : 0);
+            case EDITED -> item.edited().length();
+            case NUMERIC -> switch (item.usage()) {
+                case DISPLAY -> item.numeric().digits() + (item.signSeparate() ? 1 : 0);
+                case PACKED -> item.numeric().digits() / 2 + 1;
+                case BINARY, NATIVE -> item.numeric().digits() <= 2 ? 1 : item.numeric().digits() <= 4 ? 2 : item.numeric().digits() <= 9 ? 4 : 8;
+                case INDEX -> 4;
+            };
             case GROUP -> {
                 int at = offset;
                 int end = offset;
@@ -647,18 +722,55 @@ public final class ProgramTranslator implements TranslationContext {
     }
 
     private static String unsupportedClauses(DataDescriptionEntryGroup g) {
-        UsageClause usage = g.getUsageClause();
-        if (usage != null && usage.getUsageClauseType() != UsageClause.UsageClauseType.DISPLAY) {
-            return "USAGE " + usage.getUsageClauseType() + " is not supported";
-        }
-        if (g.getBlankWhenZeroClause() != null) {
-            return "BLANK WHEN ZERO is not supported";
-        }
         if (g.getExternalClause() != null || g.getGlobalClause() != null) {
             return "EXTERNAL / GLOBAL is not supported";
         }
-        // SYNCHRONIZED has no effect on USAGE DISPLAY items (the only usage accepted here).
         return null;
+    }
+
+    /** The usage written on an entry, or null; COMP-X is read from the parse tree (a grammar extension). */
+    private static String declaredUsage(DataDescriptionEntryGroup g) {
+        UsageClause usage = g.getUsageClause();
+        if (usage == null) {
+            return null;
+        }
+        var ctx = (CobolParser.DataUsageClauseContext) usage.getCtx();
+        if (ctx.COMP_X() != null || ctx.COMPUTATIONAL_X() != null) {
+            return "COMP_X";
+        }
+        if (ctx.BINARY() != null && (ctx.TRUNCATED() != null || ctx.EXTENDED() != null)) {
+            return "BINARY_" + (ctx.TRUNCATED() != null ? "TRUNCATED" : "EXTENDED");
+        }
+        return usage.getUsageClauseType() == null ? ctx.getText() : usage.getUsageClauseType().name();
+    }
+
+    private static DataItem.Usage usage(String declared) {
+        return switch (declared) {
+            case "DISPLAY" -> DataItem.Usage.DISPLAY;
+            case "BINARY", "COMP", "COMP_4", "COMP_X" -> DataItem.Usage.BINARY;
+            case "COMP_3", "PACKED_DECIMAL" -> DataItem.Usage.PACKED;
+            case "COMP_5" -> DataItem.Usage.NATIVE;
+            case "INDEX" -> DataItem.Usage.INDEX;
+            default -> null;
+        };
+    }
+
+    /** Why a usage is not translated, or null. COMP-1/COMP-2 are binary floating point (saved for Jev). */
+    private static String usageProblem(String declared) {
+        return switch (declared) {
+            case "COMP_1", "COMP_2" -> "USAGE " + declared.replace('_', '-') + " (binary floating point) is not supported: results are not bit-exact";
+            case "POINTER", "PROCEDURE_POINTER", "FUNCTION_POINTER" -> "USAGE " + declared + " (addresses) is not supported";
+            default -> usage(declared) == null ? "USAGE " + declared + " is not supported" : null;
+        };
+    }
+
+    /** The usage an entry has: its own, else its group's. */
+    private String effectiveUsage(DataDescriptionEntryGroup g, DataItem parent) {
+        String own = declaredUsage(g);
+        if (own != null) {
+            return own;
+        }
+        return parent == null ? "DISPLAY" : inheritedUsage.getOrDefault(parent, "DISPLAY");
     }
 
     /**
@@ -720,6 +832,18 @@ public final class ProgramTranslator implements TranslationContext {
         } catch (HandlerException e) {
             // An unset dialect setting already has its decision.
             return e.kind() == HandlerException.Kind.DIALECT ? null : "VALUE " + e.getMessage();
+        }
+        if (item.isEdited()) {
+            switch (o) {
+                case Operand.AlphanumericLiteral a -> item.initialValue(a.value());
+                case Operand.NumericLiteral n when item.edited().numeric() -> item.initialNumber(n.value().toPlainString());
+                case Operand.Figurative f when f.isSingle() && !f.isZero() -> item.initialValue(repeat(f.pattern(), item.edited().length()));
+                case Operand.Figurative f when f.isZero() && item.edited().numeric() -> item.initialNumber("0");
+                default -> {
+                    return "VALUE " + o.category() + " for an edited item is not supported";
+                }
+            }
+            return null;
         }
         if (item.isAlphanumeric()) {
             switch (o) {
@@ -807,13 +931,16 @@ public final class ProgramTranslator implements TranslationContext {
             } else {
                 init = view(item, name(storageField(cls, record, storages, sizes)));
             }
-            var field = cls.addFieldWithInitializer(item.isNumeric() ? "NumericField" : "AlphanumericField",
-                    item.javaName(), init, Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL);
+            var field = cls.addFieldWithInitializer(javaType(item), item.javaName(), init, Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL);
             field.setLineComment(" " + item.cobolName() + " (line " + item.line() + ")");
         }
         for (DataItem item : accessors) {
             addAccessor(cls, item, storages.get(storageRoot(item.record())));
         }
+    }
+
+    private static String javaType(DataItem item) {
+        return item.isNumeric() ? "NumericField" : item.isEdited() ? "EditedField" : "AlphanumericField";
     }
 
     private String storageField(ClassOrInterfaceDeclaration cls, DataItem record, Map<DataItem, String> storages, Map<DataItem, Integer> sizes) {
@@ -835,7 +962,7 @@ public final class ProgramTranslator implements TranslationContext {
      */
     private void addAccessor(ClassOrInterfaceDeclaration cls, DataItem item, String storage) {
         MethodDeclaration m = cls.addMethod(item.javaName(), Modifier.Keyword.PRIVATE);
-        m.setType(item.isNumeric() ? "NumericField" : "AlphanumericField");
+        m.setType(javaType(item));
         m.setLineComment(" " + item.cobolName() + " (line " + item.line() + ")");
         List<DataItem> dims = item.dimensions();
         Expression offset = integer(item.offset());
@@ -878,7 +1005,7 @@ public final class ProgramTranslator implements TranslationContext {
                     BinaryExpr.Operator.PLUS);
         }
         Expression v = viewConstructor(item, name(storage), offset);
-        Statement body = stmt(item.initialValue() == null ? call(v, "initial") : call(v, "initial", str(item.initialValue())));
+        Statement body = stmt(initialCall(item, v));
         for (int d = dims.size() - 1; d >= 0; d--) {
             String i = "i" + (d + 1);
             body = new com.github.javaparser.ast.stmt.ForStmt(
@@ -893,17 +1020,27 @@ public final class ProgramTranslator implements TranslationContext {
         return init;
     }
 
-    private static Expression viewConstructor(DataItem item, Expression storage, Expression offset) {
+    private Expression viewConstructor(DataItem item, Expression storage, Expression offset) {
+        if (item.isEdited()) {
+            return create("EditedField", storage, offset, str(item.edited().picture()), Ast.bool(item.blankWhenZero()), Ast.bool(decimalComma));
+        }
         if (item.isAlphanumeric()) {
             return item.justified()
                     ? create("AlphanumericField", storage, offset, integer(item.size()), Ast.bool(true))
                     : create("AlphanumericField", storage, offset, integer(item.size()));
         }
         Picture.Numeric n = item.numeric();
-        return plain(item)
-                ? create("NumericField", storage, offset, integer(n.digits()), integer(n.scale()), Ast.bool(n.signed()))
-                : create("NumericField", storage, offset, integer(n.digits()), integer(n.scale()), Ast.bool(n.signed()),
-                        Ast.bool(item.signLeading()), Ast.bool(item.signSeparate()));
+        return switch (item.usage()) {
+            case PACKED -> staticCall("NumericField", "packed", storage, offset, integer(n.digits()), integer(n.scale()), Ast.bool(n.signed()));
+            case BINARY -> staticCall("NumericField", "binary", storage, offset, integer(n.digits()), integer(n.scale()), Ast.bool(n.signed()),
+                    Ast.bool(binaryTruncate));
+            case NATIVE -> staticCall("NumericField", "nativeBinary", storage, offset, integer(n.digits()), integer(n.scale()), Ast.bool(n.signed()));
+            case INDEX -> staticCall("NumericField", "index", storage, offset);
+            case DISPLAY -> !item.signLeading() && !item.signSeparate()
+                    ? create("NumericField", storage, offset, integer(n.digits()), integer(n.scale()), Ast.bool(n.signed()))
+                    : create("NumericField", storage, offset, integer(n.digits()), integer(n.scale()), Ast.bool(n.signed()),
+                            Ast.bool(item.signLeading()), Ast.bool(item.signSeparate()));
+        };
     }
 
     /** The record whose storage a level-01 item uses (following REDEFINES). */
@@ -915,9 +1052,10 @@ public final class ProgramTranslator implements TranslationContext {
         return r;
     }
 
-    /** No clause that needs the full view constructor. */
+    /** No clause or usage that needs the full view constructor. */
     private static boolean plain(DataItem item) {
-        return !item.justified() && !item.signLeading() && !item.signSeparate();
+        return !item.justified() && !item.signLeading() && !item.signSeparate() && !item.isEdited()
+                && (!item.isNumeric() || item.usage() == DataItem.Usage.DISPLAY);
     }
 
     private static Expression standalone(DataItem item) {
@@ -932,7 +1070,7 @@ public final class ProgramTranslator implements TranslationContext {
                 : create("NumericField", integer(n.digits()), integer(n.scale()), Ast.bool(n.signed()), str(item.initialValue()));
     }
 
-    private static Expression view(DataItem item, Expression storage) {
+    private Expression view(DataItem item, Expression storage) {
         if (item.isGroup()) {
             // Group bytes are initialised through its elementary items.
             return create("AlphanumericField", storage, integer(item.offset()), integer(Math.max(1, item.size())));
@@ -941,7 +1079,14 @@ public final class ProgramTranslator implements TranslationContext {
         if (item.inRedefines()) {
             return v;
         }
-        return item.initialValue() == null ? call(v, "initial") : call(v, "initial", str(item.initialValue()));
+        return initialCall(item, v);
+    }
+
+    private static Expression initialCall(DataItem item, Expression view) {
+        if (item.initialValue() == null) {
+            return call(view, "initial");
+        }
+        return call(view, item.initialIsNumber() ? "initialNumber" : "initial", str(item.initialValue()));
     }
 
     // ------------------------------------------------------------ structure

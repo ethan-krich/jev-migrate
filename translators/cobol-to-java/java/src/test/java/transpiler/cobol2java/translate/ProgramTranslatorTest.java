@@ -91,7 +91,7 @@ class ProgramTranslatorTest {
 
     @Test
     void unsupportedConstructsBecomeDecisionsNotApproximations() throws Exception {
-        var r = translate(dir, program("01 F COMP-1.\n01 P PIC S9 COMP-3.\n01 N PIC 99.",
+        var r = translate(dir, program("01 F COMP-1.\n01 P POINTER.\n01 N PIC 99.",
                 "COMPUTE N = N / 2.", "GO TO X.", "X.", "    STOP RUN."), defaultRules());
         List<String> got = r.decisions().stream().map(d -> d.reason().wire() + ":" + d.operation()).toList();
         assertEquals(List.of("unsupported_construct:DATA", "unsupported_construct:DATA", "unsupported_construct:COMPUTE",

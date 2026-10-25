@@ -26,6 +26,9 @@ val grammarExtensions = mapOf(
     // INITIALIZE ... [WITH FILLER] [ALL TO VALUE] [REPLACING ...] [THEN TO DEFAULT] (COBOL 2002).
     "initializeStatement\n   : INITIALIZE identifier+ initializeReplacingPhrase?\n" to
         "initializeStatement\n   : INITIALIZE identifier+ (WITH? FILLER)? (ALL TO? VALUE)? THEN? initializeReplacingPhrase? (THEN? TO? DEFAULT)?\n",
+    // USAGE COMP-X / COMPUTATIONAL-X (Micro Focus / GnuCOBOL binary).
+    "COMP_5 : C O M P MINUSCHAR '5';\n" to "COMP_5 : C O M P MINUSCHAR '5';\nCOMP_X : C O M P MINUSCHAR X;\nCOMPUTATIONAL_X : C O M P U T A T I O N A L MINUSCHAR X;\n",
+    "| COMPUTATIONAL_5 | CONTROL_POINT |" to "| COMPUTATIONAL_5 | COMP_X | COMPUTATIONAL_X | CONTROL_POINT |",
 )
 
 val patchGrammar by tasks.registering {

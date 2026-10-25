@@ -14,9 +14,17 @@ public sealed interface Operand {
             this(item, List.of(), null);
         }
 
-        /** Alphanumeric data: a PIC X item, a group, or any reference modification. */
+        /**
+         * Alphanumeric data when sent or compared: a PIC X item, a group, an edited item, or any
+         * reference modification.
+         */
         public boolean alphanumeric() {
-            return refmod != null || item.isAlphanumeric() || item.isGroup();
+            return refmod != null || item.isAlphanumeric() || item.isGroup() || item.isEdited();
+        }
+
+        /** An edited item (not reference-modified): receives through its PICTURE. */
+        public boolean edited() {
+            return refmod == null && item.isEdited();
         }
 
         public boolean numeric() {

@@ -4,14 +4,18 @@ import java.util.Locale;
 import java.util.Optional;
 
 /**
- * The supported subset of PICTURE strings: {@code X(n)} alphanumeric and {@code [S]9(i)[V9(s)]}
- * zoned numeric. Edited, alphabetic, national and scaled ({@code P}) pictures are reported as
- * unsupported rather than approximated.
+ * The supported subset of PICTURE strings: {@code X(n)} / {@code A(n)} alphanumeric,
+ * {@code [S]9(i)[V9(s)]} numeric, numeric-edited ({@code Z * $ + - CR DB . , B 0 /} with
+ * {@code 9} and {@code V}) and alphanumeric-edited ({@code X A 9} with {@code B 0 /}). National
+ * and scaled ({@code P}) pictures are reported as unsupported rather than approximated.
  */
 public sealed interface Picture {
     record Alphanumeric(int length) implements Picture {}
 
     record Numeric(int digits, int scale, boolean signed) implements Picture {}
+
+    /** An edited picture with repetitions expanded; {@code length} is its size in bytes. */
+    record Edited(String picture, boolean numeric, int length) implements Picture {}
 
     /** Parses a picture string, or explains why it is outside the supported subset. */
     static Result parse(String raw) {
@@ -41,8 +45,11 @@ public sealed interface Picture {
             }
         }
         String s = expanded.toString();
-        if (s.chars().allMatch(c -> c == 'X')) {
+        if (s.chars().allMatch(c -> c == 'X' || c == 'A')) {
             return Result.of(new Alphanumeric(s.length()));
+        }
+        if (!s.matches("S?[9V]*")) {
+            return edited(raw, s);
         }
         boolean signed = false;
         int start = 0;
@@ -75,6 +82,35 @@ public sealed interface Picture {
             return Result.unsupported("PICTURE " + raw + " exceeds 38 digits");
         }
         return Result.of(new Numeric(digits, scale, signed));
+    }
+
+    private static Result edited(String raw, String s) {
+        if (s.contains("P")) {
+            return Result.unsupported("PICTURE " + raw + " uses P (scaling), which is not supported");
+        }
+        if (s.contains("N") || s.contains("E") || s.contains("S")) {
+            return Result.unsupported("PICTURE " + raw + " is outside the supported subset");
+        }
+        boolean alpha = s.contains("X") || s.contains("A");
+        String allowed = alpha ? "XA9B0/" : "9VZ*$+-CRDB.,0/";
+        for (char c : s.toCharArray()) {
+            if (allowed.indexOf(c) < 0) {
+                return Result.unsupported("PICTURE " + raw + " uses '" + c + "', which is outside the supported subset");
+            }
+        }
+        String noCrDb = s.replace("CR", "").replace("DB", "");
+        if (!alpha && (noCrDb.contains("C") || noCrDb.contains("R") || noCrDb.contains("D"))) {
+            return Result.unsupported("PICTURE " + raw + " is not a valid edited picture");
+        }
+        if (!alpha && s.matches("[+-]\\$\\$.*")) {
+            // GnuCOBOL 3.2 shows such a fixed sign inconsistently with the value.
+            return Result.unsupported("PICTURE " + raw + ": a fixed sign before a floating currency string is not supported");
+        }
+        if (!alpha && s.chars().filter(c -> c == '9' || c == 'Z' || c == '*' || c == '$' || c == '+' || c == '-').count() > 38) {
+            return Result.unsupported("PICTURE " + raw + " exceeds 38 digits");
+        }
+        int length = s.length() - (int) s.chars().filter(c -> c == 'V').count();
+        return Result.of(new Edited(s, !alpha, length));
     }
 
     record Result(Optional<Picture> picture, String unsupportedReason) {

@@ -105,6 +105,17 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("accept_datetime", "ACCEPT",
                 "ACCEPT FROM DATE [YYYYMMDD] / DAY [YYYYDDD] / DAY-OF-WEEK / TIME via the runtime Clock", Builtins::acceptDatetime));
         register(Handler.of("exhibit", "EXHIBIT", "EXHIBIT [NAMED] as GnuCOBOL: NAME = value for items", Builtins::exhibit));
+        register(Handler.of("move_to_edited", "MOVE",
+                "MOVE into a numeric-edited (PICTURE editing) or alphanumeric-edited (insertion) item", Builtins::moveToEdited));
+        register(Handler.of("move_from_edited", "MOVE",
+                "MOVE of a numeric-edited item to a numeric item: the value is de-edited", Builtins::moveFromEdited));
+        register(Handler.of("string", "STRING",
+                "STRING ... DELIMITED BY ... INTO [WITH POINTER] [ON OVERFLOW]", Builtins::stringStatement));
+        register(Handler.of("unstring", "UNSTRING",
+                "UNSTRING [DELIMITED BY [ALL] ... OR ...] INTO alphanumeric items [DELIMITER IN] [COUNT IN] [POINTER] [TALLYING]",
+                Builtins::unstring));
+        register(Handler.of("inspect", "INSPECT",
+                "INSPECT TALLYING / REPLACING / CONVERTING with BEFORE / AFTER INITIAL", Builtins::inspect));
         register(Handler.of("move_group", "MOVE",
                 "MOVE into a group item: the sending bytes as alphanumeric data, space-padded or cut", Builtins::moveToGroup));
         register(Handler.of("initialize", "INITIALIZE",
@@ -195,10 +206,51 @@ public final class Builtins implements MappingRegistry.Catalog {
 
     private static List<Statement> moveToAlphanumeric(OpUnit u, TranslationContext c) throws HandlerException {
         Operand target = moveTarget(u, c);
-        if (!(target instanceof Operand.Field t) || !t.alphanumeric() || (t.refmod() == null && t.item().isGroup())) {
+        if (!(target instanceof Operand.Field t) || !t.alphanumeric() || (t.refmod() == null && (t.item().isGroup() || t.item().isEdited()))) {
             throw HandlerException.notApplicable("receiver " + receiverName(u, target) + " is not alphanumeric");
         }
         return List.of(storeAlphanumeric(c.field(target), moveSource(u, c), c));
+    }
+
+    private static List<Statement> moveToEdited(OpUnit u, TranslationContext c) throws HandlerException {
+        Operand target = moveTarget(u, c);
+        if (!(target instanceof Operand.Field t) || !t.edited()) {
+            throw HandlerException.notApplicable("receiver " + receiverName(u, target) + " is not an edited item");
+        }
+        return List.of(storeEdited(c.field(target), t.item(), moveSource(u, c), c));
+    }
+
+    /** MOVE of {@code src} into an edited item (shared by MOVE and INITIALIZE). */
+    static Statement storeEdited(Expression field, DataItem target, Operand src, TranslationContext c) throws HandlerException {
+        if (target.edited().numeric()) {
+            return switch (src) {
+                case Operand.Field f when f.edited() && f.item().edited().numeric() -> stmt(call(field, "move", call(c.field(src), "value")));
+                case Operand.Field f when f.numeric() -> stmt(call(field, "move", c.field(src)));
+                case Operand.ReturnCode r -> stmt(call(field, "move", c.field(src)));
+                case Operand.NumericLiteral n -> stmt(call(field, "move", c.numeric(src)));
+                case Operand.Figurative f when f.isZero() -> stmt(call(field, "fill", chr('0')));
+                default -> throw HandlerException.unsupported("MOVE from " + src.category() + " to numeric-edited is not supported");
+            };
+        }
+        return switch (src) {
+            case Operand.Figurative f when f.isSingle() -> stmt(call(field, "fill", chr(f.fill())));
+            case Operand.Field f when f.alphanumeric() -> stmt(call(field, "set", call(c.field(src), "get")));
+            case Operand.Field f when f.integer() -> stmt(call(field, "set", call(c.field(src), "digits")));
+            case Operand.AlphanumericLiteral a -> stmt(call(field, "set", str(a.value())));
+            default -> throw HandlerException.unsupported("MOVE from " + src.category() + " to alphanumeric-edited is not supported");
+        };
+    }
+
+    private static List<Statement> moveFromEdited(OpUnit u, TranslationContext c) throws HandlerException {
+        Operand target = moveTarget(u, c);
+        Operand src = moveSource(u, c);
+        if (!(src instanceof Operand.Field s) || !s.edited() || !s.item().edited().numeric()) {
+            throw HandlerException.notApplicable("the sending item is not numeric-edited");
+        }
+        if (!(target instanceof Operand.ReturnCode || target instanceof Operand.Field t && t.numeric())) {
+            throw HandlerException.notApplicable("receiver " + receiverName(u, target) + " is not numeric");
+        }
+        return List.of(stmt(call(c.field(target), "move", call(c.field(src), "value"))));
     }
 
     /** A group receives the sending item's bytes unconverted (a numeric item's digits and sign as stored). */
@@ -606,7 +658,7 @@ public final class Builtins implements MappingRegistry.Catalog {
             throw HandlerException.notApplicable("ACCEPT FROM " + a.getAcceptType() + " is not standard input");
         }
         Operand target = c.operand(a.getAcceptCall());
-        if (!(target instanceof Operand.Field f) || !f.alphanumeric()) {
+        if (!(target instanceof Operand.Field f) || !f.alphanumeric() || f.edited()) {
             throw HandlerException.unsupported("ACCEPT into " + target.category() + " is not supported (only alphanumeric items)");
         }
         return List.of(stmt(call(c.receiving(target), "set", staticCall("Accept", "line"))));
@@ -1013,7 +1065,9 @@ public final class Builtins implements MappingRegistry.Catalog {
                     case ALPHANUMERIC -> "alphanumeric";
                     case NUMERIC -> "numeric";
                     // No supported item is alphabetic or edited, so these replace nothing.
-                    case ALPHABETIC, ALPHANUMERIC_EDITED, NUMERIC_EDITED -> by.getByType().name().toLowerCase(java.util.Locale.ROOT);
+                    case ALPHANUMERIC_EDITED, NUMERIC_EDITED -> by.getByType().name().toLowerCase(java.util.Locale.ROOT);
+                    // No item is alphabetic here (PIC A is treated as alphanumeric), so this replaces nothing.
+                    case ALPHABETIC -> "alphabetic";
                     default -> throw HandlerException.unsupported("INITIALIZE REPLACING " + by.getByType() + " is not supported");
                 };
                 replacing.put(category, c.operand(by.getValueStmt()));
@@ -1074,9 +1128,10 @@ public final class Builtins implements MappingRegistry.Catalog {
             store = stmt(call(field, "initial", str(e.initialValue())));
         } else if (replacing.containsKey(e.category())) {
             Operand v = replacing.get(e.category());
-            store = e.isAlphanumeric() ? storeAlphanumeric(field, v, c) : storeNumeric(field, v, c);
+            store = e.isEdited() ? storeEdited(field, e, v, c) : e.isAlphanumeric() ? storeAlphanumeric(field, v, c) : storeNumeric(field, v, c);
         } else if (defaults) {
-            store = stmt(e.isAlphanumeric() ? call(field, "fill", chr(' ')) : call(field, "move", decimal("0")));
+            store = stmt(e.isEdited() ? call(field, "fill", chr(e.edited().numeric() ? '0' : ' '))
+                    : e.isAlphanumeric() ? call(field, "fill", chr(' ')) : call(field, "move", decimal("0")));
         } else {
             return null;
         }
@@ -1101,10 +1156,16 @@ public final class Builtins implements MappingRegistry.Catalog {
             var op = by.getSetByType() == io.proleap.cobol.asg.metamodel.procedure.set.SetBy.SetByType.UP
                     ? AssignExpr.Operator.PLUS : AssignExpr.Operator.MINUS;
             for (var to : by.getTos()) {
-                if (!(c.operand(to.getToCall()) instanceof Operand.Index idx)) {
+                Operand r = c.operand(to.getToCall());
+                if (r instanceof Operand.Index idx) {
+                    out.add(stmt(new AssignExpr(name(idx.index().javaName()), amount.clone(), op)));
+                } else if (isIndexItem(r)) {
+                    Expression f = c.field(r);
+                    out.add(stmt(call(f, "move", call(call(f.clone(), "get"), op == AssignExpr.Operator.PLUS ? "add" : "subtract",
+                            staticCall("BigDecimal", "valueOf", amount.clone())))));
+                } else {
                     throw HandlerException.notApplicable("SET " + to.getToCall().getName() + " UP / DOWN BY: only indexes are supported");
                 }
-                out.add(stmt(new AssignExpr(name(idx.index().javaName()), amount.clone(), op)));
             }
             return out;
         }
@@ -1122,6 +1183,8 @@ public final class Builtins implements MappingRegistry.Catalog {
                 Operand r = c.operand(to.getToCall());
                 if (r instanceof Operand.Index idx) {
                     out.add(stmt(new AssignExpr(name(idx.index().javaName()), intValue(v, c), AssignExpr.Operator.ASSIGN)));
+                } else if (isIndexItem(r)) {
+                    out.add(stmt(call(c.field(r), "move", staticCall("BigDecimal", "valueOf", intValue(v, c)))));
                 } else if (r instanceof Operand.Field f && f.integer() && v instanceof Operand.Index idx) {
                     out.add(stmt(call(c.field(f), "move", staticCall("BigDecimal", "valueOf", name(idx.index().javaName())))));
                 } else {
@@ -1131,6 +1194,11 @@ public final class Builtins implements MappingRegistry.Catalog {
             }
         }
         return out;
+    }
+
+    /** A USAGE INDEX data item. */
+    private static boolean isIndexItem(Operand o) {
+        return o instanceof Operand.Field f && f.numeric() && f.item().usage() == DataItem.Usage.INDEX;
     }
 
     // ------------------------------------------------------------- SEARCH
@@ -1292,5 +1360,290 @@ public final class Builtins implements MappingRegistry.Catalog {
         body.addStatement(new WhileStmt(new BinaryExpr(name(low), name(high), BinaryExpr.Operator.LESS_EQUALS), loop));
         atEnd.getStatements().forEach(body::addStatement);
         return List.of(new LabeledStmt(label, body));
+    }
+
+    // ------------------------------------------------- STRING / UNSTRING / INSPECT
+
+    /** Character data of a sending operand: alphanumeric items, literals, a figurative constant's character, unsigned integers' digits. */
+    private static Expression text(Operand o, TranslationContext c) throws HandlerException {
+        return switch (o) {
+            case Operand.Field f when f.alphanumeric() -> call(c.field(o), "get");
+            case Operand.Field f when f.integer() && !f.item().numeric().signed() && f.item().usage() == DataItem.Usage.DISPLAY ->
+                    call(c.field(o), "bytes");
+            case Operand.AlphanumericLiteral a -> str(a.value());
+            case Operand.Figurative f when f.isSingle() -> str(f.pattern());
+            case Operand.Figurative f -> str(f.pattern());
+            default -> throw HandlerException.unsupported(o.category() + " as character data is not supported");
+        };
+    }
+
+    /** A POINTER / COUNT / TALLYING item: an unsubscripted-or-not integer numeric item. */
+    private static Expression integerItem(Call call, TranslationContext c) throws HandlerException {
+        Operand o = c.operand(call);
+        if (!(o instanceof Operand.Field f) || !f.integer()) {
+            throw HandlerException.unsupported(call.getName() + " must be an integer numeric item");
+        }
+        return c.field(o);
+    }
+
+    /** An alphanumeric item (or group) changed in place by STRING / INSPECT. */
+    private static Expression alphanumericTarget(Call call, TranslationContext c) throws HandlerException {
+        Operand o = c.operand(call);
+        if (!(o instanceof Operand.Field f) || !f.alphanumeric() || f.edited()) {
+            throw HandlerException.unsupported(call.getName() + " must be an alphanumeric item or group");
+        }
+        return c.field(o);
+    }
+
+    private static List<Statement> overflowPhrases(Expression overflow, ASGElement on, ASGElement notOn, TranslationContext c) {
+        if (on == null && notOn == null) {
+            return List.of(stmt(overflow));
+        }
+        String flag = c.fresh("overflow");
+        return List.of(declare(Ast.booleanType(), flag, overflow),
+                new IfStmt(name(flag), on == null ? new BlockStmt() : c.nested((Scope) on), notOn == null ? null : c.nested((Scope) notOn)));
+    }
+
+    private static List<Statement> stringStatement(OpUnit u, TranslationContext c) throws HandlerException {
+        var s = (io.proleap.cobol.asg.metamodel.procedure.string.StringStatement) u.statement();
+        Expression target = alphanumericTarget(s.getIntoPhrase().getIntoCall(), c);
+        Expression pointer = s.getWithPointerPhrase() == null ? new com.github.javaparser.ast.expr.NullLiteralExpr()
+                : integerItem(s.getWithPointerPhrase().getPointerCall(), c);
+        Expression chain = create("StringOps.Concat", target, pointer);
+        for (var sendings : s.getSendings()) {
+            Expression delimiter;
+            if (sendings.getSendingsType() != io.proleap.cobol.asg.metamodel.procedure.string.Sendings.SendingsType.DELIMITED_BY) {
+                throw HandlerException.unsupported("STRING ... FOR is not supported");
+            }
+            var by = sendings.getDelimitedByPhrase();
+            delimiter = by.getDelimitedByType() == io.proleap.cobol.asg.metamodel.procedure.string.DelimitedByPhrase.DelimitedByType.SIZE
+                    ? new com.github.javaparser.ast.expr.NullLiteralExpr() : text(c.operand(by.getCharactersValueStmt()), c);
+            for (ValueStmt v : sendings.getSendingValueStmts()) {
+                chain = call(chain, "add", text(c.operand(v), c), delimiter.clone());
+            }
+        }
+        return overflowPhrases(call(chain, "end"), s.getOnOverflowPhrase(), s.getNotOnOverflowPhrase(), c);
+    }
+
+    private static List<Statement> unstring(OpUnit u, TranslationContext c) throws HandlerException {
+        var s = (io.proleap.cobol.asg.metamodel.procedure.unstring.UnstringStatement) u.statement();
+        var sending = s.getSending();
+        Operand source = c.operand(sending.getSendingCall());
+        if (!(source instanceof Operand.Field sf) || !sf.alphanumeric()) {
+            throw HandlerException.unsupported("UNSTRING of " + source.category() + " is not supported");
+        }
+        NodeList<Expression> delimiters = new NodeList<>();
+        NodeList<Expression> all = new NodeList<>();
+        if (sending.getDelimitedByPhrase() != null) {
+            var by = sending.getDelimitedByPhrase();
+            delimiters.add(text(c.operand(by.getDelimitedByValueStmt()), c));
+            all.add(bool(((io.proleap.cobol.CobolParser.UnstringDelimitedByPhraseContext) by.getCtx()).ALL() != null));
+            for (var or : sending.getOrAlls()) {
+                delimiters.add(text(c.operand(or.getOrAllValueStmt()), c));
+                all.add(bool(((io.proleap.cobol.CobolParser.UnstringOrAllPhraseContext) or.getCtx()).ALL() != null));
+            }
+        }
+        boolean delimited = !delimiters.isEmpty();
+        String u1 = c.fresh("unstring");
+        List<Statement> out = new ArrayList<>();
+        Expression pointer = s.getWithPointerPhrase() == null ? new com.github.javaparser.ast.expr.NullLiteralExpr()
+                : integerItem(s.getWithPointerPhrase().getPointerCall(), c);
+        out.add(declare(type("StringOps.Unstring"), u1, create("StringOps.Unstring", call(c.field(source), "get"), pointer,
+                new com.github.javaparser.ast.expr.ArrayCreationExpr(type("String"), NodeList.nodeList(new com.github.javaparser.ast.ArrayCreationLevel()),
+                        new com.github.javaparser.ast.expr.ArrayInitializerExpr(delimiters)),
+                new com.github.javaparser.ast.expr.ArrayCreationExpr(Ast.booleanType(), NodeList.nodeList(new com.github.javaparser.ast.ArrayCreationLevel()),
+                        new com.github.javaparser.ast.expr.ArrayInitializerExpr(all)))));
+        for (var into : s.getIntoPhrase().getIntos()) {
+            Operand r = c.operand(into.getIntoCall());
+            if (!(r instanceof Operand.Field rf) || !rf.alphanumeric() || rf.edited()) {
+                throw HandlerException.unsupported("UNSTRING INTO " + r.category() + " is not supported (only alphanumeric receivers)");
+            }
+            Expression field = c.field(r);
+            BlockStmt then = new BlockStmt();
+            then.addStatement(stmt(call(field, "set", call(name(u1), "data"))));
+            if (into.getDelimiterIn() != null) {
+                if (!delimited) {
+                    throw HandlerException.unsupported("DELIMITER IN without DELIMITED BY");
+                }
+                then.addStatement(stmt(call(alphanumericTarget(into.getDelimiterIn().getDelimiterInCall(), c), "set", call(name(u1), "delimiter"))));
+            }
+            if (into.getCountIn() != null) {
+                then.addStatement(stmt(call(integerItem(into.getCountIn().getCountInCall(), c), "move",
+                        staticCall("BigDecimal", "valueOf", call(name(u1), "count")))));
+            }
+            Expression next = delimited ? call(name(u1), "next") : call(name(u1), "next", call(field.clone(), "length"));
+            out.add(new IfStmt(next, then, null));
+        }
+        if (s.getTallyingPhrase() != null) {
+            Expression t = integerItem(s.getTallyingPhrase().getTallyCountDataItemCall(), c);
+            out.add(stmt(call(t, "store", call(call(t.clone(), "get"), "add", staticCall("BigDecimal", "valueOf", call(name(u1), "fields"))),
+                    bool(false), bool(false))));
+        }
+        out.addAll(overflowPhrases(call(name(u1), "end"), s.getOnOverflowPhrase(), s.getNotOnOverflowPhrase(), c));
+        return out;
+    }
+
+    /** BEFORE / AFTER INITIAL operands as {before, after} (null when absent). */
+    private static Expression[] region(List<io.proleap.cobol.asg.metamodel.procedure.inspect.BeforeAfterPhrase> phrases,
+            TranslationContext c) throws HandlerException {
+        Expression before = new com.github.javaparser.ast.expr.NullLiteralExpr();
+        Expression after = new com.github.javaparser.ast.expr.NullLiteralExpr();
+        for (var p : phrases) {
+            Expression v = text(c.operand(p.getDataItemValueStmt()), c);
+            if (p.getBeforeAfterType() == io.proleap.cobol.asg.metamodel.procedure.inspect.BeforeAfterPhrase.BeforeAfterType.BEFORE) {
+                before = v;
+            } else {
+                after = v;
+            }
+        }
+        return new Expression[] {before, after};
+    }
+
+    /** A replacement as long as its pattern: a figurative constant is repeated to that length. */
+    private static Expression replacement(ValueStmt by, Expression pattern, int patternLength, TranslationContext c) throws HandlerException {
+        Operand o = c.operand(by);
+        if (o instanceof Operand.Figurative f) {
+            if (patternLength < 0) {
+                throw HandlerException.unsupported("INSPECT REPLACING BY a figurative constant with a variable-length pattern");
+            }
+            return str(Compare_repeat(f.pattern(), patternLength));
+        }
+        return text(o, c);
+    }
+
+    private static String Compare_repeat(String pattern, int length) {
+        StringBuilder sb = new StringBuilder(length);
+        for (int i = 0; i < length; i++) {
+            sb.append(pattern.charAt(i % pattern.length()));
+        }
+        return sb.toString();
+    }
+
+    private static int literalLength(ValueStmt v, TranslationContext c) throws HandlerException {
+        Operand o = c.operand(v);
+        return switch (o) {
+            case Operand.AlphanumericLiteral a -> a.value().length();
+            case Operand.Figurative f -> f.pattern().length();
+            case Operand.Field f when f.refmod() == null && (f.item().isAlphanumeric() || f.item().isGroup()) -> f.item().size();
+            default -> -1;
+        };
+    }
+
+    private static List<Statement> inspect(OpUnit u, TranslationContext c) throws HandlerException {
+        var s = (io.proleap.cobol.asg.metamodel.procedure.inspect.InspectStatement) u.statement();
+        Operand item = c.operand(s.getDataItemCall());
+        boolean changes = s.getInspectType() != io.proleap.cobol.asg.metamodel.procedure.inspect.InspectStatement.InspectType.TALLYING;
+        Expression value;
+        if (item instanceof Operand.Field f && f.alphanumeric() && !f.edited()) {
+            value = call(c.field(item), "get");
+        } else if (!changes && item instanceof Operand.Field f && f.numeric() && f.item().usage() == DataItem.Usage.DISPLAY) {
+            value = call(c.field(item), "bytes");
+        } else {
+            throw HandlerException.unsupported("INSPECT " + (changes ? "REPLACING / CONVERTING " : "") + "of " + item.category() + " is not supported");
+        }
+        List<Statement> out = new ArrayList<>();
+        switch (s.getInspectType()) {
+            case TALLYING -> tallying(s.getTallying().getFors(), value, out, c);
+            case REPLACING -> out.add(stmt(call(c.field(item), "set", replacing(List.of(s.getReplacing()), value, c))));
+            case TALLYING_REPLACING -> {
+                tallying(s.getTallyingReplacing().getFors(), value, out, c);
+                out.add(stmt(call(c.field(item), "set", replacing(s.getTallyingReplacing().getReplacings(), value.clone(), c))));
+            }
+            case CONVERTING -> {
+                var conv = s.getConverting();
+                Expression[] r = region(conv.getBeforeAfterPhrases(), c);
+                out.add(stmt(call(c.field(item), "set", call(create("StringOps.Inspect", value), "convert",
+                        text(c.operand(conv.getFromValueStmt()), c), text(c.operand(conv.getTo().getToValueStmt()), c), r[0], r[1]))));
+            }
+        }
+        return out;
+    }
+
+    /** A comparand with its place in the source, so the INSPECT order survives ProLeap's grouping. */
+    private record Ordered(int token, ASGElement element, String kind) {}
+
+    private static void tallying(List<io.proleap.cobol.asg.metamodel.procedure.inspect.For> fors, Expression value, List<Statement> out,
+            TranslationContext c) throws HandlerException {
+        List<Expression> counters = new ArrayList<>();
+        List<Ordered> comparands = new ArrayList<>();
+        Map<ASGElement, Integer> counterOf = new java.util.IdentityHashMap<>();
+        for (var f : fors) {
+            int index = counters.size();
+            counters.add(integerItem(f.getTallyCountDataItemCall(), c));
+            for (var ch : f.getCharacters()) {
+                comparands.add(new Ordered(ch.getCtx().getStart().getTokenIndex(), ch, "CHARACTERS"));
+                counterOf.put(ch, index);
+            }
+            for (var phrase : f.getAllLeadingPhrase()) {
+                for (var al : phrase.getAllLeadings()) {
+                    comparands.add(new Ordered(al.getCtx().getStart().getTokenIndex(), al, phrase.getAllLeadingsType().name()));
+                    counterOf.put(al, index);
+                }
+            }
+        }
+        comparands.sort(java.util.Comparator.comparingInt(Ordered::token));
+        Expression chain = create("StringOps.Inspect", value);
+        for (Ordered o : comparands) {
+            int counter = counterOf.get(o.element());
+            if (o.element() instanceof io.proleap.cobol.asg.metamodel.procedure.inspect.Characters ch) {
+                Expression[] r = region(ch.getBeforeAfterPhrases(), c);
+                chain = call(chain, "tallyCharacters", integer(counter), r[0], r[1]);
+            } else {
+                var al = (io.proleap.cobol.asg.metamodel.procedure.inspect.AllLeading) o.element();
+                Expression[] r = region(al.getBeforeAfterPhrases(), c);
+                chain = call(chain, o.kind().equals("ALL") ? "tallyAll" : "tallyLeading", integer(counter),
+                        text(c.operand(al.getPatternDataItemValueStmt()), c), r[0], r[1]);
+            }
+        }
+        String counts = c.fresh("tally");
+        out.add(declare(new com.github.javaparser.ast.type.ArrayType(Ast.intType()), counts, call(chain, "tally", integer(counters.size()))));
+        for (int i = 0; i < counters.size(); i++) {
+            Expression cnt = counters.get(i);
+            out.add(stmt(call(cnt, "store", call(call(cnt.clone(), "get"), "add",
+                    staticCall("BigDecimal", "valueOf", new com.github.javaparser.ast.expr.ArrayAccessExpr(name(counts), integer(i)))),
+                    bool(false), bool(false))));
+        }
+    }
+
+    private static Expression replacing(List<io.proleap.cobol.asg.metamodel.procedure.inspect.Replacing> replacings, Expression value,
+            TranslationContext c) throws HandlerException {
+        List<Ordered> comparands = new ArrayList<>();
+        for (var rep : replacings) {
+            for (var ch : rep.getCharacters()) {
+                comparands.add(new Ordered(ch.getCtx().getStart().getTokenIndex(), ch, "CHARACTERS"));
+            }
+            for (var phrase : rep.getAllLeadings()) {
+                for (var al : phrase.getAllLeadings()) {
+                    comparands.add(new Ordered(al.getCtx().getStart().getTokenIndex(), al, phrase.getReplacingAllLeadingsType().name()));
+                }
+            }
+        }
+        comparands.sort(java.util.Comparator.comparingInt(Ordered::token));
+        Expression chain = create("StringOps.Inspect", value);
+        for (Ordered o : comparands) {
+            if (o.element() instanceof io.proleap.cobol.asg.metamodel.procedure.inspect.ReplacingCharacters ch) {
+                Expression[] r = region(ch.getBeforeAfterPhrases(), c);
+                if (literalLength(ch.getBy().getByValueStmt(), c) != 1 && !(c.operand(ch.getBy().getByValueStmt()) instanceof Operand.Figurative)) {
+                    throw HandlerException.unsupported("REPLACING CHARACTERS BY needs a single character");
+                }
+                chain = call(chain, "replaceCharacters", replacement(ch.getBy().getByValueStmt(), null, 1, c), r[0], r[1]);
+            } else {
+                var al = (io.proleap.cobol.asg.metamodel.procedure.inspect.ReplacingAllLeading) o.element();
+                Expression[] r = region(al.getBeforeAfterPhrases(), c);
+                int length = literalLength(al.getPatternDataItemValueStmt(), c);
+                int byLength = literalLength(al.getBy().getByValueStmt(), c);
+                if (length < 0 || (byLength >= 0 && byLength != length && !(c.operand(al.getBy().getByValueStmt()) instanceof Operand.Figurative))) {
+                    throw HandlerException.unsupported("INSPECT REPLACING needs a pattern and replacement of the same, known length");
+                }
+                String method = switch (o.kind()) {
+                    case "ALL" -> "replaceAll";
+                    case "LEADING" -> "replaceLeading";
+                    default -> "replaceFirst";
+                };
+                chain = call(chain, method, text(c.operand(al.getPatternDataItemValueStmt()), c),
+                        replacement(al.getBy().getByValueStmt(), null, length, c), r[0], r[1]);
+            }
+        }
+        return call(chain, "replace");
     }
 }

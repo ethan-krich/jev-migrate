@@ -28,7 +28,12 @@ public final class Ast {
         return new NameExpr(name);
     }
 
+    /** A class type; {@code Outer.Inner} is built as a scoped type, so import pruning sees {@code Outer}. */
     public static ClassOrInterfaceType type(String simpleName) {
+        int dot = simpleName.lastIndexOf('.');
+        if (dot > 0) {
+            return new ClassOrInterfaceType(type(simpleName.substring(0, dot)), simpleName.substring(dot + 1));
+        }
         return new ClassOrInterfaceType(null, simpleName);
     }
 

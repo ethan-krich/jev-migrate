@@ -9,7 +9,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 class PictureTest {
     @ParameterizedTest
-    @CsvSource({"X(10), 10", "XXX, 3", "x(2)X, 3"})
+    @CsvSource({"X(10), 10", "XXX, 3", "x(2)X, 3", "A(3), 3"})
     void alphanumeric(String pic, int length) {
         assertEquals(new Picture.Alphanumeric(length), Picture.parse(pic).picture().orElseThrow());
     }
@@ -21,7 +21,14 @@ class PictureTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"ZZ9", "9(3).99", "A(3)", "N(2)", "99PP", "-999", "S", "9(0)", "9(40)", "X(", "$9"})
+    @CsvSource({"ZZ9, ZZ9, true, 3", "'Z,ZZ9.99', 'Z,ZZ9.99', true, 8", "$(3)9CR, $$$9CR, true, 6",
+        "XXBX/X, XXBX/X, false, 6"})
+    void edited(String pic, String expanded, boolean numeric, int length) {
+        assertEquals(new Picture.Edited(expanded, numeric, length), Picture.parse(pic).picture().orElseThrow());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"N(2)", "99PP", "S", "9(0)", "9(40)", "X(", "-$$9.99", "S9.99", "ZZ9Q"})
     void outsideTheSubsetIsUnsupported(String pic) {
         var r = Picture.parse(pic);
         assertTrue(r.picture().isEmpty());

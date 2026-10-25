@@ -7,7 +7,10 @@ import transpiler.cobol2java.cobol.Picture;
 /** A WORKING-STORAGE entry and the Java field that represents it (if any). */
 public final class DataItem {
     /** CONDITION is a level-88 condition-name on its (elementary) parent; CONSTANT a level-78 name. */
-    public enum Kind { ALPHANUMERIC, NUMERIC, GROUP, CONDITION, CONSTANT, UNSUPPORTED }
+    public enum Kind { ALPHANUMERIC, NUMERIC, EDITED, GROUP, CONDITION, CONSTANT, UNSUPPORTED }
+
+    /** How a numeric item is stored: zoned, packed, big-endian binary, native binary, or an index data item. */
+    public enum Usage { DISPLAY, PACKED, BINARY, NATIVE, INDEX }
 
     /** An INDEXED BY name of a table: an occurrence number held in a Java {@code int}. */
     public record IndexName(String cobolName, String javaName, DataItem table) {}
@@ -36,6 +39,9 @@ public final class DataItem {
     private boolean justified;
     private DataItem redefines;
     private Operand constant;
+    private Usage usage = Usage.DISPLAY;
+    private boolean blankWhenZero;
+    private boolean initialIsNumber;
     private int occurs;
     private int occursMin;
     private DataItem dependingOn;
@@ -68,6 +74,23 @@ public final class DataItem {
 
     public boolean isNumeric() {
         return kind == Kind.NUMERIC;
+    }
+
+    public boolean isEdited() {
+        return kind == Kind.EDITED;
+    }
+
+    public Picture.Edited edited() {
+        return (Picture.Edited) picture;
+    }
+
+    /** Whether BLANK WHEN ZERO applies (only to numeric-edited items). */
+    public boolean blankWhenZero() {
+        return blankWhenZero;
+    }
+
+    void blankWhenZero(boolean b) {
+        this.blankWhenZero = b;
     }
 
     public boolean isCondition() {
@@ -147,6 +170,14 @@ public final class DataItem {
     void layout(int offset, int size) {
         this.offset = offset;
         this.size = size;
+    }
+
+    public Usage usage() {
+        return usage;
+    }
+
+    void usage(Usage usage) {
+        this.usage = usage;
     }
 
     public boolean signLeading() {
@@ -276,14 +307,18 @@ public final class DataItem {
     private static void collectElementary(DataItem item, List<DataItem> out) {
         if (item.isGroup()) {
             item.children.forEach(c -> collectElementary(c, out));
-        } else if (item.kind == Kind.ALPHANUMERIC || item.kind == Kind.NUMERIC || item.kind == Kind.UNSUPPORTED) {
+        } else if (item.kind == Kind.ALPHANUMERIC || item.kind == Kind.NUMERIC || item.kind == Kind.EDITED || item.kind == Kind.UNSUPPORTED) {
             out.add(item);
         }
     }
 
-    /** A signed zoned item with an embedded sign: its bytes differ between ASCII and EBCDIC sign conventions. */
+    /**
+     * Items whose bytes differ between GnuCOBOL on ASCII / little-endian hardware and an EBCDIC
+     * mainframe: zoned items with an embedded sign, and native-order binary (COMP-5, INDEX).
+     */
     public boolean encodingSensitive() {
-        return isNumeric() && numeric().signed() && !signSeparate;
+        return isNumeric() && ((usage == Usage.DISPLAY && numeric().signed() && !signSeparate)
+                || usage == Usage.NATIVE || usage == Usage.INDEX);
     }
 
     public String javaName() {
@@ -303,11 +338,22 @@ public final class DataItem {
         this.initialValue = value;
     }
 
+    /** For an edited item: whether {@link #initialValue()} is a numeric literal (edited) rather than stored as is. */
+    public boolean initialIsNumber() {
+        return initialIsNumber;
+    }
+
+    void initialNumber(String value) {
+        this.initialValue = value;
+        this.initialIsNumber = true;
+    }
+
     /** "alphanumeric" / "numeric" / "group" / "condition" - the category exposed to mapping conditions. */
     public String category() {
         return switch (kind) {
             case ALPHANUMERIC -> "alphanumeric";
             case NUMERIC -> "numeric";
+            case EDITED -> edited().numeric() ? "numeric_edited" : "alphanumeric_edited";
             case GROUP -> "group";
             case CONDITION -> "condition";
             case CONSTANT -> "constant";

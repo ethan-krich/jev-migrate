@@ -1,6 +1,7 @@
 package transpiler.cobol2java.session;
 
-import com.github.javaparser.StaticJavaParser;
+import com.github.javaparser.JavaParser;
+import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.ast.CompilationUnit;
 import java.io.IOException;
 import java.io.InputStream;
@@ -16,8 +17,8 @@ public final class RuntimeSources {
 
     /** Kept in sync with runtime/src/main/java by RuntimeSourcesTest. */
     public static final List<String> CLASSES = List.of(
-            "Accept", "AlphanumericField", "Arithmetic", "Bounds", "Clock", "CobolProgram", "Compare", "Display", "Goback",
-            "NumericField", "ProgramSupport", "StopRun", "Storage");
+            "Accept", "AlphanumericField", "Arithmetic", "Bounds", "Clock", "CobolProgram", "Compare", "Display", "EditedField", "Goback",
+            "NumericField", "ProgramSupport", "StopRun", "Storage", "StringOps");
 
     private RuntimeSources() {}
 
@@ -30,7 +31,8 @@ public final class RuntimeSources {
                 if (in == null) {
                     throw new IllegalStateException("runtime source missing from worker: " + resource);
                 }
-                CompilationUnit cu = StaticJavaParser.parse(new String(in.readAllBytes(), StandardCharsets.UTF_8));
+                CompilationUnit cu = new JavaParser(new ParserConfiguration().setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21))
+                        .parse(new String(in.readAllBytes(), StandardCharsets.UTF_8)).getResult().orElseThrow();
                 cu.setPackageDeclaration(targetPackage);
                 out.put(cls, cu.toString());
             } catch (IOException e) {
