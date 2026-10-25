@@ -1,0 +1,8 @@
+{
+  "description": "DECLARATIVES: USE AFTER ERROR / EXCEPTION procedures for a file and for OPEN modes, with paragraphs; they run for exceptions the statement's own AT END / INVALID KEY phrase does not handle, then control continues after the statement",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native",
+              "file_assignments": {"in.txt": "in.txt", "out.txt": "out.txt", "nope.txt": "nope.txt", "keyed.dat": "keyed.dat"}},
+  "equivalence": {"programs": ["DECLS.cbl"], "main_class": "fixtures.declaratives.Decls"},
+  "layout": {"base_package": "fixtures.declaratives"}
+}

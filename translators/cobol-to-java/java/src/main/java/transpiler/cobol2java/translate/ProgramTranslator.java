@@ -1850,17 +1850,21 @@ public final class ProgramTranslator implements TranslationContext {
         if (pd.getGivingClause() != null) {
             dataDecision(pd.getCtx(), "PROCEDURE", "PROCEDURE DIVISION RETURNING is not supported");
         }
-        if (pd.getDeclaratives() != null) {
-            dataDecision(pd.getDeclaratives().getCtx(), "PROCEDURE", "DECLARATIVES are not supported");
-        }
         scanProcedures(pd);
         if (dispatcher) {
+            if (pd.getDeclaratives() != null) {
+                dataDecision(pd.getDeclaratives().getCtx(), "PROCEDURE", "DECLARATIVES in a program with GO TO, PERFORM THRU or ALTER are not supported");
+            }
             addDispatcher(cls, pd, body);
             return;
         }
+        // ProLeap attaches the paragraphs and sentences of declarative sections to the PROCEDURE DIVISION itself.
+        ParserRuleContext declarativesCtx = pd.getDeclaratives() == null ? null : pd.getDeclaratives().getCtx();
+        java.util.function.Predicate<ParserRuleContext> mainCode = ctx -> declarativesCtx == null || !within(ctx, declarativesCtx);
+        List<Paragraph> rootParagraphs = pd.getRootParagraphs().stream().filter(p -> mainCode.test(p.getCtx())).toList();
         // Allocate method names first so PERFORM can reference later paragraphs.
         Set<String> methodNames = new HashSet<>(Set.of("procedureDivision", "returnCode", "instance", "main"));
-        for (Paragraph p : pd.getRootParagraphs()) {
+        for (Paragraph p : rootParagraphs) {
             procedureMethods.put(p, unique(methodNames, Names.methodName("para", p.getName())));
         }
         for (Section s : pd.getSections()) {
@@ -1869,9 +1873,12 @@ public final class ProgramTranslator implements TranslationContext {
                 procedureMethods.put(p, unique(methodNames, Names.methodName("para", p.getName())));
             }
         }
-        translateInto(pd, body);
+        if (pd.getDeclaratives() != null) {
+            addDeclaratives(cls, pd, methodNames);
+        }
+        translateInto(pd, body, mainCode);
         // Control falls through paragraphs and sections in source order.
-        for (Paragraph p : pd.getRootParagraphs()) {
+        for (Paragraph p : rootParagraphs) {
             body.addStatement(stmt(thisCall(procedureMethods.get(p))));
             addProcedureMethod(cls, p, null, procedureMethods.get(p), new BlockStmt());
         }
@@ -1888,6 +1895,100 @@ public final class ProgramTranslator implements TranslationContext {
                         ? new IfStmt(thisCall(procedureMethods.get(p)), new ReturnStmt(), null)
                         : stmt(thisCall(procedureMethods.get(p))));
             }
+        }
+    }
+
+    private static boolean within(ParserRuleContext ctx, ParserRuleContext outer) {
+        int i = ctx.getStart().getTokenIndex();
+        return i >= outer.getStart().getTokenIndex() && i <= outer.getStop().getTokenIndex();
+    }
+
+    /**
+     * DECLARATIVES: each USE AFTER ERROR section becomes a method, run by the runtime when a file
+     * statement ends with an exception its own phrases do not handle (FileBase.onError): the
+     * section for the file, else the one for the mode of the file's last OPEN.
+     */
+    private void addDeclaratives(ClassOrInterfaceDeclaration cls, ProcedureDivision pd, Set<String> methodNames) {
+        Map<String, String> byFile = new LinkedHashMap<>();
+        Map<String, String> byMode = new LinkedHashMap<>();
+        List<Object[]> sections = new ArrayList<>();
+        for (var d : pd.getDeclaratives().getDeclaratives()) {
+            var dctx = (CobolParser.ProcedureDeclarativeContext) d.getCtx();
+            String method = unique(methodNames, Names.methodName("use", dctx.procedureSectionHeader().sectionName().getText()));
+            var use = d.getUseStament();
+            if (use == null || use.getUseType() != io.proleap.cobol.asg.metamodel.procedure.use.UseStatement.UseType.AFTER
+                    || use.getUseAfterStatement().isGlobal()) {
+                dataDecision(dctx.useStatement(), "PROCEDURE", words(dctx.useStatement()) + " is not supported (only USE AFTER ERROR procedures)");
+                continue;
+            }
+            var on = use.getUseAfterStatement().getAfterOn();
+            switch (on.getAfterOnType()) {
+                case INPUT -> byMode.putIfAbsent("INPUT", method);
+                case OUTPUT -> byMode.putIfAbsent("OUTPUT", method);
+                case INPUT_OUTPUT -> byMode.putIfAbsent("IO", method);
+                case EXTEND -> byMode.putIfAbsent("EXTEND", method);
+                case FILE -> {
+                    for (Call f : on.getFileCalls()) {
+                        byFile.putIfAbsent(f.getName().toUpperCase(Locale.ROOT), method);
+                    }
+                }
+            }
+            List<Paragraph> paragraphs = pd.getRootParagraphs().stream().filter(p -> within(p.getCtx(), dctx)).toList();
+            for (Paragraph p : paragraphs) {
+                procedureMethods.put(p, unique(methodNames, Names.methodName("para", p.getName())));
+            }
+            sections.add(new Object[] {dctx, method, paragraphs});
+        }
+        for (Object[] s : sections) {
+            var dctx = (CobolParser.ProcedureDeclarativeContext) s[0];
+            @SuppressWarnings("unchecked")
+            List<Paragraph> paragraphs = (List<Paragraph>) s[2];
+            BlockStmt body = new BlockStmt();
+            translateInto(in.unit().getProcedureDivision(), body, ctx -> within(ctx, dctx) && !within(ctx, dctx.useStatement()));
+            for (Paragraph p : paragraphs) {
+                body.addStatement(stmt(thisCall(procedureMethods.get(p))));
+                addProcedureMethod(cls, p, null, procedureMethods.get(p), new BlockStmt());
+            }
+            MethodDeclaration m = cls.addMethod((String) s[1], Modifier.Keyword.PRIVATE);
+            m.setLineComment(" DECLARATIVES SECTION " + dctx.procedureSectionHeader().sectionName().getText() + ": " + words(dctx.useStatement()));
+            m.setBody(body);
+        }
+        if (!byMode.isEmpty()) {
+            // The procedures by OPEN mode: true when one applies to the mode.
+            MethodDeclaration m = cls.addMethod("useProcedure", Modifier.Keyword.PRIVATE);
+            m.setType(PrimitiveType.booleanType());
+            m.addParameter(PrimitiveType.intType(), "mode");
+            BlockStmt body = new BlockStmt();
+            byMode.forEach((mode, method) -> body.addStatement(new IfStmt(new BinaryExpr(name("mode"),
+                    new com.github.javaparser.ast.expr.FieldAccessExpr(name("CobolFile"), mode), BinaryExpr.Operator.EQUALS),
+                    new BlockStmt(NodeList.nodeList(stmt(thisCall(method)), new ReturnStmt(Ast.bool(true)))), null)));
+            body.addStatement(new ReturnStmt(Ast.bool(false)));
+            m.setBody(body);
+        }
+        BlockStmt init = new BlockStmt();
+        for (FileInfo f : files.values()) {
+            if (f.sort || f.javaName == null) {
+                continue;
+            }
+            String method = byFile.get(f.cobolName);
+            if (method != null) {
+                init.addStatement(stmt(call(name(f.javaName), "onError", new com.github.javaparser.ast.expr.LambdaExpr(
+                        NodeList.nodeList(new Parameter(new com.github.javaparser.ast.type.UnknownType(), "mode")),
+                        new BlockStmt(NodeList.nodeList(stmt(thisCall(method)), new ReturnStmt(Ast.bool(true))))))));
+            } else if (!byMode.isEmpty()) {
+                init.addStatement(stmt(call(name(f.javaName), "onError",
+                        new com.github.javaparser.ast.expr.MethodReferenceExpr(new com.github.javaparser.ast.expr.ThisExpr(), new NodeList<>(), "useProcedure"))));
+            }
+        }
+        for (String file : byFile.keySet()) {
+            if (!files.containsKey(file) || files.get(file).sort) {
+                dataDecision(pd.getDeclaratives().getCtx(), "PROCEDURE", "USE AFTER ERROR ON " + file + ": not a supported file");
+            }
+        }
+        if (!init.isEmpty()) {
+            var block = new com.github.javaparser.ast.body.InitializerDeclaration(false, init);
+            block.setLineComment(" USE AFTER ERROR procedures (DECLARATIVES)");
+            cls.addMember(block);
         }
     }
 
@@ -2142,9 +2243,15 @@ public final class ProgramTranslator implements TranslationContext {
     // ------------------------------------------------------------ statements
 
     private void translateInto(Scope scope, BlockStmt block) {
+        translateInto(scope, block, ctx -> true);
+    }
+
+    /** {@code scope}'s statements for which {@code include} holds (declarative code is kept apart from the rest). */
+    private void translateInto(Scope scope, BlockStmt block, java.util.function.Predicate<ParserRuleContext> include) {
         // Statements and standalone NEXT SENTENCEs, in source order.
         List<Object> items = new ArrayList<>(scope.getStatements());
         items.addAll(nextSentences.getOrDefault(scope, List.of()));
+        items.removeIf(item -> !include.test(ctxOf(item)));
         items.sort(java.util.Comparator.comparingInt(o -> ctxOf(o).getStart().getTokenIndex()));
         if (!(scope instanceof Paragraph || scope instanceof Section || scope instanceof ProcedureDivision)) {
             for (Object item : items) {

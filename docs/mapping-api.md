@@ -124,6 +124,15 @@ to `cobol_to_java.BUILTIN_HANDLERS` / `FACTS`.
 | RETURN | `into` |
 | ALTER | (none) |
 
+## Declaratives
+
+`DECLARATIVES` sections with `USE AFTER ERROR / EXCEPTION PROCEDURE ON file / INPUT / OUTPUT /
+I-O / EXTEND` become methods. When a file statement ends with an exception that its own `AT
+END` / `INVALID KEY` / `END-OF-PAGE` phrase does not handle, the runtime runs the section for
+that file, else the one for the mode of the file's last OPEN, and control continues after the
+statement; without one the run unit ends unless the file has FILE STATUS (GnuCOBOL's rules).
+`USE FOR DEBUGGING`, `GLOBAL` and declaratives in dispatcher-form programs are decisions.
+
 ## Intrinsic functions
 
 Function results are operands, not handlers. Exact functions are translated: `UPPER-CASE`,

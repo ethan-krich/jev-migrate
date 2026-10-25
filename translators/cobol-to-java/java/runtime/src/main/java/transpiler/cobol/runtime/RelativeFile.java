@@ -42,6 +42,7 @@ public final class RelativeFile extends FileBase {
             finish("41", false);
             return;
         }
+        lastOpenMode = openMode;
         readDone = false;
         endOfFile = false;
         beginOfFile = false;

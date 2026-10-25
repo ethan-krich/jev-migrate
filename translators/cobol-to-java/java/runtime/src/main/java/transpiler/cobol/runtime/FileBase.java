@@ -3,7 +3,9 @@ package transpiler.cobol.runtime;
 /**
  * What every file organisation shares: the FILE STATUS item and GnuCOBOL 3.2's handling of an
  * unsuccessful status. A status that is not successful and that the statement does not handle
- * (AT END, INVALID KEY) ends the run unit with status 1, unless the file has a FILE STATUS item.
+ * (AT END, INVALID KEY) runs the file's USE procedure if it has one (chosen by the file, or by
+ * the mode of its last OPEN); otherwise it ends the run unit with status 1, unless the file has a
+ * FILE STATUS item.
  */
 abstract class FileBase {
     static final int CLOSED = -1;
@@ -14,6 +16,9 @@ abstract class FileBase {
     final String path;
     final AlphanumericField status;
     private String lastStatus = "00";
+    /** The mode of the last OPEN attempted (GnuCOBOL's last_open_mode), which selects a USE procedure. */
+    int lastOpenMode = CLOSED;
+    private java.util.function.IntPredicate errorProcedure;
 
     FileBase(String name, String path, AlphanumericField status) {
         this.name = name;
@@ -27,6 +32,14 @@ abstract class FileBase {
 
     static void closed(FileBase f) {
         OPEN.remove(f);
+    }
+
+    /**
+     * The USE AFTER ERROR procedure for this file: given the last OPEN mode, it runs the applicable
+     * declarative and returns true, or returns false when none applies.
+     */
+    public void onError(java.util.function.IntPredicate procedure) {
+        this.errorProcedure = procedure;
     }
 
     /** The implicit CLOSE of every file still open when the run unit ends (no FILE STATUS is set). */
@@ -51,8 +64,15 @@ abstract class FileBase {
         if (status != null) {
             status.set(code);
         }
-        if (code.charAt(0) != '0' && !handled && status == null) {
-            Bounds.fail(describe(code) + " (status = " + code + ") for file " + name + " ('" + path + "')");
+        if (code.charAt(0) != '0' && !handled) {
+            if (errorProcedure != null && errorProcedure.test(lastOpenMode)) {
+                // The statement's NOT phrase depends on its own status, not on what the procedure did.
+                lastStatus = code;
+                return;
+            }
+            if (status == null) {
+                Bounds.fail(describe(code) + " (status = " + code + ") for file " + name + " ('" + path + "')");
+            }
         }
     }
 

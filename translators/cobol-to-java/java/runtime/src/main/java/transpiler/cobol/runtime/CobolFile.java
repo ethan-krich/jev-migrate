@@ -95,6 +95,7 @@ public final class CobolFile extends FileBase {
             finish("41", false);
             return;
         }
+        lastOpenMode = openMode;
         try {
             Path p = Path.of(path);
             if (openMode != OUTPUT && !Files.exists(p)) {
