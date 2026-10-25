@@ -160,7 +160,7 @@ DEFAULT_RULES: tuple[tuple[str, str, str, dict, str], ...] = (
     ("cobol.open", "OPEN", "open_file", {}, "OPEN files"),
     ("cobol.close", "CLOSE", "close_file", {}, "CLOSE files"),
     ("cobol.read", "READ", "read_file", {}, "READ (sequential, or by key)"),
-    ("cobol.write", "WRITE", "write_file", {"advancing": False}, "WRITE (ADVANCING has no target yet)"),
+    ("cobol.write", "WRITE", "write_file", {}, "WRITE [ADVANCING] [END-OF-PAGE] [INVALID KEY]"),
     ("cobol.rewrite", "REWRITE", "rewrite_file", {}, "REWRITE"),
     ("cobol.delete", "DELETE", "delete_file", {}, "DELETE of a RELATIVE / INDEXED record"),
     ("cobol.start", "START", "start_file", {}, "START of a RELATIVE / INDEXED file"),

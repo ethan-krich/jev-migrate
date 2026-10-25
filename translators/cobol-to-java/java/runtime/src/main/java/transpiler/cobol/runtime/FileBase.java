@@ -7,6 +7,8 @@ package transpiler.cobol.runtime;
  */
 abstract class FileBase {
     static final int CLOSED = -1;
+    /** Files open in the run unit, closed implicitly when it ends (as GnuCOBOL does at STOP RUN). */
+    private static final java.util.Set<FileBase> OPEN = new java.util.LinkedHashSet<>();
 
     final String name;
     final String path;
@@ -18,6 +20,25 @@ abstract class FileBase {
         this.path = path;
         this.status = status;
     }
+
+    static void opened(FileBase f) {
+        OPEN.add(f);
+    }
+
+    static void closed(FileBase f) {
+        OPEN.remove(f);
+    }
+
+    /** The implicit CLOSE of every file still open when the run unit ends (no FILE STATUS is set). */
+    static void closeAll() {
+        for (FileBase f : java.util.List.copyOf(OPEN)) {
+            f.closeAtEnd();
+        }
+        OPEN.clear();
+    }
+
+    /** What an implicit CLOSE at the end of the run unit must still write. */
+    void closeAtEnd() {}
 
     /** Whether the last statement on this file succeeded (status 0x): READ ... INTO, NOT AT END, NOT INVALID KEY. */
     public boolean succeeded() {

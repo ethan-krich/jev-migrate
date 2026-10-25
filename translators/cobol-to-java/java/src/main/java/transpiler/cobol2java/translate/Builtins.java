@@ -60,6 +60,7 @@ import io.proleap.cobol.asg.metamodel.valuestmt.ConditionValueStmt;
 import io.proleap.cobol.asg.metamodel.valuestmt.LiteralValueStmt;
 import io.proleap.cobol.asg.metamodel.valuestmt.ValueStmt;
 import io.proleap.cobol.asg.metamodel.valuestmt.relation.RelationalOperator.RelationalOperatorType;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -132,7 +133,8 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("close_file", "CLOSE", "CLOSE files", Builtins::closeFile));
         register(Handler.of("read_file", "READ",
                 "READ [NEXT / PREVIOUS] [INTO] [AT END], or READ by key [KEY IS] [INVALID KEY] of RELATIVE and INDEXED files", Builtins::readFile));
-        register(Handler.of("write_file", "WRITE", "WRITE record [FROM] [INVALID KEY] (no ADVANCING)", Builtins::writeFile));
+        register(Handler.of("write_file", "WRITE",
+                "WRITE record [FROM] [BEFORE / AFTER ADVANCING n LINES / PAGE] [AT END-OF-PAGE] [INVALID KEY]", Builtins::writeFile));
         register(Handler.of("rewrite_file", "REWRITE", "REWRITE record [FROM] [INVALID KEY] of a file opened I-O", Builtins::rewriteFile));
         register(Handler.of("delete_file", "DELETE", "DELETE file RECORD [INVALID KEY] of RELATIVE and INDEXED files", Builtins::deleteFile));
         register(Handler.of("start_file", "START", "START file [KEY IS =, >, >=, <, <= item] [INVALID KEY] of RELATIVE and INDEXED files",
@@ -2095,9 +2097,6 @@ public final class Builtins implements MappingRegistry.Catalog {
 
     private static List<Statement> writeFile(OpUnit u, TranslationContext c) throws HandlerException {
         var w = (io.proleap.cobol.asg.metamodel.procedure.write.WriteStatement) u.statement();
-        if (w.getAdvancingPhrase() != null || w.getAtEndOfPagePhrase() != null || w.getNotAtEndOfPagePhrase() != null) {
-            throw HandlerException.unsupported("WRITE with ADVANCING or END-OF-PAGE is not supported");
-        }
         Operand.Field record = fileRecord(w.getRecordCall(), c);
         var file = c.fileOfRecord(record.item());
         if (file.sort()) {
@@ -2107,18 +2106,82 @@ public final class Builtins implements MappingRegistry.Catalog {
         if (!file.keyed() && (invalidKey || w.getNotInvalidKeyPhrase() != null)) {
             throw HandlerException.unsupported("INVALID KEY on a WRITE of a " + file.organization() + " file");
         }
+        boolean endOfPage = w.getAtEndOfPagePhrase() != null || w.getNotAtEndOfPagePhrase() != null;
+        if (file.keyed() && (w.getAdvancingPhrase() != null || endOfPage)) {
+            throw HandlerException.unsupported("ADVANCING / END-OF-PAGE on a WRITE of a " + file.organization() + " file");
+        }
         List<Statement> out = new ArrayList<>();
         if (w.getFrom() != null) {
             out.add(fromMove(record, c.operand(w.getFrom().getFromValueStmt()), c));
         }
         Expression f = name(file.javaName());
         if (!file.keyed()) {
-            out.add(stmt(call(f, "write", recordView(record, c))));
+            if (w.getAdvancingPhrase() == null && !endOfPage) {
+                out.add(stmt(call(f, "write", recordView(record, c))));
+                return out;
+            }
+            Expression options = advancing(w.getAdvancingPhrase(), file, c);
+            out.addAll(conditional(call(f, "write", recordView(record, c), options, bool(w.getAtEndOfPagePhrase() != null)),
+                    w.getAtEndOfPagePhrase() == null ? null : c.nested(w.getAtEndOfPagePhrase()),
+                    w.getNotAtEndOfPagePhrase() == null ? new BlockStmt() : c.nested(w.getNotAtEndOfPagePhrase()), f));
             return out;
         }
         out.addAll(conditional(call(f, "write", recordView(record, c), bool(invalidKey)), invalidKey ? c.nested(w.getInvalidKeyPhrase()) : null,
                 w.getNotInvalidKeyPhrase() == null ? new BlockStmt() : c.nested(w.getNotInvalidKeyPhrase()), f));
         return out;
+    }
+
+    /**
+     * The ADVANCING options of a WRITE as GnuCOBOL encodes them ({@code CobolFile.AFTER | CobolFile.LINES | 2});
+     * without the phrase a LINE SEQUENTIAL record advances one line after it, a SEQUENTIAL record not at all.
+     */
+    private static Expression advancing(io.proleap.cobol.asg.metamodel.procedure.write.AdvancingPhrase a, TranslationContext.FileRef file,
+            TranslationContext c) throws HandlerException {
+        Function<String, Expression> flag = n -> new com.github.javaparser.ast.expr.FieldAccessExpr(name("CobolFile"), n);
+        java.util.function.BinaryOperator<Expression> or = (x, y) -> new BinaryExpr(x, y, BinaryExpr.Operator.BINARY_OR);
+        if (a == null) {
+            return file.lineSequential() ? or.apply(or.apply(flag.apply("BEFORE"), flag.apply("LINES")), integer(1)) : integer(0);
+        }
+        Expression position = flag.apply(a.getPositionType() == io.proleap.cobol.asg.metamodel.procedure.write.AdvancingPhrase.PositionType.BEFORE
+                ? "BEFORE" : "AFTER");
+        var type = a.getAdvancingType();
+        String mnemonic = type == io.proleap.cobol.asg.metamodel.procedure.write.AdvancingPhrase.AdvancingType.MNEMONIC
+                ? a.getAdvancingMnemonic().getMnemonicCall().getName() : null;
+        if (type == io.proleap.cobol.asg.metamodel.procedure.write.AdvancingPhrase.AdvancingType.LINES) {
+            // ProLeap parses ADVANCING mnemonic-name as ADVANCING identifier (LINES).
+            String word = a.getAdvancingLines().getLinesValueStmt().getCtx().getText();
+            if (!c.device(word).equalsIgnoreCase(word)) {
+                type = io.proleap.cobol.asg.metamodel.procedure.write.AdvancingPhrase.AdvancingType.MNEMONIC;
+                mnemonic = word;
+            }
+        }
+        switch (type) {
+            case PAGE -> {
+                return or.apply(position, flag.apply("PAGE"));
+            }
+            case MNEMONIC -> {
+                String device = c.device(mnemonic);
+                if (!device.matches("C(0[1-9]|1[0-2])|S0[1-5]|CSP|TOP|FORMFEED")) {
+                    throw HandlerException.unsupported("WRITE ... ADVANCING " + device + " (not a channel / form feed name)");
+                }
+                return or.apply(position, flag.apply("PAGE"));
+            }
+            default -> {
+                Operand lines = c.operand(a.getAdvancingLines().getLinesValueStmt());
+                Expression count;
+                if (lines instanceof Operand.NumericLiteral n) {
+                    if (n.value().scale() > 0 || n.value().signum() < 0 || n.value().compareTo(BigDecimal.valueOf(65535)) > 0) {
+                        throw HandlerException.unsupported("WRITE ... ADVANCING " + n.text() + " LINES");
+                    }
+                    count = integer(n.value().intValueExact());
+                } else if (lines instanceof Operand.Field f && f.numeric()) {
+                    count = staticCall("CobolFile", "lines", call(c.field(lines), "intValue"));
+                } else {
+                    throw HandlerException.unsupported("WRITE ... ADVANCING " + lines.category() + " LINES");
+                }
+                return or.apply(or.apply(position, flag.apply("LINES")), count);
+            }
+        }
     }
 
     private static List<Statement> rewriteFile(OpUnit u, TranslationContext c) throws HandlerException {

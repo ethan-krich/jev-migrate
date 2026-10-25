@@ -100,6 +100,16 @@ class ProgramTranslatorTest {
     }
 
     @Test
+    void assignToADataItemIsADecision() throws Exception {
+        String src = transpiler.cobol2java.TestSupport.cobol("IDENTIFICATION DIVISION.", "PROGRAM-ID. T.", "ENVIRONMENT DIVISION.",
+                "INPUT-OUTPUT SECTION.", "FILE-CONTROL.", "    SELECT F ASSIGN TO FNAME.", "DATA DIVISION.", "FILE SECTION.", "FD F.",
+                "01 F-REC PIC X.", "WORKING-STORAGE SECTION.", "01 FNAME PIC X(8) VALUE 'f.txt'.", "PROCEDURE DIVISION.", "    STOP RUN.");
+        var r = translate(dir, src, defaultRules());
+        // GnuCOBOL takes the file name from FNAME at run time; it is not an external name.
+        assertEquals("unsupported_construct:ENVIRONMENT", r.decisions().getFirst().reason().wire() + ":" + r.decisions().getFirst().operation());
+    }
+
+    @Test
     void callResolvesOnlyWithinTheProject() throws Exception {
         String src = program("", "CALL 'SUB'.", "STOP RUN.");
         var found = translate(dir, src, defaultRules(), Map.of("SUB", "test.gen.Sub"));

@@ -41,6 +41,7 @@ public final class ProgramSupport {
         } catch (Goback end) {
             return program.returnCode().intValue();
         } finally {
+            FileBase.closeAll();
             Display.flush();
         }
     }

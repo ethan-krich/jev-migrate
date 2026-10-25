@@ -213,6 +213,10 @@ public final class ProgramTranslator implements TranslationContext {
         final List<FileKey> keys = new ArrayList<>();
         CobolParser.QualifiedDataNameContext relativeKeyName;
         DataItem relativeKey;
+        /** LINAGE values as IntSupplier lambdas (lines, footing, top, bottom; null when absent), and LINAGE-COUNTER's field. */
+        io.proleap.cobol.asg.metamodel.data.file.LinageClause linageClause;
+        Expression[] linage;
+        String linageCounter;
 
         FileInfo(String cobolName, ParserRuleContext ctx) {
             this.cobolName = cobolName;
@@ -445,6 +449,9 @@ public final class ProgramTranslator implements TranslationContext {
             if (problem == null) {
                 problem = resolveKeys(f);
             }
+            if (problem == null && f.linageClause != null) {
+                problem = resolveLinage(f);
+            }
             if (problem != null) {
                 dataDecision(f.ctx, "ENVIRONMENT", f.cobolName + ": " + problem);
                 files.remove(f.cobolName);
@@ -476,6 +483,47 @@ public final class ProgramTranslator implements TranslationContext {
                 return "RELATIVE KEY " + f.relativeKeyName.getText() + " must be an integer WORKING-STORAGE item of at most 9 digits";
             }
             f.relativeKey = key;
+        }
+        return null;
+    }
+
+    /** The names of the program's data items (upper case): an ASSIGN naming one takes the file name from it at run time. */
+    private Set<String> dataNames() {
+        Set<String> names = new HashSet<>();
+        var data = in.unit().getDataDivision();
+        if (data != null) {
+            walk(data.getCtx(), tree -> {
+                if (tree instanceof CobolParser.DataNameContext n) {
+                    names.add(n.getText().toUpperCase(Locale.ROOT));
+                }
+            });
+        }
+        return names;
+    }
+
+    /** LINAGE values: integer literals, or integer items read when the file is opened and at each new page; a problem, or null. */
+    private String resolveLinage(FileInfo f) {
+        var l = f.linageClause;
+        f.linage = new Expression[4];
+        ValueStmt[] values = {l.getNumberOfLinesValueStmt(), l.getFootingAtValueStmt(), l.getLinesAtTopValueStmt(), l.getLinesAtBottomValueStmt()};
+        for (int i = 0; i < values.length; i++) {
+            if (values[i] == null) {
+                continue;
+            }
+            Expression value;
+            if (values[i] instanceof LiteralValueStmt || values[i] instanceof IntegerLiteralValueStmt) {
+                String text = values[i].getCtx().getText();
+                if (!text.matches("\\d{1,9}")) {
+                    return "LINAGE value " + text + " is not an integer";
+                }
+                value = integer(Integer.parseInt(text));
+            } else if (values[i] instanceof CallValueStmt cv && cv.getCall().unwrap() instanceof DataDescriptionEntryCall d
+                    && items.get(d.getDataDescriptionEntry()) instanceof DataItem item && item.isInteger() && !item.hasAccessor()) {
+                value = call(name(item.javaName()), "intValue");
+            } else {
+                return "LINAGE value " + values[i].getCtx().getText() + " must be an integer literal or an integer item outside tables";
+            }
+            f.linage[i] = new com.github.javaparser.ast.expr.LambdaExpr(new NodeList<>(), value);
         }
         return null;
     }
@@ -569,7 +617,8 @@ public final class ProgramTranslator implements TranslationContext {
                 if (ac.literal() != null && ac.literal().NONNUMERICLITERAL() != null) {
                     String t = ac.literal().getText();
                     assigned = t.substring(1, t.length() - 1);
-                } else if (ac.assignmentName() != null && ac.DYNAMIC() == null && ac.EXTERNAL() == null) {
+                } else if (ac.assignmentName() != null && ac.DYNAMIC() == null && ac.EXTERNAL() == null
+                        && !dataNames().contains(ac.assignmentName().getText().toUpperCase(Locale.ROOT))) {
                     assigned = ac.assignmentName().getText();
                 } else {
                     problem = "ASSIGN " + ac.getText().substring(6) + " is not supported (only a name or literal)";
@@ -596,8 +645,17 @@ public final class ProgramTranslator implements TranslationContext {
                     f.organization = Organization.SORT;
                 }
             }
-            if (fd.getLinageClause() != null) {
-                problem = "LINAGE is not supported";
+            if (fd.getLinageClause() != null && f != null) {
+                if (f.sort || f.organization != Organization.SEQUENTIAL && f.organization != Organization.LINE_SEQUENTIAL) {
+                    problem = "LINAGE on a " + (f.sort ? "sort" : f.organization) + " file";
+                } else {
+                    // As in GnuCOBOL, LINAGE makes the file LINE SEQUENTIAL.
+                    f.organization = Organization.LINE_SEQUENTIAL;
+                    f.linageClause = fd.getLinageClause();
+                }
+            }
+            if (problem != null) {
+                // reported below
             } else if (fd.getExternalClause() != null || fd.getGlobalClause() != null) {
                 problem = "EXTERNAL / GLOBAL files are not supported";
             } else if (fd.getCodeSetClause() != null || fd.getReportClause() != null) {
@@ -1314,9 +1372,23 @@ public final class ProgramTranslator implements TranslationContext {
                 case RELATIVE -> cls.addFieldWithInitializer("RelativeFile", f.javaName, create("RelativeFile", str(f.cobolName), str(f.path), area, status,
                         access, f.relativeKey == null ? new NullLiteralExpr() : name(f.relativeKey.javaName())), Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL)
                         .setLineComment(" FD " + f.cobolName + " (RELATIVE, ACCESS " + f.access + ")");
-                default -> cls.addFieldWithInitializer("CobolFile", f.javaName, create("CobolFile", str(f.cobolName), str(f.path),
-                        Ast.bool(f.organization == Organization.LINE_SEQUENTIAL), area, status), Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL)
-                        .setLineComment(" FD " + f.cobolName + " (" + f.organization.name().replace('_', ' ') + ")");
+                default -> {
+                    Expression file = create("CobolFile", str(f.cobolName), str(f.path), Ast.bool(f.organization == Organization.LINE_SEQUENTIAL),
+                            area, status);
+                    if (f.linage != null) {
+                        f.linageCounter = allocateField(Names.fieldName(f.cobolName) + "LinageCounter");
+                        cls.addFieldWithInitializer("NumericField", f.linageCounter, create("NumericField", integer(10), integer(0), Ast.bool(false)),
+                                Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL).setLineComment(" LINAGE-COUNTER of " + f.cobolName);
+                        NodeList<Expression> args = new NodeList<>();
+                        for (Expression e : f.linage) {
+                            args.add(e == null ? new NullLiteralExpr() : e);
+                        }
+                        args.add(name(f.linageCounter));
+                        file = new com.github.javaparser.ast.expr.MethodCallExpr(file, "linage", args);
+                    }
+                    cls.addFieldWithInitializer("CobolFile", f.javaName, file, Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL)
+                            .setLineComment(" FD " + f.cobolName + " (" + f.organization.name().replace('_', ' ') + (f.linage != null ? ", LINAGE" : "") + ")");
+                }
             }
         }
         for (DataItem item : accessors) {
@@ -2384,6 +2456,13 @@ public final class ProgramTranslator implements TranslationContext {
         if (u instanceof SpecialRegisterCall s) {
             return switch (s.getSpecialRegisterType()) {
                 case RETURN_CODE -> new Operand.ReturnCode();
+                case LINAGE_COUNTER -> {
+                    List<FileInfo> paged = files.values().stream().filter(f -> f.linageCounter != null).toList();
+                    if (paged.size() != 1) {
+                        throw HandlerException.unsupported("LINAGE-COUNTER needs exactly one file with LINAGE (found " + paged.size() + ")");
+                    }
+                    yield new Operand.Computed(call(name(paged.getFirst().linageCounter), "get"), true, "digits10");
+                }
                 case LENGTH_OF -> lengthOf(s);
                 case WHEN_COMPILED -> {
                     String when = require("when_compiled", in.dialect().whenCompiled(), call.getCtx(), "WHEN-COMPILED");
