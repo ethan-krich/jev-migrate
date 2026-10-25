@@ -125,7 +125,8 @@ equivalence fixtures.
 | ✅ | `OCCURS` (nested, `VALUE`, `DEPENDING ON`, `KEY`), subscripts (`n`, `item`, `index`, `± n`), `INDEXED BY`, `SET` index, reference modification | ranges that are not literals need `Dialect.out_of_range` |
 | ✅ | `INITIALIZE`, `STRING`, `UNSTRING`, `INSPECT`, serial `SEARCH` | `SEARCH ALL` is a decision with candidates |
 | ✅ | LINKAGE SECTION, `PROCEDURE DIVISION USING`, `CALL 'literal' USING BY REFERENCE / BY CONTENT`, `NUMBER-OF-CALL-PARAMETERS`, `LENGTH OF`, `WHEN-COMPILED` (`Dialect.when_compiled`), `IS INITIAL` | argument number and sizes are checked against the callee |
-| ✅ | Level 88 (values, `THRU`, `WHEN SET TO FALSE`) on elementary items; `SET cond TO TRUE / FALSE` | |
+| ✅ | Level 88 (values, `THRU`, `WHEN SET TO FALSE`) on elementary items and groups; `SET cond TO TRUE / FALSE` | a group's values are nonnumeric literals or figuratives |
+| ✅ | Level 66 `RENAMES [THRU]`, the `TALLY` register | RENAMES of a single COMP / COMP-3 item is a decision (GnuCOBOL 3.2 reads it as DISPLAY) |
 | ✅ | Figuratives ZERO, SPACE, QUOTE, HIGH-/LOW-VALUE (need `Dialect.encoding`), `ALL "lit"` | |
 | ✅ | Identification paragraphs, SOURCE-/OBJECT-COMPUTER, SPECIAL-NAMES `DECIMAL-POINT IS COMMA`, `CLASS`, `ALPHABET`, mnemonic names | other clauses are decisions |
 | ✅ | `MOVE` (alphanumeric pad/truncate; numeric decimal alignment, high-/low-order truncation, sign drop; integer numeric → alphanumeric digits; figurative ZERO/SPACE) | per receiver |
@@ -141,7 +142,7 @@ equivalence fixtures.
 | ✅ | `STOP RUN`, `GOBACK`, `EXIT`, `EXIT PROGRAM`, `CONTINUE`, `RETURN-CODE` → exit status | |
 | ✅ | `COPY` (copybook search path; decision lines map back to the original file), `CALL 'literal'` of a program in the project, `CALL identifier` (needs `Dialect.dynamic_calls`), `ON EXCEPTION` / `ON OVERFLOW`, `CANCEL` | persistent WORKING-STORAGE, RETURN-CODE propagation, PROGRAM-IDs matched case-sensitively as GnuCOBOL does |
 | ◐ | `REPLACE` statements | parsed by ProLeap; line numbers then fall back to the preprocessed source (warning `approximate_line_numbers`) |
-| ❌ | `RENAMES`, level 88 on groups, `COMP-1` / `COMP-2`, `POINTER`, `ADDRESS OF`, `P` / `N` pictures, a fixed sign before a floating currency string, `EXTERNAL`, `GLOBAL`, nested programs, `IS RECURSIVE`, `CALL … BY VALUE` | `unsupported_construct` |
+| ❌ | `COMP-1` / `COMP-2`, `POINTER`, `ADDRESS OF`, `P` / `N` pictures, a fixed sign before a floating currency string, `EXTERNAL`, `GLOBAL`, nested programs, `IS RECURSIVE`, `CALL … BY VALUE` | `unsupported_construct` |
 | ❌ | `**` with a non-integer or negative exponent, EBCDIC collating sequence | `unsupported_construct` |
 | ✅ | SEQUENTIAL and LINE SEQUENTIAL files: `OPEN`, `READ [INTO]`, `WRITE [FROM]`, `REWRITE`, `CLOSE`, `FILE STATUS` | paths from `Dialect.file_assignments`; GnuCOBOL status values; record areas start as zero bytes, as in GnuCOBOL |
 | ✅ | RELATIVE and INDEXED files: `ACCESS SEQUENTIAL / RANDOM / DYNAMIC`, `RELATIVE KEY`, `RECORD KEY`, `ALTERNATE RECORD KEY [WITH DUPLICATES]`, `READ [NEXT / PREVIOUS] [KEY IS]`, `START` (`= > >= < <= NOT < NOT >`, leading part of a key), `WRITE`, `REWRITE`, `DELETE`, `[NOT] INVALID KEY` | GnuCOBOL 3.2's statuses and file positioning, checked by dense random fixtures; RELATIVE files use GnuCOBOL's file format, INDEXED files the runtime's own (not Berkeley DB) |
@@ -150,7 +151,7 @@ equivalence fixtures.
 | ✅ | `WRITE … BEFORE / AFTER ADVANCING n LINES / PAGE / mnemonic`, `LINAGE` (`FOOTING`, `TOP`, `BOTTOM`), `LINAGE-COUNTER`, `[NOT] AT END-OF-PAGE` | GnuCOBOL's control bytes and paging, byte for byte |
 | ❌ | `SELECT OPTIONAL`, `ASSIGN TO` a data item (file name chosen at run time), split keys, `SUPPRESS WHEN`, `LOCK` phrases, SORT / MERGE `USING` / `GIVING` of RELATIVE / INDEXED files, `REWRITE` of an INDEXED file with alternate keys in `ACCESS SEQUENTIAL`, `USE` declaratives, `SAME RECORD AREA` | decisions |
 | ❌ | `CALL` of a program outside the project or of the program itself, `CALL … RETURNING`, `DISPLAY UPON` printer / other devices, `ACCEPT FROM` environment, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
-| ❌ | `TALLY` and other special registers, free format / other dialects | files ProLeap cannot parse (XML / JSON GENERATE, ALLOCATE, OO COBOL, …) fail with `unsupported_dialect` |
+| ❌ | Other special registers (`DEBUG-ITEM`, `SORT-RETURN`, …), free format / other dialects | files ProLeap cannot parse (XML / JSON GENERATE, ALLOCATE, OO COBOL, …) fail with `unsupported_dialect` |
 
 Known divergence: GnuCOBOL 3.2 prints an empty value for a `COMPUTE` receiver when it is displayed
 *inside that statement's own* `ON SIZE ERROR` phrase. The translation prints the (unchanged) value.

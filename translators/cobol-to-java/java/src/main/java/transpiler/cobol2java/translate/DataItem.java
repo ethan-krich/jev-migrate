@@ -49,6 +49,8 @@ public final class DataItem {
     private DataItem dependingOn;
     private List<IndexName> indexes = List.of();
     private List<Key> keys = List.of();
+    /** For a level-66 RENAMES item: the record whose bytes it renames. */
+    private DataItem renamedRecord;
 
     DataItem(String cobolName, Kind kind, Picture picture, String unsupportedReason, DataItem parent, int line) {
         this.cobolName = cobolName;
@@ -152,6 +154,9 @@ public final class DataItem {
 
     /** The level-01 / level-77 item whose storage this item is part of. */
     public DataItem record() {
+        if (renamedRecord != null) {
+            return renamedRecord;
+        }
         DataItem r = this;
         while (r.parent != null) {
             r = r.parent;
@@ -214,6 +219,10 @@ public final class DataItem {
 
     /** Whether this item or an ancestor has REDEFINES (such items are not initialised). */
     public boolean inRedefines() {
+        if (renamedRecord != null) {
+            // A RENAMES item is another view of bytes that are initialised through their own items.
+            return true;
+        }
         for (DataItem i = this; i != null; i = i.parent) {
             if (i.redefines != null) {
                 return true;
@@ -298,6 +307,17 @@ public final class DataItem {
     /** Whether this item is in a FILE SECTION record (its bytes are the file's record area, not initialised). */
     public boolean fileRecord() {
         return record().fileRecord;
+    }
+
+    /** Makes this a level-66 RENAMES item: the bytes at {@code offset} ({@code size} long) of {@code record}. */
+    void renames(DataItem record, int offset, int size) {
+        this.renamedRecord = record;
+        layout(offset, size);
+    }
+
+    /** Whether this is a level-66 RENAMES item (a group renaming has no subordinate items of its own). */
+    public boolean isRenames() {
+        return renamedRecord != null;
     }
 
     void markFileRecord() {

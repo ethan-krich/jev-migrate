@@ -100,6 +100,14 @@ class ProgramTranslatorTest {
     }
 
     @Test
+    void renamesOfAPackedItemIsADecision() throws Exception {
+        var r = translate(dir, program("01 R.\n   05 P PIC S9(3) COMP-3.\n   05 X PIC X.\n66 RP RENAMES P.\n66 RX RENAMES P THRU X.",
+                "DISPLAY RX.", "STOP RUN."), defaultRules());
+        // GnuCOBOL 3.2 reads RP as if it were USAGE DISPLAY; the THRU range is a plain group.
+        assertEquals(List.of("unsupported_construct:DATA"), r.decisions().stream().map(d -> d.reason().wire() + ":" + d.operation()).toList());
+    }
+
+    @Test
     void assignToADataItemIsADecision() throws Exception {
         String src = transpiler.cobol2java.TestSupport.cobol("IDENTIFICATION DIVISION.", "PROGRAM-ID. T.", "ENVIRONMENT DIVISION.",
                 "INPUT-OUTPUT SECTION.", "FILE-CONTROL.", "    SELECT F ASSIGN TO FNAME.", "DATA DIVISION.", "FILE SECTION.", "FD F.",

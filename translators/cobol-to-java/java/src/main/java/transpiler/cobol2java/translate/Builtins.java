@@ -775,7 +775,14 @@ public final class Builtins implements MappingRegistry.Catalog {
                 } else {
                     throw HandlerException.unsupported("SET " + cond.cobolName() + " TO FALSE needs VALUE ... WHEN SET TO FALSE");
                 }
-                Expression field = c.field(new Operand.Field(cond.parent()));
+                Operand parent = new Operand.Field(cond.parent());
+                if (cond.parent().isGroup()) {
+                    Expression field = c.receiving(parent);
+                    out.add(v instanceof Operand.Figurative fig ? stmt(call(field, "fill", fig.isSingle() ? chr(fig.fill()) : str(fig.pattern())))
+                            : stmt(call(field, "set", str(((Operand.AlphanumericLiteral) v).value()))));
+                    continue;
+                }
+                Expression field = c.field(parent);
                 out.add(cond.parent().isAlphanumeric() ? storeAlphanumeric(field, v, c) : storeNumeric(field, v, c));
             }
         }
@@ -1301,6 +1308,9 @@ public final class Builtins implements MappingRegistry.Catalog {
             Operand o = c.operand(call);
             if (!(o instanceof Operand.Field target) || target.refmod() != null) {
                 throw HandlerException.unsupported("INITIALIZE of " + o.category() + " is not supported");
+            }
+            if (target.item().isGroup() && target.item().isRenames()) {
+                throw HandlerException.unsupported("INITIALIZE of a RENAMES group");
             }
             if (target.item().isGroup() && target.item().variableTable() != null) {
                 throw HandlerException.unsupported("INITIALIZE of a group with OCCURS DEPENDING ON is not supported");

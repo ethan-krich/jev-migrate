@@ -190,6 +190,10 @@ public final class ProgramTranslator implements TranslationContext {
     private record PendingTable(DataItem item, DataDescriptionEntryGroup entry) {}
 
     private final List<PendingTable> tables = new ArrayList<>();
+    /** Level-66 RENAMES entries, resolved once the records are laid out. */
+    private record PendingRename(io.proleap.cobol.asg.metamodel.data.datadescription.DataDescriptionEntryRename entry, String name, int line) {}
+
+    private final List<PendingRename> renames = new ArrayList<>();
     private final Map<Object, DataItem.IndexName> indexNames = new IdentityHashMap<>();
     private final Map<String, DataItem.IndexName> indexesByName = new HashMap<>();
     /** USAGE written on a group, which its subordinate items inherit. */
@@ -391,7 +395,10 @@ public final class ProgramTranslator implements TranslationContext {
         var ws = data.getWorkingStorageSection();
         for (DataDescriptionEntry e : ws == null ? List.<DataDescriptionEntry>of() : ws.getRootDataDescriptionEntries()) {
             buildItem(e, null);
-            roots.add(items.get(e));
+            if (items.get(e) != null) {
+                // (a level-66 RENAMES item is resolved after the layout)
+                roots.add(items.get(e));
+            }
         }
         if (data.getFileSection() != null) {
             fileSection(data.getFileSection());
@@ -400,6 +407,9 @@ public final class ProgramTranslator implements TranslationContext {
             for (DataDescriptionEntry e : data.getLinkageSection().getRootDataDescriptionEntries()) {
                 buildItem(e, null);
                 DataItem item = items.get(e);
+                if (item == null) {
+                    continue;
+                }
                 item.markLinkage();
                 roots.add(item);
                 if (e instanceof DataDescriptionEntryGroup g && hasValue(g)) {
@@ -410,8 +420,20 @@ public final class ProgramTranslator implements TranslationContext {
         for (PendingTable t : tables) {
             occurs(t.item(), t.entry());
         }
+        if (usesTally()) {
+            // GnuCOBOL's TALLY: GLOBAL PICTURE 9(5) USAGE BINARY VALUE ZERO.
+            DataItem tally = new DataItem("TALLY", DataItem.Kind.NUMERIC, new Picture.Numeric(5, 0, false), null, null, 0);
+            tally.usage(DataItem.Usage.BINARY);
+            tally.javaName(allocateField("tally"));
+            fieldOrder.add(tally);
+            roots.add(tally);
+            this.tally = tally;
+        }
         for (DataItem root : roots) {
             layout(root, 0);
+        }
+        for (PendingRename r : renames) {
+            resolveRename(r);
         }
         for (PendingTable t : tables) {
             checkTable(t.item(), t.entry());
@@ -499,6 +521,80 @@ public final class ProgramTranslator implements TranslationContext {
             });
         }
         return names;
+    }
+
+    private DataItem tally;
+
+    private boolean usesTally() {
+        boolean[] found = {false};
+        if (in.unit().getProcedureDivision() != null) {
+            walk(in.unit().getProcedureDivision().getCtx(), tree -> {
+                if (tree instanceof CobolParser.SpecialRegisterContext s && s.TALLY() != null) {
+                    found[0] = true;
+                }
+            });
+        }
+        return found[0];
+    }
+
+    /**
+     * A level-66 RENAMES item: with THRU, a group over the bytes from the first item to the end of
+     * the second; alone, an item like the one it renames. Items of tables cannot be renamed.
+     */
+    private void resolveRename(PendingRename r) {
+        var clause = r.entry().getRenamesClause();
+        DataItem from = clause == null ? null : renamedItem(clause.getFrom());
+        DataItem to = clause == null || clause.getTo() == null ? null : renamedItem(clause.getTo());
+        String problem = null;
+        if (from == null || clause.getTo() != null && to == null) {
+            problem = "RENAMES of an item that is not a supported data item";
+        } else if (from.record().linkage()) {
+            problem = "RENAMES in the LINKAGE SECTION is not supported";
+        } else if (to != null && to.record() != from.record()) {
+            problem = "RENAMES ... THRU items of different records";
+        } else if (from.parent() == null || to != null && to.parent() == null) {
+            problem = "RENAMES of a level-01 / level-77 item";
+        } else if (!from.dimensions().isEmpty() || to != null && !to.dimensions().isEmpty()
+                || from.variableTable() != null || to != null && to.variableTable() != null) {
+            problem = "RENAMES of an item in a table";
+        } else if (to != null && to.offset() + to.totalSize() <= from.offset()) {
+            problem = "RENAMES ... THRU an item that ends before the first one starts";
+        } else if (to == null && from.isNumeric() && from.usage() != DataItem.Usage.DISPLAY) {
+            // GnuCOBOL 3.2 reads such a RENAMES item as if it were USAGE DISPLAY.
+            problem = "RENAMES of a USAGE " + from.usage() + " item";
+        }
+        DataItem alias;
+        if (problem != null) {
+            dataDecision(r.entry().getCtx(), "DATA", r.name() + ": " + problem);
+            alias = new DataItem(r.name(), DataItem.Kind.UNSUPPORTED, null, problem, null, r.line());
+        } else if (to == null && !from.isGroup()) {
+            alias = new DataItem(r.name(), from.kind(), switch (from.kind()) {
+                case NUMERIC -> from.numeric();
+                case EDITED -> from.edited();
+                default -> from.alphanumeric();
+            }, null, null, r.line());
+            if (from.isNumeric()) {
+                alias.usage(from.usage());
+            }
+            alias.sign(from.signLeading(), from.signSeparate());
+            alias.justified(from.justified());
+            alias.blankWhenZero(from.blankWhenZero());
+            alias.renames(from.record(), from.offset(), from.size());
+        } else {
+            int end = to == null ? from.offset() + from.totalSize() : Math.max(from.offset() + from.totalSize(), to.offset() + to.totalSize());
+            alias = new DataItem(r.name(), DataItem.Kind.GROUP, null, null, null, r.line());
+            alias.renames(from.record(), from.offset(), end - from.offset());
+        }
+        items.put(r.entry(), alias);
+        if (problem == null) {
+            alias.javaName(allocateField(Names.fieldName(r.name())));
+            fieldOrder.add(alias);
+        }
+    }
+
+    private DataItem renamedItem(Call call) {
+        return call != null && call.unwrap() instanceof DataDescriptionEntryCall d && items.get(d.getDataDescriptionEntry()) instanceof DataItem item
+                && item.kind() != DataItem.Kind.UNSUPPORTED && !item.isCondition() && item.kind() != DataItem.Kind.CONSTANT ? item : null;
     }
 
     /** LINAGE values: integer literals, or integer items read when the file is opened and at each new page; a problem, or null. */
@@ -668,6 +764,9 @@ public final class ProgramTranslator implements TranslationContext {
             for (DataDescriptionEntry e : fd.getRootDataDescriptionEntries()) {
                 buildItem(e, null);
                 DataItem item = items.get(e);
+                if (item == null) {
+                    continue;
+                }
                 item.markFileRecord();
                 roots.add(item);
                 if (base == null) {
@@ -804,6 +903,10 @@ public final class ProgramTranslator implements TranslationContext {
         String name = e.getName() == null ? "FILLER" : e.getName();
         if (e instanceof DataDescriptionEntryCondition c) {
             items.put(e, conditionItem(c, name, parent, line));
+            return;
+        }
+        if (e instanceof io.proleap.cobol.asg.metamodel.data.datadescription.DataDescriptionEntryRename r) {
+            renames.add(new PendingRename(r, name, line));
             return;
         }
         if (!(e instanceof DataDescriptionEntryGroup g)) {
@@ -1079,9 +1182,12 @@ public final class ProgramTranslator implements TranslationContext {
             // The parent's own decision covers it.
             return new DataItem(name, DataItem.Kind.UNSUPPORTED, null, "condition on unsupported item " + parent.cobolName(), parent, line);
         }
-        if (parent == null || !(parent.isAlphanumeric() || parent.isNumeric())) {
+        boolean group = parent != null && parent.isGroup();
+        if (parent == null || !(parent.isAlphanumeric() || parent.isNumeric() || group)) {
             problem = "level-88 condition on " + (parent == null ? "nothing" : parent.category() + " item " + parent.cobolName())
-                    + " is not supported (only elementary PIC X / PIC 9 items)";
+                    + " is not supported (only PIC X / PIC 9 items and groups)";
+        } else if (group && (!parent.dimensions().isEmpty() || parent.variableTable() != null)) {
+            problem = "level-88 condition on group " + parent.cobolName() + " in a table or of variable length";
         }
         List<DataItem.ConditionValue> values = new ArrayList<>();
         Operand whenFalse = null;
@@ -1094,6 +1200,16 @@ public final class ProgramTranslator implements TranslationContext {
                 var clause = (CobolParser.DataValueClauseContext) c.getValueClause().getCtx();
                 if (clause.literal() != null) {
                     whenFalse = literal(clause.literal());
+                }
+                if (group) {
+                    // A group compares and receives as alphanumeric data: numeric values would be converted.
+                    for (var v : values) {
+                        for (Operand o : java.util.Arrays.asList(v.from(), v.thru(), whenFalse)) {
+                            if (o != null && !(o instanceof Operand.AlphanumericLiteral) && !(o instanceof Operand.Figurative f && !f.isZero())) {
+                                problem = "level-88 condition on a group with a VALUE that is not a nonnumeric literal or figurative";
+                            }
+                        }
+                    }
                 }
             } catch (HandlerException ex) {
                 problem = ex.kind() == HandlerException.Kind.DIALECT ? null : "VALUE " + ex.getMessage();
@@ -2085,7 +2201,8 @@ public final class ProgramTranslator implements TranslationContext {
     private DataItem groupOf(Call call) {
         if (call.unwrap() instanceof DataDescriptionEntryCall d) {
             DataItem item = items.get(d.getDataDescriptionEntry());
-            return item != null && item.isGroup() ? item : null;
+            // A RENAMES group has no subordinate items to correspond.
+            return item != null && item.isGroup() && !item.isRenames() ? item : null;
         }
         return null;
     }
@@ -2456,6 +2573,7 @@ public final class ProgramTranslator implements TranslationContext {
         if (u instanceof SpecialRegisterCall s) {
             return switch (s.getSpecialRegisterType()) {
                 case RETURN_CODE -> new Operand.ReturnCode();
+                case TALLY -> new Operand.Field(tally);
                 case LINAGE_COUNTER -> {
                     List<FileInfo> paged = files.values().stream().filter(f -> f.linageCounter != null).toList();
                     if (paged.size() != 1) {
