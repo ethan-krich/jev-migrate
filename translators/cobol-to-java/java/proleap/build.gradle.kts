@@ -29,6 +29,12 @@ val grammarExtensions = mapOf(
     // USAGE COMP-X / COMPUTATIONAL-X (Micro Focus / GnuCOBOL binary).
     "COMP_5 : C O M P MINUSCHAR '5';\n" to "COMP_5 : C O M P MINUSCHAR '5';\nCOMP_X : C O M P MINUSCHAR X;\nCOMPUTATIONAL_X : C O M P U T A T I O N A L MINUSCHAR X;\n",
     "| COMPUTATIONAL_5 | CONTROL_POINT |" to "| COMPUTATIONAL_5 | COMP_X | COMPUTATIONAL_X | CONTROL_POINT |",
+    // READ ... PREVIOUS [RECORD] (COBOL 2002; PREVIOUS lexes as a word).
+    "readStatement\n   : READ fileName NEXT? RECORD?" to "readStatement\n   : READ fileName (NEXT | cobolWord)? RECORD?",
+    // START ... KEY IS < / <= / NOT > (COBOL 2002).
+    "| GREATER THAN? OR EQUAL TO? | MORETHANOREQUAL) qualifiedDataName" to
+        "| GREATER THAN? OR EQUAL TO? | MORETHANOREQUAL | LESS THAN? | LESSTHANCHAR | LESS THAN? OR EQUAL TO? | LESSTHANOREQUAL"
+            + " | NOT GREATER THAN? | NOT MORETHANCHAR) qualifiedDataName",
 )
 
 val patchGrammar by tasks.registering {

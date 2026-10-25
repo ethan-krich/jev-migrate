@@ -201,10 +201,17 @@ public final class ProgramTranslator implements TranslationContext {
         String path;
         String assigned;
         boolean sort;
-        boolean lineSequential = true;
+        Organization organization = Organization.LINE_SEQUENTIAL;
+        Access access = Access.SEQUENTIAL;
         CobolParser.QualifiedDataNameContext statusName;
         DataItem status;
         final List<DataItem> records = new ArrayList<>();
+        /** RECORD KEY then ALTERNATE RECORD KEYs (names, then items once resolved). */
+        final List<CobolParser.QualifiedDataNameContext> keyNames = new ArrayList<>();
+        final List<Boolean> keyDuplicates = new ArrayList<>();
+        final List<FileKey> keys = new ArrayList<>();
+        CobolParser.QualifiedDataNameContext relativeKeyName;
+        DataItem relativeKey;
 
         FileInfo(String cobolName, ParserRuleContext ctx) {
             this.cobolName = cobolName;
@@ -280,9 +287,11 @@ public final class ProgramTranslator implements TranslationContext {
         cu.addImport(in.runtimePackage() + ".Display");
         cu.addImport(in.runtimePackage() + ".EditedField");
         cu.addImport(in.runtimePackage() + ".Functions");
+        cu.addImport(in.runtimePackage() + ".IndexedFile");
         cu.addImport(in.runtimePackage() + ".NumericField");
         cu.addImport(in.runtimePackage() + ".PerformStack");
         cu.addImport(in.runtimePackage() + ".ProgramSupport");
+        cu.addImport(in.runtimePackage() + ".RelativeFile");
         cu.addImport(in.runtimePackage() + ".SortFile");
         cu.addImport(in.runtimePackage() + ".Storage");
         cu.addImport(in.runtimePackage() + ".StringOps");
@@ -427,8 +436,12 @@ public final class ProgramTranslator implements TranslationContext {
             if (problem == null && f.records.isEmpty()) {
                 problem = "the file has no FD record";
             }
-            if (problem == null && !f.lineSequential && f.records.stream().map(DataItem::totalSize).distinct().count() > 1) {
-                problem = "SEQUENTIAL files with records of different sizes are not supported";
+            if (problem == null && !f.sort && f.organization != Organization.LINE_SEQUENTIAL
+                    && f.records.stream().map(DataItem::totalSize).distinct().count() > 1) {
+                problem = f.organization + " files with records of different sizes are not supported";
+            }
+            if (problem == null) {
+                problem = resolveKeys(f);
             }
             if (problem != null) {
                 dataDecision(f.ctx, "ENVIRONMENT", f.cobolName + ": " + problem);
@@ -436,6 +449,33 @@ public final class ProgramTranslator implements TranslationContext {
             }
         }
         checkByteImages();
+    }
+
+    /**
+     * Resolves an INDEXED file's keys (items of its records, outside tables) and a RELATIVE
+     * file's RELATIVE KEY (an integer item outside its records); a problem, or null.
+     */
+    private String resolveKeys(FileInfo f) {
+        for (int i = 0; i < f.keyNames.size(); i++) {
+            DataItem key = resolveData(f.keyNames.get(i));
+            if (key == null || !f.records.contains(key.record()) || key.hasAccessor() || key.kind() == DataItem.Kind.UNSUPPORTED || key.isCondition() || key.size() == 0) {
+                return "KEY " + f.keyNames.get(i).getText() + " must be an item of the file's record outside any table";
+            }
+            for (FileKey other : f.keys) {
+                if (other.item().offset() == key.offset() && other.item().size() == key.size()) {
+                    return "KEY " + f.keyNames.get(i).getText() + " has the position of another key";
+                }
+            }
+            f.keys.add(new FileKey(key, f.keyDuplicates.get(i)));
+        }
+        if (f.relativeKeyName != null) {
+            DataItem key = resolveData(f.relativeKeyName);
+            if (key == null || !key.isInteger() || key.numeric().digits() > 9 || key.hasAccessor() || key.linkage() || key.fileRecord()) {
+                return "RELATIVE KEY " + f.relativeKeyName.getText() + " must be an integer WORKING-STORAGE item of at most 9 digits";
+            }
+            f.relativeKey = key;
+        }
+        return null;
     }
 
     /** SELECT entries: ASSIGN through Dialect.file_assignments, SEQUENTIAL / LINE SEQUENTIAL organisation, FILE STATUS. */
@@ -453,24 +493,63 @@ public final class ProgramTranslator implements TranslationContext {
             var org = entry.getOrganizationClause();
             if (org != null) {
                 var oc = (CobolParser.OrganizationClauseContext) org.getCtx();
-                if (oc.INDEXED() != null) {
-                    dataDecision(ctx, "ENVIRONMENT", entry.getName() + ": INDEXED files have no target (key-value adapter needed)",
-                            Reason.MISSING_TARGET_API);
-                    continue;
+                f.organization = oc.INDEXED() != null ? Organization.INDEXED : oc.RELATIVE() != null ? Organization.RELATIVE
+                        : oc.LINE() != null ? Organization.LINE_SEQUENTIAL : Organization.SEQUENTIAL;
+                if (oc.BINARY() != null || oc.RECORD() != null) {
+                    problem = words(oc) + " is not supported";
                 }
-                if (oc.RELATIVE() != null) {
-                    problem = "RELATIVE files are not supported";
-                }
-                f.lineSequential = oc.LINE() != null;
+            } else {
+                // GnuCOBOL's default organisation is SEQUENTIAL; this translator's is LINE SEQUENTIAL, as before.
+                f.organization = Organization.LINE_SEQUENTIAL;
             }
+            boolean keyed = f.organization == Organization.INDEXED || f.organization == Organization.RELATIVE;
             var access = entry.getAccessModeClause();
-            if (problem == null && access != null && access.getMode() != io.proleap.cobol.asg.metamodel.environment.inputoutput.filecontrol.AccessModeClause.Mode.SEQUENTIAL) {
-                problem = "ACCESS MODE " + access.getMode() + " is not supported";
+            if (problem == null && access != null) {
+                var ac = (CobolParser.AccessModeClauseContext) access.getCtx();
+                f.access = ac.RANDOM() != null ? Access.RANDOM : ac.DYNAMIC() != null ? Access.DYNAMIC : Access.SEQUENTIAL;
+                if (ac.EXCLUSIVE() != null || f.access != Access.SEQUENTIAL && !keyed) {
+                    problem = words(ac) + " is not supported for " + f.organization + " files";
+                }
             }
-            if (problem == null && (entry.getRecordKeyClause() != null || entry.getRelativeKeyClause() != null
-                    || entry.getAlternateRecordKeyClause() != null || entry.getPasswordClause() != null
-                    || entry.getPaddingCharacterClause() != null || entry.getRecordDelimiterClause() != null)) {
-                problem = "SELECT clause " + ctx.getText() + " is not supported";
+            if (problem == null && ((CobolParser.SelectClauseContext) entry.getSelectClause().getCtx()).OPTIONAL() != null) {
+                problem = "SELECT OPTIONAL is not supported";
+            }
+            for (var clause : ctx.fileControlClause()) {
+                if (problem != null) {
+                    break;
+                }
+                if (clause.recordKeyClause() != null) {
+                    var rk = clause.recordKeyClause();
+                    if (f.organization != Organization.INDEXED || rk.passwordClause() != null || rk.DUPLICATES() != null) {
+                        problem = words(rk) + " is not supported";
+                    } else {
+                        f.keyNames.addFirst(rk.qualifiedDataName());
+                        f.keyDuplicates.addFirst(false);
+                    }
+                } else if (clause.alternateRecordKeyClause() != null) {
+                    var ak = clause.alternateRecordKeyClause();
+                    if (f.organization != Organization.INDEXED || ak.passwordClause() != null) {
+                        problem = words(ak) + " is not supported";
+                    } else {
+                        f.keyNames.add(ak.qualifiedDataName());
+                        f.keyDuplicates.add(ak.DUPLICATES() != null);
+                    }
+                } else if (clause.relativeKeyClause() != null) {
+                    if (f.organization != Organization.RELATIVE) {
+                        problem = "RELATIVE KEY on a " + f.organization + " file is not supported";
+                    } else {
+                        f.relativeKeyName = clause.relativeKeyClause().qualifiedDataName();
+                    }
+                } else if (clause.passwordClause() != null || clause.paddingCharacterClause() != null || clause.recordDelimiterClause() != null) {
+                    problem = words(clause) + " is not supported";
+                }
+            }
+            if (problem == null && f.organization == Organization.INDEXED
+                    && (f.keyNames.isEmpty() || ctx.fileControlClause().stream().noneMatch(c -> c.recordKeyClause() != null))) {
+                problem = "an INDEXED file needs a RECORD KEY";
+            }
+            if (problem == null && f.organization == Organization.RELATIVE && f.access != Access.SEQUENTIAL && f.relativeKeyName == null) {
+                problem = "ACCESS RANDOM / DYNAMIC needs a RELATIVE KEY";
             }
             var status = entry.getFileStatusClause();
             if (problem == null && status != null) {
@@ -511,6 +590,9 @@ public final class ProgramTranslator implements TranslationContext {
             String problem = null;
             if (f != null) {
                 f.sort = ((CobolParser.FileDescriptionEntryContext) fd.getCtx()).SD() != null;
+                if (f.sort) {
+                    f.organization = Organization.SORT;
+                }
             }
             if (fd.getLinageClause() != null) {
                 problem = "LINAGE is not supported";
@@ -1214,9 +1296,26 @@ public final class ProgramTranslator implements TranslationContext {
                 continue;
             }
             Expression status = f.status == null ? new NullLiteralExpr() : name(f.status.javaName());
-            cls.addFieldWithInitializer("CobolFile", f.javaName, create("CobolFile", str(f.cobolName), str(f.path), Ast.bool(f.lineSequential),
-                    create("AlphanumericField", name(storage), integer(0), integer(size)), status), Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL)
-                    .setLineComment(" FD " + f.cobolName + (f.lineSequential ? " (LINE SEQUENTIAL)" : " (SEQUENTIAL)"));
+            Expression area = create("AlphanumericField", name(storage), integer(0), integer(size));
+            Expression access = new com.github.javaparser.ast.expr.FieldAccessExpr(name("IndexedFile"), f.access.name());
+            switch (f.organization) {
+                case INDEXED -> {
+                    NodeList<Expression> args = NodeList.nodeList(str(f.cobolName), str(f.path), area, status, access);
+                    for (FileKey k : f.keys) {
+                        args.add(integer(k.item().offset()));
+                        args.add(integer(k.item().size()));
+                        args.add(integer(k.duplicates() ? 1 : 0));
+                    }
+                    cls.addFieldWithInitializer("IndexedFile", f.javaName, new com.github.javaparser.ast.expr.ObjectCreationExpr(null, type("IndexedFile"), args),
+                            Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL).setLineComment(" FD " + f.cobolName + " (INDEXED, ACCESS " + f.access + ")");
+                }
+                case RELATIVE -> cls.addFieldWithInitializer("RelativeFile", f.javaName, create("RelativeFile", str(f.cobolName), str(f.path), area, status,
+                        access, f.relativeKey == null ? new NullLiteralExpr() : name(f.relativeKey.javaName())), Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL)
+                        .setLineComment(" FD " + f.cobolName + " (RELATIVE, ACCESS " + f.access + ")");
+                default -> cls.addFieldWithInitializer("CobolFile", f.javaName, create("CobolFile", str(f.cobolName), str(f.path),
+                        Ast.bool(f.organization == Organization.LINE_SEQUENTIAL), area, status), Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL)
+                        .setLineComment(" FD " + f.cobolName + " (" + f.organization.name().replace('_', ' ') + ")");
+            }
         }
         for (DataItem item : accessors) {
             addAccessor(cls, item, storages.get(storageRoot(item.record())));
@@ -1236,8 +1335,9 @@ public final class ProgramTranslator implements TranslationContext {
             storage = allocateField(Names.fieldName(record.cobolName()) + "Storage");
             storages.put(record, storage);
             int size = sizes.get(record);
-            cls.addFieldWithInitializer("Storage", storage, create("Storage", integer(Math.max(1, size))),
-                    Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL)
+            Expression init = record.fileRecord() ? staticCall("Storage", "zeros", integer(Math.max(1, size)))
+                    : create("Storage", integer(Math.max(1, size)));
+            cls.addFieldWithInitializer("Storage", storage, init, Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL)
                     .setLineComment(" " + record.cobolName() + " (" + size + " bytes)");
         }
         return storage;
@@ -2120,6 +2220,13 @@ public final class ProgramTranslator implements TranslationContext {
         dialectHits++;
         dialectDecision(field, location(where), usage);
         throw new HandlerException(HandlerException.Kind.DIALECT, field);
+    }
+
+    /** A clause as written, with its words separated by single spaces (for messages). */
+    static String words(ParserRuleContext ctx) {
+        var start = ctx.getStart();
+        var stop = ctx.getStop() == null ? start : ctx.getStop();
+        return start.getInputStream().getText(Interval.of(start.getStartIndex(), stop.getStopIndex())).strip().replaceAll("\\s+", " ");
     }
 
     private SourceLocation location(ParserRuleContext ctx) {
@@ -3330,14 +3437,18 @@ public final class ProgramTranslator implements TranslationContext {
         if (f == null || f.javaName == null) {
             throw HandlerException.unsupported("file " + fileCall.getName() + " is not a supported file");
         }
-        return new FileRef(f.javaName, f.lineSequential, f.sort, List.copyOf(f.records));
+        return fileRef(f);
+    }
+
+    private static FileRef fileRef(FileInfo f) {
+        return new FileRef(f.javaName, f.organization, f.access, List.copyOf(f.records), List.copyOf(f.keys), f.relativeKey);
     }
 
     @Override
     public FileRef fileOfRecord(DataItem record) throws HandlerException {
         for (FileInfo f : files.values()) {
             if (f.records.contains(record) && f.javaName != null) {
-                return new FileRef(f.javaName, f.lineSequential, f.sort, List.copyOf(f.records));
+                return fileRef(f);
             }
         }
         throw HandlerException.unsupported(record.cobolName() + " is not a record of a supported file");

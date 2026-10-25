@@ -143,10 +143,11 @@ equivalence fixtures.
 | ◐ | `REPLACE` statements | parsed by ProLeap; line numbers then fall back to the preprocessed source (warning `approximate_line_numbers`) |
 | ❌ | `RENAMES`, level 88 on groups, `COMP-1` / `COMP-2`, `POINTER`, `ADDRESS OF`, `P` / `N` pictures, a fixed sign before a floating currency string, `EXTERNAL`, `GLOBAL`, nested programs, `IS RECURSIVE`, `CALL … BY VALUE` | `unsupported_construct` |
 | ❌ | `**` with a non-integer or negative exponent, EBCDIC collating sequence | `unsupported_construct` |
-| ✅ | SEQUENTIAL and LINE SEQUENTIAL files: `OPEN`, `READ [INTO]`, `WRITE [FROM]`, `REWRITE`, `CLOSE`, `FILE STATUS` | paths from `Dialect.file_assignments`; GnuCOBOL status values |
+| ✅ | SEQUENTIAL and LINE SEQUENTIAL files: `OPEN`, `READ [INTO]`, `WRITE [FROM]`, `REWRITE`, `CLOSE`, `FILE STATUS` | paths from `Dialect.file_assignments`; GnuCOBOL status values; record areas start as zero bytes, as in GnuCOBOL |
+| ✅ | RELATIVE and INDEXED files: `ACCESS SEQUENTIAL / RANDOM / DYNAMIC`, `RELATIVE KEY`, `RECORD KEY`, `ALTERNATE RECORD KEY [WITH DUPLICATES]`, `READ [NEXT / PREVIOUS] [KEY IS]`, `START` (`= > >= < <= NOT < NOT >`, leading part of a key), `WRITE`, `REWRITE`, `DELETE`, `[NOT] INVALID KEY` | GnuCOBOL 3.2's statuses and file positioning, checked by dense random fixtures; RELATIVE files use GnuCOBOL's file format, INDEXED files the runtime's own (not Berkeley DB) |
 | ✅ | `SORT … WITH DUPLICATES IN ORDER`, `MERGE`, `RELEASE`, `RETURN`, `USING` / `GIVING` / INPUT and OUTPUT PROCEDURE | SORT without DUPLICATES IN ORDER is a decision with a stable-sort candidate |
 | ✅ | Exact intrinsic functions (see docs/mapping-api.md) | floating-point functions are decisions |
-| ❌ | INDEXED (`missing_target_api`) and RELATIVE files, `ACCESS RANDOM / DYNAMIC`, `WRITE … ADVANCING`, `LINAGE`, `USE` declaratives, `SAME RECORD AREA` | decisions |
+| ❌ | `SELECT OPTIONAL`, split keys, `SUPPRESS WHEN`, `LOCK` phrases, SORT / MERGE `USING` / `GIVING` of RELATIVE / INDEXED files, `REWRITE` of an INDEXED file with alternate keys in `ACCESS SEQUENTIAL`, `WRITE … ADVANCING`, `LINAGE`, `USE` declaratives, `SAME RECORD AREA` | decisions |
 | ❌ | Dynamic `CALL`, `DISPLAY UPON` printer / other devices, `ACCEPT FROM` environment, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
 | ❌ | `TALLY` and other special registers, free format / other dialects | files ProLeap cannot parse (XML / JSON GENERATE, ALLOCATE, OO COBOL, …) fail with `unsupported_dialect` |
 

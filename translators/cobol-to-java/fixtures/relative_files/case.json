@@ -1,0 +1,8 @@
+{
+  "description": "RELATIVE files in GnuCOBOL 3.2's format and with its statuses: ACCESS DYNAMIC / SEQUENTIAL / RANDOM, RELATIVE KEY updated by sequential READ and WRITE, START = > >= <, READ NEXT / PREVIOUS, WRITE, REWRITE, DELETE, INVALID KEY, OPEN EXTEND, and an unhandled INVALID KEY ending the run unit",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native",
+              "file_assignments": {"rel.dat": "rel.dat", "nost.dat": "nost.dat"}},
+  "equivalence": {"programs": ["RELFILES.cbl"], "main_class": "fixtures.relative_files.Relfiles"},
+  "layout": {"base_package": "fixtures.relative_files"}
+}

@@ -61,8 +61,32 @@ public interface TranslationContext {
     /** The field holding the GO TO target of a paragraph named by ALTER. */
     String alteredField(Call paragraph) throws HandlerException;
 
-    /** A file of the program: its Java field, whether it is LINE SEQUENTIAL, and its records. */
-    record FileRef(String javaName, boolean lineSequential, boolean sort, java.util.List<DataItem> records) {}
+    enum Organization { SEQUENTIAL, LINE_SEQUENTIAL, RELATIVE, INDEXED, SORT }
+
+    enum Access { SEQUENTIAL, RANDOM, DYNAMIC }
+
+    /** A RECORD KEY or ALTERNATE RECORD KEY of an INDEXED file. */
+    record FileKey(DataItem item, boolean duplicates) {}
+
+    /**
+     * A file of the program: its Java field, organisation, access mode and records; the keys of
+     * an INDEXED file (record key first) and the RELATIVE KEY item of a RELATIVE file (or null).
+     */
+    record FileRef(String javaName, Organization organization, Access access, java.util.List<DataItem> records,
+            java.util.List<FileKey> keys, DataItem relativeKey) {
+        public boolean lineSequential() {
+            return organization == Organization.LINE_SEQUENTIAL;
+        }
+
+        public boolean sort() {
+            return organization == Organization.SORT;
+        }
+
+        /** RELATIVE or INDEXED: the statements take INVALID KEY and the runtime class differs. */
+        public boolean keyed() {
+            return organization == Organization.RELATIVE || organization == Organization.INDEXED;
+        }
+    }
 
     /** A SORT / MERGE key: a lambda reading it from a record's bytes ({@code s -> view(s).get()}). */
     Expression sortKey(DataItem key, ParserRuleContext where) throws HandlerException;

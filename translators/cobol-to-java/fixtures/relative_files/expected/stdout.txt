@@ -1,0 +1,39 @@
+qw 00 01
+qw 00 02
+open 00
+w5 00
+dup 22
+zero 24
+nf 23
+nf9 23
+r1 first 00
+next secnd 00 002
+next fifth 00 005
+eof 10
+after eof 46
+st lt 00
+n secnd 00 002
+st ge 00
+n fifth 00 005
+p secnd 00 002
+p secnd 10 002
+del 00
+del again 00
+del 7 23
+rw 00
+rw 6 23
+st gt 00
+n FIFTH 00 005
+st eq 23
+after bad start 46
+q first 00 01
+qrw 00
+q FIFTH 00 05
+qdel 00
+q FIFTH 10 05
+q 46
+ext 00 06
+all FIRST 01
+all extnd 06
+e 10
+nk0

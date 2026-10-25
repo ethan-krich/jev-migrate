@@ -63,9 +63,11 @@ public final class Facts {
             Map.entry("ALTER", Set.of()),
             Map.entry("OPEN", Set.of()),
             Map.entry("CLOSE", Set.of()),
-            Map.entry("READ", Set.of("at_end", "into")),
-            Map.entry("WRITE", Set.of("from", "advancing")),
-            Map.entry("REWRITE", Set.of("from")),
+            Map.entry("READ", Set.of("at_end", "into", "organization", "direction", "key", "invalid_key")),
+            Map.entry("WRITE", Set.of("from", "advancing", "organization", "invalid_key")),
+            Map.entry("REWRITE", Set.of("from", "organization", "invalid_key")),
+            Map.entry("DELETE", Set.of("organization", "invalid_key")),
+            Map.entry("START", Set.of("organization", "key", "invalid_key")),
             Map.entry("SORT", Set.of("duplicates", "input_procedure", "output_procedure")),
             Map.entry("MERGE", Set.of("output_procedure")),
             Map.entry("RELEASE", Set.of("from")),
@@ -247,13 +249,41 @@ public final class Facts {
                 var r = (io.proleap.cobol.asg.metamodel.procedure.read.ReadStatement) s;
                 f.put("at_end", r.getAtEnd() != null);
                 f.put("into", r.getInto() != null);
+                f.put("organization", organization(() -> ctx.file(r.getFileCall())));
+                String direction;
+                try {
+                    direction = Builtins.readDirection(r);
+                } catch (HandlerException e) {
+                    direction = "unsupported";
+                }
+                f.put("direction", direction);
+                f.put("key", r.getKey() != null);
+                f.put("invalid_key", r.getInvalidKeyPhrase() != null || r.getNotInvalidKeyPhrase() != null);
             }
             case "WRITE" -> {
                 var w = (io.proleap.cobol.asg.metamodel.procedure.write.WriteStatement) s;
                 f.put("from", w.getFrom() != null);
                 f.put("advancing", w.getAdvancingPhrase() != null);
+                f.put("organization", organization(() -> ctx.fileOfRecord(ctx.dataItem(w.getRecordCall()))));
+                f.put("invalid_key", w.getInvalidKeyPhrase() != null || w.getNotInvalidKeyPhrase() != null);
             }
-            case "REWRITE" -> f.put("from", ((io.proleap.cobol.asg.metamodel.procedure.rewrite.RewriteStatement) s).getFrom() != null);
+            case "REWRITE" -> {
+                var w = (io.proleap.cobol.asg.metamodel.procedure.rewrite.RewriteStatement) s;
+                f.put("from", w.getFrom() != null);
+                f.put("organization", organization(() -> ctx.fileOfRecord(ctx.dataItem(w.getRecordCall()))));
+                f.put("invalid_key", w.getInvalidKeyPhrase() != null || w.getNotInvalidKeyPhrase() != null);
+            }
+            case "DELETE" -> {
+                var d = (io.proleap.cobol.asg.metamodel.procedure.delete.DeleteStatement) s;
+                f.put("organization", organization(() -> ctx.file(d.getFileCall())));
+                f.put("invalid_key", d.getInvalidKeyPhrase() != null || d.getNotInvalidKeyPhrase() != null);
+            }
+            case "START" -> {
+                var st = (io.proleap.cobol.asg.metamodel.procedure.start.StartStatement) s;
+                f.put("organization", organization(() -> ctx.file(st.getFileCall())));
+                f.put("key", st.getKey() != null);
+                f.put("invalid_key", st.getInvalidKeyPhrase() != null || st.getNotInvalidKeyPhrase() != null);
+            }
             case "SORT" -> {
                 var so = (io.proleap.cobol.asg.metamodel.procedure.sort.SortStatement) s;
                 f.put("duplicates", so.getDuplicates() != null && so.getDuplicates().isDuplicatesInOrder());
@@ -341,6 +371,19 @@ public final class Facts {
 
     private interface OperandSupplier {
         Operand get() throws HandlerException;
+    }
+
+    private interface FileSupplier {
+        TranslationContext.FileRef get() throws HandlerException;
+    }
+
+    /** A file's organisation as a fact value (sequential, line_sequential, relative, indexed, sort), or unsupported. */
+    private static String organization(FileSupplier s) {
+        try {
+            return s.get().organization().name().toLowerCase(Locale.ROOT);
+        } catch (HandlerException | RuntimeException e) {
+            return "unsupported";
+        }
     }
 
     private static Operand tryOperand(OperandSupplier s) {

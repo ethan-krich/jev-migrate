@@ -14,7 +14,7 @@ def test_defaults_cover_the_supported_subset():
                                   "PERFORM", "STOP", "GOBACK", "EXIT", "CONTINUE", "CALL", "SET", "EVALUATE",
                                   "ACCEPT", "EXHIBIT", "INITIALIZE", "SEARCH", "STRING", "UNSTRING",
                                   "INSPECT", "GO_TO", "ALTER", "OPEN", "CLOSE", "READ", "WRITE",
-                                  "REWRITE", "SORT", "MERGE", "RELEASE", "RETURN"})
+                                  "REWRITE", "DELETE", "START", "SORT", "MERGE", "RELEASE", "RETURN"})
     m.validate()
 
 

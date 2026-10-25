@@ -124,11 +124,16 @@ public final class Builtins implements MappingRegistry.Catalog {
                 "ALTER is a decision: it changes a GO TO at run time; the candidate below is offered for review", Builtins::alter));
         register(Handler.of("alter_goto", "ALTER",
                 "ALTER as an assignment of the altered paragraph's GO TO target (candidate only)", Builtins::alterGoTo));
-        register(Handler.of("open_file", "OPEN", "OPEN INPUT / OUTPUT / I-O / EXTEND of SEQUENTIAL and LINE SEQUENTIAL files", Builtins::openFile));
+        register(Handler.of("open_file", "OPEN", "OPEN INPUT / OUTPUT / I-O / EXTEND of SEQUENTIAL, LINE SEQUENTIAL, RELATIVE and INDEXED files",
+                Builtins::openFile));
         register(Handler.of("close_file", "CLOSE", "CLOSE files", Builtins::closeFile));
-        register(Handler.of("read_file", "READ", "sequential READ [INTO] [AT END] [NOT AT END]", Builtins::readFile));
-        register(Handler.of("write_file", "WRITE", "WRITE record [FROM] (no ADVANCING)", Builtins::writeFile));
-        register(Handler.of("rewrite_file", "REWRITE", "REWRITE record [FROM] of a SEQUENTIAL file opened I-O", Builtins::rewriteFile));
+        register(Handler.of("read_file", "READ",
+                "READ [NEXT / PREVIOUS] [INTO] [AT END], or READ by key [KEY IS] [INVALID KEY] of RELATIVE and INDEXED files", Builtins::readFile));
+        register(Handler.of("write_file", "WRITE", "WRITE record [FROM] [INVALID KEY] (no ADVANCING)", Builtins::writeFile));
+        register(Handler.of("rewrite_file", "REWRITE", "REWRITE record [FROM] [INVALID KEY] of a file opened I-O", Builtins::rewriteFile));
+        register(Handler.of("delete_file", "DELETE", "DELETE file RECORD [INVALID KEY] of RELATIVE and INDEXED files", Builtins::deleteFile));
+        register(Handler.of("start_file", "START", "START file [KEY IS =, >, >=, <, <= item] [INVALID KEY] of RELATIVE and INDEXED files",
+                Builtins::startFile));
         register(Handler.of("sort", "SORT",
                 "SORT ... WITH DUPLICATES IN ORDER: stable sort, USING / INPUT PROCEDURE, GIVING / OUTPUT PROCEDURE", Builtins::sort));
         register(Handler.of("sort_stable", "SORT",
@@ -1883,6 +1888,9 @@ public final class Builtins implements MappingRegistry.Catalog {
             if (file.lineSequential() && open[2].equals("IO")) {
                 throw HandlerException.unsupported("OPEN I-O of a LINE SEQUENTIAL file is not supported");
             }
+            if (file.keyed() && open[2].equals("EXTEND") && file.access() != TranslationContext.Access.SEQUENTIAL) {
+                throw HandlerException.unsupported("OPEN EXTEND of a file with ACCESS RANDOM / DYNAMIC is not supported");
+            }
             out.add(stmt(call(name(file.javaName()), "open", new com.github.javaparser.ast.expr.FieldAccessExpr(name("CobolFile"), (String) open[2]))));
         }
         return out;
@@ -1900,29 +1908,103 @@ public final class Builtins implements MappingRegistry.Catalog {
         return out;
     }
 
+    /** READ NEXT / PREVIOUS, or null for a READ without either word. */
+    static String readDirection(io.proleap.cobol.asg.metamodel.procedure.read.ReadStatement r) throws HandlerException {
+        var ctx = (io.proleap.cobol.CobolParser.ReadStatementContext) r.getCtx();
+        if (ctx.NEXT() != null) {
+            return "next";
+        }
+        if (ctx.cobolWord() == null) {
+            return null;
+        }
+        if (!ctx.cobolWord().getText().equalsIgnoreCase("PREVIOUS")) {
+            throw HandlerException.unsupported("READ ... " + ctx.cobolWord().getText() + " is not supported");
+        }
+        return "previous";
+    }
+
+    /** Whether a READ of {@code file} reads by key (ACCESS RANDOM, or DYNAMIC without NEXT / PREVIOUS). */
+    static boolean randomRead(TranslationContext.FileRef file, String direction) {
+        return file.keyed() && (file.access() == TranslationContext.Access.RANDOM
+                || file.access() == TranslationContext.Access.DYNAMIC && direction == null);
+    }
+
     private static List<Statement> readFile(OpUnit u, TranslationContext c) throws HandlerException {
         var r = (io.proleap.cobol.asg.metamodel.procedure.read.ReadStatement) u.statement();
-        if (r.getKey() != null || r.getInvalidKeyPhrase() != null || r.getNotInvalidKeyPhrase() != null || r.getWith() != null) {
-            throw HandlerException.unsupported("READ with KEY, INVALID KEY or locking is not supported");
+        if (r.getWith() != null) {
+            throw HandlerException.unsupported("READ ... WITH LOCK / NO LOCK / WAIT is not supported");
         }
         var file = c.file(r.getFileCall());
         if (file.sort()) {
             throw HandlerException.unsupported("READ of a sort file (use RETURN)");
         }
-        boolean atEndPhrase = r.getAtEnd() != null;
-        Expression read = call(name(file.javaName()), "read", bool(atEndPhrase));
-        BlockStmt success = r.getNotAtEndPhrase() == null ? new BlockStmt() : c.nested(r.getNotAtEndPhrase());
+        String direction = readDirection(r);
+        boolean random = randomRead(file, direction);
+        boolean invalidKey = r.getInvalidKeyPhrase() != null;
+        boolean atEnd = r.getAtEnd() != null;
+        Expression f = name(file.javaName());
+        Expression read;
+        if (random) {
+            if (atEnd || r.getNotAtEndPhrase() != null) {
+                throw HandlerException.unsupported("AT END on a READ by key");
+            }
+            if (file.organization() == TranslationContext.Organization.RELATIVE) {
+                if (r.getKey() != null && c.dataItem(r.getKey().getKeyCall()) != file.relativeKey()) {
+                    throw HandlerException.unsupported("READ ... KEY IS other than the RELATIVE KEY");
+                }
+                read = call(f, "read", bool(invalidKey));
+            } else {
+                read = call(f, "read", integer(r.getKey() == null ? 0 : keyIndex(file, c.dataItem(r.getKey().getKeyCall()), true)), bool(invalidKey));
+            }
+        } else {
+            if (r.getKey() != null || invalidKey || r.getNotInvalidKeyPhrase() != null) {
+                throw HandlerException.unsupported("KEY / INVALID KEY on a sequential READ");
+            }
+            if (!file.keyed()) {
+                if ("previous".equals(direction)) {
+                    throw HandlerException.unsupported("READ PREVIOUS of a " + file.organization() + " file");
+                }
+                read = call(f, "read", bool(atEnd));
+            } else {
+                read = call(f, "readNext", bool("previous".equals(direction)), bool(atEnd));
+            }
+        }
+        var notPhrase = random ? r.getNotInvalidKeyPhrase() : r.getNotAtEndPhrase();
+        BlockStmt success = notPhrase == null ? new BlockStmt() : c.nested(notPhrase);
         if (r.getInto() != null) {
             Operand into = c.operand(r.getInto().getIntoCall());
-            Statement move = storeAlphanumericOrGroup(into, call(name(file.javaName()), "data"), c);
             // INTO moves only after a successful READ.
-            success.getStatements().addFirst(new IfStmt(call(name(file.javaName()), "succeeded"), new BlockStmt(NodeList.nodeList(move)), null));
+            success.getStatements().addFirst(storeAlphanumericOrGroup(into, call(f.clone(), "data"), c));
         }
-        if (!atEndPhrase && success.isEmpty()) {
-            return List.of(stmt(read));
+        return conditional(read, random ? invalidKey ? c.nested(r.getInvalidKeyPhrase()) : null : atEnd ? c.nested(r.getAtEnd()) : null,
+                success, f);
+    }
+
+    /**
+     * {@code if (statement) {condition} else if (file.succeeded()) {success}}: the AT END / INVALID
+     * KEY phrase runs for that condition, the NOT phrase only when the statement succeeded.
+     */
+    private static List<Statement> conditional(Expression statement, BlockStmt condition, BlockStmt success, Expression file) {
+        Statement ok = success.isEmpty() ? null : new IfStmt(call(file.clone(), "succeeded"), success, null);
+        if (condition == null) {
+            return ok == null ? List.of(stmt(statement)) : List.of(stmt(statement), ok);
         }
-        BlockStmt atEnd = atEndPhrase ? c.nested(r.getAtEnd()) : new BlockStmt();
-        return List.of(success.isEmpty() ? new IfStmt(read, atEnd, null) : new IfStmt(read, atEnd, success));
+        return List.of(new IfStmt(statement, condition, ok));
+    }
+
+    /**
+     * The number of the key of an INDEXED file that {@code item} names (0 for the record key): the
+     * key itself or, for START, an item at the key's position no longer than it.
+     */
+    private static int keyIndex(TranslationContext.FileRef file, DataItem item, boolean exact) throws HandlerException {
+        for (int i = 0; i < file.keys().size(); i++) {
+            DataItem key = file.keys().get(i).item();
+            if (key == item || !exact && file.records().contains(item.record()) && item.offset() == key.offset() && item.size() <= key.size()
+                    && !item.hasAccessor()) {
+                return i;
+            }
+        }
+        throw HandlerException.unsupported("KEY IS " + item.cobolName() + " is not a key of the file");
     }
 
     /** MOVE of alphanumeric data into an alphanumeric item or a group (READ INTO). */
@@ -1949,39 +2031,120 @@ public final class Builtins implements MappingRegistry.Catalog {
 
     private static List<Statement> writeFile(OpUnit u, TranslationContext c) throws HandlerException {
         var w = (io.proleap.cobol.asg.metamodel.procedure.write.WriteStatement) u.statement();
-        if (w.getAdvancingPhrase() != null || w.getAtEndOfPagePhrase() != null || w.getNotAtEndOfPagePhrase() != null
-                || w.getInvalidKeyPhrase() != null || w.getNotInvalidKeyPhrase() != null) {
-            throw HandlerException.unsupported("WRITE with ADVANCING, END-OF-PAGE or INVALID KEY is not supported");
+        if (w.getAdvancingPhrase() != null || w.getAtEndOfPagePhrase() != null || w.getNotAtEndOfPagePhrase() != null) {
+            throw HandlerException.unsupported("WRITE with ADVANCING or END-OF-PAGE is not supported");
         }
         Operand.Field record = fileRecord(w.getRecordCall(), c);
         var file = c.fileOfRecord(record.item());
         if (file.sort()) {
             throw HandlerException.unsupported("WRITE of a sort record (use RELEASE)");
         }
+        boolean invalidKey = w.getInvalidKeyPhrase() != null;
+        if (!file.keyed() && (invalidKey || w.getNotInvalidKeyPhrase() != null)) {
+            throw HandlerException.unsupported("INVALID KEY on a WRITE of a " + file.organization() + " file");
+        }
         List<Statement> out = new ArrayList<>();
         if (w.getFrom() != null) {
             out.add(fromMove(record, c.operand(w.getFrom().getFromValueStmt()), c));
         }
-        out.add(stmt(call(name(file.javaName()), "write", recordView(record, c))));
+        Expression f = name(file.javaName());
+        if (!file.keyed()) {
+            out.add(stmt(call(f, "write", recordView(record, c))));
+            return out;
+        }
+        out.addAll(conditional(call(f, "write", recordView(record, c), bool(invalidKey)), invalidKey ? c.nested(w.getInvalidKeyPhrase()) : null,
+                w.getNotInvalidKeyPhrase() == null ? new BlockStmt() : c.nested(w.getNotInvalidKeyPhrase()), f));
         return out;
     }
 
     private static List<Statement> rewriteFile(OpUnit u, TranslationContext c) throws HandlerException {
         var w = (io.proleap.cobol.asg.metamodel.procedure.rewrite.RewriteStatement) u.statement();
-        if (w.getInvalidKeyPhrase() != null || w.getNotInvalidKeyPhrase() != null) {
-            throw HandlerException.unsupported("REWRITE with INVALID KEY is not supported");
-        }
         Operand.Field record = fileRecord(w.getRecordCall(), c);
         var file = c.fileOfRecord(record.item());
-        if (file.lineSequential()) {
-            throw HandlerException.unsupported("REWRITE of a LINE SEQUENTIAL file is not supported");
+        if (file.lineSequential() || file.sort()) {
+            throw HandlerException.unsupported("REWRITE of a " + file.organization() + " file is not supported");
+        }
+        boolean invalidKey = w.getInvalidKeyPhrase() != null;
+        if (!file.keyed() && (invalidKey || w.getNotInvalidKeyPhrase() != null)) {
+            throw HandlerException.unsupported("INVALID KEY on a REWRITE of a SEQUENTIAL file");
+        }
+        if (file.organization() == TranslationContext.Organization.INDEXED && file.access() == TranslationContext.Access.SEQUENTIAL
+                && file.keys().size() > 1) {
+            // GnuCOBOL 3.2 then works from internal state (which record it replaces, where alternate keys point).
+            throw HandlerException.unsupported("REWRITE of an INDEXED file with ALTERNATE RECORD KEYs in ACCESS SEQUENTIAL");
         }
         List<Statement> out = new ArrayList<>();
         if (w.getFrom() != null) {
             out.add(fromMove(record, c.operand(w.getFrom().getFromCall()), c));
         }
-        out.add(stmt(call(name(file.javaName()), "rewrite", recordView(record, c))));
+        Expression f = name(file.javaName());
+        if (!file.keyed()) {
+            out.add(stmt(call(f, "rewrite", recordView(record, c))));
+            return out;
+        }
+        out.addAll(conditional(call(f, "rewrite", recordView(record, c), bool(invalidKey)), invalidKey ? c.nested(w.getInvalidKeyPhrase()) : null,
+                w.getNotInvalidKeyPhrase() == null ? new BlockStmt() : c.nested(w.getNotInvalidKeyPhrase()), f));
         return out;
+    }
+
+    private static TranslationContext.FileRef keyedFile(Call fileCall, String verb, TranslationContext c) throws HandlerException {
+        var file = c.file(fileCall);
+        if (!file.keyed()) {
+            throw HandlerException.unsupported(verb + " of a " + file.organization() + " file");
+        }
+        return file;
+    }
+
+    private static List<Statement> deleteFile(OpUnit u, TranslationContext c) throws HandlerException {
+        var d = (io.proleap.cobol.asg.metamodel.procedure.delete.DeleteStatement) u.statement();
+        var file = keyedFile(d.getFileCall(), "DELETE", c);
+        if (file.organization() == TranslationContext.Organization.RELATIVE && file.relativeKey() == null) {
+            throw HandlerException.unsupported("DELETE of a RELATIVE file without a RELATIVE KEY");
+        }
+        boolean invalidKey = d.getInvalidKeyPhrase() != null;
+        Expression f = name(file.javaName());
+        return conditional(call(f, "delete", bool(invalidKey)), invalidKey ? c.nested(d.getInvalidKeyPhrase()) : null,
+                d.getNotInvalidKeyPhrase() == null ? new BlockStmt() : c.nested(d.getNotInvalidKeyPhrase()), f);
+    }
+
+    /** START's relation as an IndexedFile condition name (EQ, GT, GE, LT, LE). */
+    static String startCondition(io.proleap.cobol.asg.metamodel.procedure.start.StartStatement s) {
+        var k = ((io.proleap.cobol.CobolParser.StartStatementContext) s.getCtx()).startKey();
+        if (k == null) {
+            return "EQ";
+        }
+        boolean not = k.NOT() != null;
+        boolean greater = k.GREATER() != null || k.MORETHANCHAR() != null;
+        boolean less = k.LESS() != null || k.LESSTHANCHAR() != null;
+        if (k.MORETHANOREQUAL() != null || k.GREATER() != null && k.EQUAL() != null || not && less) {
+            return "GE";
+        }
+        if (k.LESSTHANOREQUAL() != null || k.LESS() != null && k.EQUAL() != null || not && greater) {
+            return "LE";
+        }
+        return greater ? "GT" : less ? "LT" : "EQ";
+    }
+
+    private static List<Statement> startFile(OpUnit u, TranslationContext c) throws HandlerException {
+        var s = (io.proleap.cobol.asg.metamodel.procedure.start.StartStatement) u.statement();
+        var file = keyedFile(s.getFileCall(), "START", c);
+        Expression condition = new com.github.javaparser.ast.expr.FieldAccessExpr(name("IndexedFile"), startCondition(s));
+        DataItem keyItem = s.getKey() == null ? null : c.dataItem(s.getKey().getComparisonCall());
+        boolean invalidKey = s.getInvalidKeyPhrase() != null;
+        Expression f = name(file.javaName());
+        Expression start;
+        if (file.organization() == TranslationContext.Organization.RELATIVE) {
+            if (file.relativeKey() == null || keyItem != null && keyItem != file.relativeKey()) {
+                throw HandlerException.unsupported("START of a RELATIVE file needs its RELATIVE KEY");
+            }
+            start = call(f, "start", condition, bool(invalidKey));
+        } else {
+            int key = keyItem == null ? 0 : keyIndex(file, keyItem, false);
+            int length = keyItem == null ? file.keys().getFirst().item().size() : keyItem.size();
+            start = call(f, "start", condition, integer(key), integer(length), bool(invalidKey));
+        }
+        return conditional(start, invalidKey ? c.nested(s.getInvalidKeyPhrase()) : null,
+                s.getNotInvalidKeyPhrase() == null ? new BlockStmt() : c.nested(s.getNotInvalidKeyPhrase()), f);
     }
 
     /** WRITE / REWRITE ... FROM: a MOVE into the record first. */
@@ -2047,8 +2210,8 @@ public final class Builtins implements MappingRegistry.Catalog {
 
     private static Expression plainFile(Call call, TranslationContext c) throws HandlerException {
         var f = c.file(call);
-        if (f.sort()) {
-            throw HandlerException.unsupported(call.getName() + " is a sort file");
+        if (f.sort() || f.keyed()) {
+            throw HandlerException.unsupported(call.getName() + " is a " + f.organization() + " file (USING / GIVING take sequential files)");
         }
         return name(f.javaName());
     }

@@ -1,0 +1,7 @@
+{
+  "description": "Dense INDEXED fixture (generate_dense_files.py): 500 seeded random statements on a DYNAMIC file with duplicate and unique alternate keys and on a SEQUENTIAL file, statuses and records after each",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "file_assignments": {"dense.dat": "dense.dat", "dseq.dat": "dseq.dat"}},
+  "equivalence": {"programs": ["IDXDENSE.cbl"], "main_class": "fixtures.indexed_dense.Idxdense"},
+  "layout": {"base_package": "fixtures.indexed_dense"}
+}

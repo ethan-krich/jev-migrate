@@ -21,6 +21,13 @@ public final class Storage {
         Arrays.fill(bytes, (byte) ' ');
     }
 
+    /** A FILE SECTION record area: GnuCOBOL leaves it zero bytes until a statement fills it. */
+    public static Storage zeros(int length) {
+        Storage s = new Storage(length);
+        Arrays.fill(s.bytes, (byte) 0);
+        return s;
+    }
+
     public int length() {
         return bytes.length;
     }

@@ -57,9 +57,10 @@ Only plain JSON crosses process boundaries: no callables, AST objects or Python 
 | `if` | IF | conditions incl. AND/OR precedence; `NEXT SENTENCE` branches |
 | `evaluate` | EVALUATE | if/else chain; `ALSO`, `THRU`, `ANY`, `NOT`, `TRUE`/`FALSE`, condition subjects, `OTHER` |
 | `perform` | PERFORM | procedure/inline, `THRU`, TIMES, UNTIL, VARYING [`AFTER`], TEST AFTER; `EXIT PERFORM [CYCLE]` inside inline bodies; overlapping or recursive ranges are `unsupported_construct` |
-| `open_file`, `close_file` | OPEN, CLOSE | SEQUENTIAL and LINE SEQUENTIAL files (`INPUT`, `OUTPUT`, `I-O` for SEQUENTIAL, `EXTEND`); paths from `Dialect.file_assignments` |
-| `read_file` | READ | sequential `READ [INTO] [AT END] [NOT AT END]`; GnuCOBOL FILE STATUS values (00, 06 long line split, 10, 35, 41, 42, 46, 47, …); an unhandled error status ends the run unit (status 1) unless the file has FILE STATUS |
-| `write_file`, `rewrite_file` | WRITE, REWRITE | `[FROM]`; LINE SEQUENTIAL strips trailing spaces and refuses control characters (status 71); `ADVANCING` has no default rule |
+| `open_file`, `close_file` | OPEN, CLOSE | SEQUENTIAL, LINE SEQUENTIAL, RELATIVE and INDEXED files (`INPUT`, `OUTPUT`, `I-O` except LINE SEQUENTIAL, `EXTEND`); paths from `Dialect.file_assignments` |
+| `read_file` | READ | `READ [NEXT / PREVIOUS] [INTO] [AT END] [NOT AT END]`, and for RELATIVE / INDEXED files in ACCESS RANDOM / DYNAMIC `READ [KEY IS key] [INVALID KEY] [NOT INVALID KEY]`; GnuCOBOL FILE STATUS values (00, 06 long line split, 10, 14, 21–24, 35, 41, 42, 46, 47, …); an unhandled error status ends the run unit (status 1) unless the file has FILE STATUS; the NOT phrase runs only after a successful READ |
+| `write_file`, `rewrite_file` | WRITE, REWRITE | `[FROM]`, `[NOT] INVALID KEY` for RELATIVE / INDEXED files; LINE SEQUENTIAL strips trailing spaces and refuses control characters (status 71); `ADVANCING` has no default rule; REWRITE of an INDEXED file with alternate keys in ACCESS SEQUENTIAL is `unsupported_construct` (GnuCOBOL's result depends on its internal state) |
+| `delete_file`, `start_file` | DELETE, START | RELATIVE / INDEXED files: `DELETE file [RECORD]`, `START file [KEY IS = > >= < <= NOT < NOT > item]` (an INDEXED key or a leading part of one), `[NOT] INVALID KEY` |
 | `sort` | SORT | `WITH DUPLICATES IN ORDER` required (otherwise `unsupported_construct` offering `sort_stable`); `USING` / `INPUT PROCEDURE`, `GIVING` / `OUTPUT PROCEDURE` |
 | `sort_stable` | SORT | candidate only: the same stable sort without `DUPLICATES IN ORDER` |
 | `merge` | MERGE | `USING` files in key order (ties in file order), `GIVING` / `OUTPUT PROCEDURE` |
@@ -109,9 +110,11 @@ to `cobol_to_java.BUILTIN_HANDLERS` / `FACTS`.
 | INSPECT | `form` (`tallying`, `replacing`, `tallying_replacing`, `converting`) |
 | GO_TO | `depending` |
 | OPEN / CLOSE | (none) |
-| READ | `at_end`, `into` |
-| WRITE | `from`, `advancing` |
-| REWRITE | `from` |
+| READ | `at_end`, `into`, `organization` (`sequential`, `line_sequential`, `relative`, `indexed`, `sort`, `unsupported`), `direction` (`next`, `previous`, null), `key`, `invalid_key` |
+| WRITE | `from`, `advancing`, `organization`, `invalid_key` |
+| REWRITE | `from`, `organization`, `invalid_key` |
+| DELETE | `organization`, `invalid_key` |
+| START | `organization`, `key`, `invalid_key` |
 | SORT | `duplicates`, `input_procedure`, `output_procedure` |
 | MERGE | `output_procedure` |
 | RELEASE | `from` |

@@ -14,21 +14,16 @@ import java.nio.file.Path;
  * written: status 71). SEQUENTIAL records are the record area's bytes. A READ after the end of
  * file gives status 46.
  *
- * <p>A status that is not successful and that the statement does not handle (AT END) ends the run
- * unit with status 1, as GnuCOBOL does, unless the file has a FILE STATUS item.
+ * <p>Unsuccessful statuses are handled as {@link FileBase} describes.
  */
-public final class CobolFile {
+public final class CobolFile extends FileBase {
     public static final int INPUT = 0;
     public static final int OUTPUT = 1;
     public static final int IO = 2;
     public static final int EXTEND = 3;
-    private static final int CLOSED = -1;
 
-    private final String name;
-    private final String path;
     private final boolean lineSequential;
     private final AlphanumericField record;
-    private final AlphanumericField status;
     private RandomAccessFile file;
     private final byte[] buffer = new byte[8192];
     private int bufferStart;
@@ -39,11 +34,9 @@ public final class CobolFile {
     private long lastRecord = -1;
 
     public CobolFile(String name, String path, boolean lineSequential, AlphanumericField record, AlphanumericField status) {
-        this.name = name;
-        this.path = path;
+        super(name, path, status);
         this.lineSequential = lineSequential;
         this.record = record;
-        this.status = status;
     }
 
     public void open(int openMode) {
@@ -108,8 +101,7 @@ public final class CobolFile {
             String s = lineSequential ? readLine() : readRecord();
             if (s == null) {
                 atEnd = true;
-                finish("10", atEndPhrase);
-                return true;
+                return atEnd("10", atEndPhrase);
             }
             lastRecord = start;
             record.storage().put(record.offset(), record.length(), s);
@@ -124,11 +116,6 @@ public final class CobolFile {
     /** The record area, for READ ... INTO. */
     public String data() {
         return record.get();
-    }
-
-    /** Whether the last READ succeeded (READ ... INTO moves only then). */
-    public boolean succeeded() {
-        return status == null ? lastStatus.charAt(0) == '0' : status.get().charAt(0) == '0';
     }
 
     /** WRITE of {@code data} (a record of this file). */
@@ -190,35 +177,7 @@ public final class CobolFile {
         }
     }
 
-    private String lastStatus = "00";
     private boolean truncated;
-
-    private void finish(String code, boolean handled) {
-        lastStatus = code;
-        if (status != null) {
-            status.set(code);
-        }
-        if (code.charAt(0) != '0' && !handled && status == null) {
-            Bounds.fail(describe(code) + " (status = " + code + ") for file " + name + " ('" + path + "')");
-        }
-    }
-
-    private static String describe(String code) {
-        return switch (code) {
-            case "10" -> "end of file";
-            case "35" -> "file does not exist";
-            case "37" -> "permission denied";
-            case "41" -> "file already open";
-            case "42" -> "file not open";
-            case "43" -> "READ must be executed first";
-            case "47" -> "READ/START not allowed, file not open for input";
-            case "48" -> "WRITE not allowed, file not open for output";
-            case "46" -> "READ after unsuccessful READ/START";
-            case "49" -> "DELETE/REWRITE not allowed, file not open for I-O";
-            case "71" -> "bad character in record";
-            default -> "I/O error";
-        };
-    }
 
     // ------------------------------------------------------------- buffered reading
 
