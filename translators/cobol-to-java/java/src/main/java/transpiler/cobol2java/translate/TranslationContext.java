@@ -22,6 +22,9 @@ public interface TranslationContext {
     /** A BigDecimal-valued expression for a numeric operand. */
     Expression numeric(Operand operand) throws HandlerException;
 
+    /** {@link #numeric} with GnuCOBOL 3.2's division (38 extra digits, truncated) and integer powers. */
+    Expression gnuArithmetic(Operand operand) throws HandlerException;
+
     /** A Java boolean expression for a COBOL condition. */
     Expression condition(ConditionValueStmt condition) throws HandlerException;
 

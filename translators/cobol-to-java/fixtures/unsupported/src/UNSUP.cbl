@@ -40,7 +40,7 @@
            EVALUATE N
                WHEN 1 DISPLAY "one"
            END-EVALUATE.
-           COMPUTE N = N / 3.
+           COMPUTE N = N ** 0.5.
            DISPLAY "report" UPON PRINTER.
            ACCEPT ENV-VAL FROM ENVIRONMENT-VALUE.
            STOP "operator".

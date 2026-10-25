@@ -1,0 +1,6 @@
+{
+  "description": "COMPUTE with / and integer ** (compute_gnucobol, the default COMPUTE handler): repeating decimals, quotient chains, large scales, negatives, ROUNDED, SIZE ERROR, division by zero, negative exponents",
+  "expect": {"status": "ok"},
+  "equivalence": {"programs": ["GNUCOMP.cbl"], "main_class": "fixtures.compute_gnucobol.Gnucomp"},
+  "layout": {"base_package": "fixtures.compute_gnucobol"}
+}

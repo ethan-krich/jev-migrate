@@ -86,6 +86,9 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("multiply", "MULTIPLY", "MULTIPLY ... BY / GIVING with exact decimal arithmetic", Builtins::multiply));
         register(Handler.of("divide", "DIVIDE", "DIVIDE ... INTO / BY / GIVING, truncated or ROUNDED at the receiver scale", Builtins::divide));
         register(Handler.of("compute", "COMPUTE", "COMPUTE with +, -, * and unary minus (exact)", Builtins::compute));
+        register(Handler.of("compute_gnucobol", "COMPUTE",
+                "COMPUTE with / and integer ** as GnuCOBOL 3.2 computes them (quotients keep 38 extra digits, truncated)",
+                Builtins::computeGnucobol));
         register(Handler.of("display", "DISPLAY", "DISPLAY to standard output in GnuCOBOL format", Builtins::display));
         register(Handler.of("if", "IF", "IF / ELSE with relation, sign and combined conditions", Builtins::ifElse));
         register(Handler.of("perform", "PERFORM", "PERFORM paragraph/section or inline; TIMES, UNTIL, single VARYING", Builtins::perform));
@@ -597,6 +600,18 @@ public final class Builtins implements MappingRegistry.Catalog {
             rs.add(receiver(store.getStoreCall(), store, c));
         }
         Expression value = once(c.numeric(new Operand.Arithmetic(comp.getArithmeticExpression())), rs.size(), out, c, "result");
+        out.addAll(storeAll(rs, r -> value.clone(), comp.getOnSizeErrorPhrase(), comp.getNotOnSizeErrorPhrase(), c));
+        return out;
+    }
+
+    private static List<Statement> computeGnucobol(OpUnit u, TranslationContext c) throws HandlerException {
+        ComputeStatement comp = (ComputeStatement) u.statement();
+        List<Statement> out = new ArrayList<>();
+        List<Receiver> rs = new ArrayList<>();
+        for (var store : comp.getStores()) {
+            rs.add(receiver(store.getStoreCall(), store, c));
+        }
+        Expression value = once(c.gnuArithmetic(new Operand.Arithmetic(comp.getArithmeticExpression())), rs.size(), out, c, "result");
         out.addAll(storeAll(rs, r -> value.clone(), comp.getOnSizeErrorPhrase(), comp.getNotOnSizeErrorPhrase(), c));
         return out;
     }

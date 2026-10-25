@@ -74,6 +74,16 @@ def stdin(case: Case) -> bytes:
     return path.read_bytes() if path.is_file() else b""
 
 
+def mappings(case: Case):
+    """The default mappings with the case's ``replace_rules`` ({rule id: changed fields}) applied."""
+    from cobol_to_java import default_mappings
+
+    registry = default_mappings()
+    for rule_id, changes in case.spec.get("replace_rules", {}).items():
+        registry.replace(rule_id, **changes)
+    return registry
+
+
 def copy_data(case: Case, run_dir: Path) -> None:
     """Puts the fixture's input files (``<fixture>/data/``) in the directory the program runs in."""
     data = case.path / "data"

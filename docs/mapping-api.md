@@ -50,7 +50,8 @@ Only plain JSON crosses process boundaries: no callables, AST objects or Python 
 | `move_to_edited` | MOVE | receiver numeric-edited (GnuCOBOL editing: `Z * $ + - CR DB . , B 0 /`, fixed and floating insertion, BLANK WHEN ZERO) or alphanumeric-edited (insertion) |
 | `move_from_edited` | MOVE | numeric-edited sender, numeric receiver: de-editing |
 | `add`, `subtract`, `multiply`, `divide` | … | exact `BigDecimal`, `ROUNDED`, `SIZE ERROR`; `CORRESPONDING` (one unit per pair, no SIZE ERROR); `DIVIDE … REMAINDER` (remainder from the quotient truncated to its scale, as GnuCOBOL) |
-| `compute` | COMPUTE | `+ - *`, unary minus |
+| `compute_gnucobol` | COMPUTE | default: `+ - *` exact; `/` as GnuCOBOL 3.2's `cob_decimal_div` (scale `s1 - s2`, 38 extra digits, truncated); `**` right-associative with non-negative integer literal / unsigned integer exponents (others are `unsupported_construct`); division by zero is a size error |
+| `compute` | COMPUTE | candidate only: `+ - *`, unary minus (refuses `/` and `**`) |
 | `display` | DISPLAY | GnuCOBOL format, `NO ADVANCING`, `UPON CONSOLE / SYSOUT` (stdout) and `SYSERR` (stderr), mnemonic names; other devices are `missing_target_api` |
 | `exhibit` | EXHIBIT | `[NAMED]`: `NAME = value` with the name as written (CHANGED is a decision) |
 | `if` | IF | conditions incl. AND/OR precedence; `NEXT SENTENCE` branches |

@@ -92,7 +92,7 @@ class ProgramTranslatorTest {
     @Test
     void unsupportedConstructsBecomeDecisionsNotApproximations() throws Exception {
         var r = translate(dir, program("01 F COMP-1.\n01 P POINTER.\n01 N PIC 99.",
-                "COMPUTE N = N / 2.", "CANCEL 'X'.", "    STOP RUN."), defaultRules());
+                "COMPUTE N = N ** 0.5.", "CANCEL 'X'.", "    STOP RUN."), defaultRules());
         List<String> got = r.decisions().stream().map(d -> d.reason().wire() + ":" + d.operation()).toList();
         assertEquals(List.of("unsupported_construct:DATA", "unsupported_construct:DATA", "unsupported_construct:COMPUTE",
                 "missing_mapping:CANCEL"), got);
@@ -220,5 +220,16 @@ class ProgramTranslatorTest {
                 defaultRules()));
         assertTrue(out.contains("private void paraA()"), out);
         assertTrue(!out.contains("PerformStack"), out);
+    }
+
+    @Test
+    void computeFollowsGnuCobolAndRefusesExponentsItCannotReproduce() throws Exception {
+        String out = java(translate(dir, program("01 N PIC S9(3)V99.", "COMPUTE N = 1 / 3 * 3 + 2 ** 3 ** 2."), defaultRules()));
+        assertTrue(out.contains("Arithmetic.over(BigDecimal.ONE, new BigDecimal(\"3\"))"), out);
+        assertTrue(out.contains("Arithmetic.power(new BigDecimal(\"2\"), Arithmetic.power(new BigDecimal(\"3\"), new BigDecimal(\"2\")))"), out);
+        for (String e : List.of("2 ** -2", "2 ** 0.5", "2 ** N")) {
+            var r = translate(dir, program("01 N PIC S9(3)V99.", "COMPUTE N = " + e + "."), defaultRules());
+            assertEquals(Reason.UNSUPPORTED_CONSTRUCT, r.decisions().getFirst().reason(), e);
+        }
     }
 }

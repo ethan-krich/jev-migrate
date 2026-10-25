@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 from cobol_to_java import Dialect, Layout
-from support import REFERENCE_COBC, Case, Execution, cases, cobc_version, golden, run_cobol, run_java, stdin
+from support import REFERENCE_COBC, Case, Execution, cases, cobc_version, golden, run_cobol, run_java, stdin, mappings
 from transpiler import transpile
 
 CASES = [c for c in cases() if c.equivalence]
@@ -34,6 +34,7 @@ def test_java_matches_cobol(case: Case, tmp_path: Path, built) -> None:
         case.src,
         output=tmp_path,
         layout=Layout(**case.spec.get("layout", {})),
+        mappings=mappings(case),
         dialect=Dialect(**case.spec.get("dialect", {})),
         copybook_paths=[case.path / p for p in case.spec.get("copybook_paths", [])],
     )

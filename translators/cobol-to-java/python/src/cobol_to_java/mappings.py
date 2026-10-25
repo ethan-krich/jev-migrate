@@ -19,6 +19,7 @@ BUILTIN_HANDLERS = MappingProxyType({
     "multiply": "MULTIPLY",
     "divide": "DIVIDE",
     "compute": "COMPUTE",
+    "compute_gnucobol": "COMPUTE",
     "display": "DISPLAY",
     "if": "IF",
     "perform": "PERFORM",
@@ -61,7 +62,8 @@ BUILTIN_HANDLERS = MappingProxyType({
 
 # Handlers that no default rule selects: the worker offers them as candidates on a decision
 # (they are correct only under conditions it cannot prove, e.g. SEARCH ALL key order).
-CANDIDATE_HANDLERS = frozenset({"search_all_binary", "search_all_linear", "alter_goto", "sort_stable"})
+CANDIDATE_HANDLERS = frozenset({"search_all_binary", "search_all_linear", "alter_goto", "sort_stable",
+                                "compute"})
 
 # Facts the worker computes per operation instance; usable as `when` condition keys.
 FACTS = MappingProxyType({
@@ -122,7 +124,7 @@ DEFAULT_RULES: tuple[tuple[str, str, str, dict, str], ...] = (
     ("cobol.subtract", "SUBTRACT", "subtract", {}, "SUBTRACT FROM / GIVING"),
     ("cobol.multiply", "MULTIPLY", "multiply", {}, "MULTIPLY BY / GIVING"),
     ("cobol.divide", "DIVIDE", "divide", {}, "DIVIDE INTO / BY / GIVING"),
-    ("cobol.compute", "COMPUTE", "compute", {}, "COMPUTE with +, -, *"),
+    ("cobol.compute", "COMPUTE", "compute_gnucobol", {}, "COMPUTE with + - * / and integer ** (GnuCOBOL 3.2 scaling)"),
     ("cobol.display", "DISPLAY", "display", {}, "DISPLAY to stdout"),
     ("cobol.if", "IF", "if", {}, "IF / ELSE"),
     ("cobol.perform", "PERFORM", "perform", {}, "PERFORM procedure or inline"),

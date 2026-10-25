@@ -77,12 +77,13 @@ public final class TestSupport {
         rules.add(rule("cobol.move.to_alphanumeric", "MOVE", "move_to_alphanumeric", Map.of("target_category", "alphanumeric"), 100));
         rules.add(rule("cobol.move.to_numeric", "MOVE", "move_to_numeric", Map.of("target_category", "numeric"), 100));
         String[][] simple = {{"ADD", "add"}, {"SUBTRACT", "subtract"}, {"MULTIPLY", "multiply"}, {"DIVIDE", "divide"},
-            {"COMPUTE", "compute"}, {"DISPLAY", "display"}, {"IF", "if"}, {"PERFORM", "perform"}, {"GOBACK", "goback"},
+            {"DISPLAY", "display"}, {"IF", "if"}, {"PERFORM", "perform"}, {"GOBACK", "goback"},
             {"EXIT", "exit"}, {"CONTINUE", "continue"}, {"CALL", "call_program"}};
         for (String[] s : simple) {
             rules.add(rule("cobol." + s[1], s[0], s[1], Map.of(), 100));
         }
         rules.add(rule("cobol.stop_run", "STOP", "stop_run", Map.of(), 100));
+        rules.add(rule("cobol.compute", "COMPUTE", "compute_gnucobol", Map.of(), 100));
         rules.add(rule("cobol.set.condition", "SET", "set_condition", Map.of("form", List.of("true", "false")), 100));
         rules.add(rule("cobol.evaluate", "EVALUATE", "evaluate", Map.of(), 100));
         rules.add(rule("cobol.accept.stdin", "ACCEPT", "accept_stdin", Map.of("from", List.of("stdin", "device")), 100));

@@ -256,6 +256,8 @@ public final class ProgramTranslator implements TranslationContext {
     /** Paragraphs named by ALTER: their GO TO goes where the int field says. */
     private final Map<Paragraph, String> alterable = new IdentityHashMap<>();
     private int currentNode = -1;
+    /** Building a COMPUTE expression with GnuCOBOL's division and power rules (compute_gnucobol). */
+    private boolean gnuArithmetic;
     private int statements;
     private int translated;
     private final boolean binaryTruncate;
@@ -2821,7 +2823,9 @@ public final class ProgramTranslator implements TranslationContext {
     private Expression arithmetic(ArithmeticValueStmt a) throws HandlerException {
         Expression e = multDivs(a.getMultDivs());
         for (PlusMinus pm : a.getPlusMinus()) {
-            e = call(e, pm.getPlusMinusType() == PlusMinus.PlusMinusType.PLUS ? "add" : "subtract", multDivs(pm.getMultDivs()));
+            boolean plus = pm.getPlusMinusType() == PlusMinus.PlusMinusType.PLUS;
+            e = gnuArithmetic ? staticCall("Arithmetic", plus ? "plus" : "minus", e, multDivs(pm.getMultDivs()))
+                    : call(e, plus ? "add" : "subtract", multDivs(pm.getMultDivs()));
         }
         return e;
     }
@@ -2830,20 +2834,63 @@ public final class ProgramTranslator implements TranslationContext {
         Expression e = powers(md.getPowers());
         for (MultDiv m : md.getMultDivs()) {
             if (m.getMultDivType() == MultDiv.MultDivType.DIV) {
-                throw HandlerException.unsupported("division in an arithmetic expression is not supported "
-                        + "(intermediate precision is implementation-defined); use DIVIDE");
+                if (!gnuArithmetic) {
+                    throw HandlerException.unsupported("division in an arithmetic expression is not supported "
+                            + "(intermediate precision is implementation-defined); use DIVIDE");
+                }
+                e = staticCall("Arithmetic", "over", e, powers(m.getPowers()));
+            } else {
+                e = gnuArithmetic ? staticCall("Arithmetic", "times", e, powers(m.getPowers())) : call(e, "multiply", powers(m.getPowers()));
             }
-            e = call(e, "multiply", powers(m.getPowers()));
         }
         return e;
     }
 
+    /**
+     * {@code [-] basis [** basis]...}: the sign applies to the first basis; GnuCOBOL evaluates
+     * {@code a ** b ** c} as {@code a ** (b ** c)}. Exponents must be non-negative integer literals
+     * or unsigned integer items: GnuCOBOL 3.2 computes other powers in floating point, and a
+     * negative exponent changes the result of later evaluations of the same expression.
+     */
     private Expression powers(Powers p) throws HandlerException {
-        if (!p.getPowers().isEmpty()) {
+        if (!p.getPowers().isEmpty() && !gnuArithmetic) {
             throw HandlerException.unsupported("exponentiation (**) is not supported");
         }
         Expression e = basis(p.getBasis());
-        return p.getPowersType() == Powers.PowersType.MINUS ? call(e, "negate") : e;
+        if (p.getPowersType() == Powers.PowersType.MINUS) {
+            e = gnuArithmetic ? staticCall("Arithmetic", "negate", e) : call(e, "negate");
+        }
+        List<Expression> exponents = new ArrayList<>();
+        for (var power : p.getPowers()) {
+            ValueStmt exp = power.getBasis().getBasisValueStmt();
+            Operand o = exp instanceof ArithmeticValueStmt av && trivial(av) == null ? null : operand(exp);
+            boolean ok = o instanceof Operand.NumericLiteral n && n.isInteger() && n.value().signum() >= 0
+                    || o instanceof Operand.Field f && f.integer() && !f.item().numeric().signed();
+            if (!ok) {
+                throw HandlerException.unsupported("exponent " + power.getCtx().getText()
+                        + " is not a non-negative integer literal or unsigned integer item");
+            }
+            exponents.add(numeric(o));
+        }
+        if (exponents.isEmpty()) {
+            return e;
+        }
+        Expression exponent = exponents.getLast();
+        for (int i = exponents.size() - 2; i >= 0; i--) {
+            exponent = staticCall("Arithmetic", "power", exponents.get(i), exponent);
+        }
+        return staticCall("Arithmetic", "power", e, exponent);
+    }
+
+    @Override
+    public Expression gnuArithmetic(Operand o) throws HandlerException {
+        boolean saved = gnuArithmetic;
+        gnuArithmetic = true;
+        try {
+            return numeric(o);
+        } finally {
+            gnuArithmetic = saved;
+        }
     }
 
     private Expression basis(Basis b) throws HandlerException {
