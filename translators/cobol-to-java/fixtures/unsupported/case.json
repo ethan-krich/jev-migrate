@@ -13,7 +13,7 @@
       {"reason": "unsupported_construct", "operation": "SEARCH", "line": 23,
        "candidates": ["builtin:search_all_binary", "builtin:search_all_linear"]},
       {"reason": "unsupported_construct", "operation": "CALL", "line": 25, "candidates": []},
-      {"reason": "missing_mapping", "operation": "GO_TO", "line": 26, "candidates": []}
+      {"reason": "unsupported_construct", "operation": "ALTER", "line": 26, "candidates": ["builtin:alter_goto"]}
     ]
   },
   "layout": {"base_package": "fixtures.unsupported"}

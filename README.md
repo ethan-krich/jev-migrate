@@ -136,13 +136,14 @@ equivalence fixtures.
 | ✅ | `NEXT SENTENCE`, `EXIT PARAGRAPH / SECTION / PERFORM [CYCLE]` | exits that leave a PERFORMed range are decisions |
 | ✅ | `DIVIDE … REMAINDER`, `MOVE / ADD / SUBTRACT CORRESPONDING` | |
 | ✅ | `DISPLAY UPON CONSOLE / SYSERR`, `EXHIBIT [NAMED]`, `ACCEPT` from stdin and `FROM DATE / DAY / DAY-OF-WEEK / TIME` | |
-| ✅ | Paragraphs, sections, fall-through, `PERFORM` proc / inline, `TIMES`, `UNTIL`, single `VARYING`, `WITH TEST AFTER` | |
+| ✅ | Paragraphs, sections, fall-through, `PERFORM` proc / inline / `THRU`, `TIMES`, `UNTIL`, `VARYING … AFTER`, `WITH TEST AFTER` | |
+| ✅ | `GO TO`, `GO TO … DEPENDING ON` | procedure dispatcher with GnuCOBOL's PERFORM return points; overlapping / recursive ranges and GO TO out of a performed range are decisions; `ALTER` is a decision with a candidate |
 | ✅ | `STOP RUN`, `GOBACK`, `EXIT`, `EXIT PROGRAM`, `CONTINUE`, `RETURN-CODE` → exit status | |
 | ✅ | `COPY` (copybook search path; decision lines map back to the original file), static `CALL 'literal'` of a program in the project | persistent WORKING-STORAGE, RETURN-CODE propagation |
 | ◐ | `REPLACE` statements | parsed by ProLeap; line numbers then fall back to the preprocessed source (warning `approximate_line_numbers`) |
 | ❌ | `RENAMES`, level 88 on groups, `COMP-1` / `COMP-2`, `POINTER`, `ADDRESS OF`, `P` / `N` pictures, a fixed sign before a floating currency string, `EXTERNAL`, `GLOBAL`, nested programs, `IS RECURSIVE`, `CALL … BY VALUE` | `unsupported_construct` |
 | ❌ | `/` and `**` in COMPUTE (implementation-defined intermediate precision), EBCDIC collating sequence | `unsupported_construct` |
-| ❌ | `GO TO`, `PERFORM … THRU`, files, dynamic `CALL`, `DISPLAY UPON` printer / other devices, `ACCEPT FROM` environment, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
+| ❌ | Files, dynamic `CALL`, `DISPLAY UPON` printer / other devices, `ACCEPT FROM` environment, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
 | ❌ | Intrinsic functions, `TALLY` and other special registers, free format / other dialects | |
 
 Known divergence: GnuCOBOL 3.2 prints an empty value for a `COMPUTE` receiver when it is displayed

@@ -116,6 +116,11 @@ public final class Builtins implements MappingRegistry.Catalog {
                 Builtins::unstring));
         register(Handler.of("inspect", "INSPECT",
                 "INSPECT TALLYING / REPLACING / CONVERTING with BEFORE / AFTER INITIAL", Builtins::inspect));
+        register(Handler.of("go_to", "GO_TO", "GO TO procedure and GO TO ... DEPENDING ON (procedure dispatcher)", Builtins::goTo));
+        register(Handler.of("alter", "ALTER",
+                "ALTER is a decision: it changes a GO TO at run time; the candidate below is offered for review", Builtins::alter));
+        register(Handler.of("alter_goto", "ALTER",
+                "ALTER as an assignment of the altered paragraph's GO TO target (candidate only)", Builtins::alterGoTo));
         register(Handler.of("move_group", "MOVE",
                 "MOVE into a group item: the sending bytes as alphanumeric data, space-padded or cut", Builtins::moveToGroup));
         register(Handler.of("initialize", "INITIALIZE",
@@ -885,11 +890,15 @@ public final class Builtins implements MappingRegistry.Catalog {
         } else {
             var proc = p.getPerformProcedureStatement();
             List<Call> calls = proc.getCalls();
-            if (calls.size() > 1 && !calls.get(0).getName().equalsIgnoreCase(calls.get(calls.size() - 1).getName())) {
-                throw HandlerException.unsupported("PERFORM ... THRU a range of procedures is not supported");
-            }
             type = proc.getPerformType();
-            body = new BlockStmt(NodeList.nodeList(stmt(thisCall(c.procedureMethod(calls.getFirst())))));
+            if (c.dispatcher()) {
+                body = new BlockStmt(NodeList.nodeList(c.performRange(calls.getFirst(), calls.size() > 1 ? calls.getLast() : null)));
+            } else {
+                if (calls.size() > 1 && !calls.get(0).getName().equalsIgnoreCase(calls.get(calls.size() - 1).getName())) {
+                    throw HandlerException.unsupported("PERFORM ... THRU a range of procedures is not supported");
+                }
+                body = new BlockStmt(NodeList.nodeList(stmt(thisCall(c.procedureMethod(calls.getFirst())))));
+            }
         }
         if (type == null) {
             if (frame != null && (frame.exitUsed || frame.cycleUsed)) {
@@ -945,7 +954,13 @@ public final class Builtins implements MappingRegistry.Catalog {
             case VARYING -> {
                 var varying = type.getVarying();
                 if (!varying.getVaryingClause().getAfters().isEmpty()) {
-                    throw HandlerException.unsupported("PERFORM VARYING ... AFTER is not supported");
+                    if (testAfter(varying.getTestClause())) {
+                        throw HandlerException.unsupported("PERFORM WITH TEST AFTER VARYING ... AFTER is not supported");
+                    }
+                    List<VaryingPhrase> phrases = new ArrayList<>();
+                    phrases.add(varying.getVaryingClause().getVaryingPhrase());
+                    varying.getVaryingClause().getAfters().forEach(a -> phrases.add(a.getVaryingPhrase()));
+                    yield varyingAfter(phrases, body, c);
                 }
                 VaryingPhrase phrase = varying.getVaryingClause().getVaryingPhrase();
                 Operand var = c.operand(phrase.getVaryingValueStmt());
@@ -986,6 +1001,54 @@ public final class Builtins implements MappingRegistry.Catalog {
                 yield List.of(init, new WhileStmt(not(until), loop));
             }
         };
+    }
+
+    /** Initialisation, step and end test of one VARYING / AFTER phrase. */
+    private record Varying(Statement init, Statement step, Expression until) {}
+
+    private static Varying varyingParts(VaryingPhrase phrase, TranslationContext c) throws HandlerException {
+        Operand var = c.operand(phrase.getVaryingValueStmt());
+        Expression until = c.condition(phrase.getUntil().getCondition());
+        if (var instanceof Operand.Index idx) {
+            Expression from = intValue(c.operand(phrase.getFrom().getFromValueStmt()), c);
+            Expression by = intValue(c.operand(phrase.getBy().getByValueStmt()), c);
+            return new Varying(stmt(new AssignExpr(name(idx.index().javaName()), from, AssignExpr.Operator.ASSIGN)),
+                    stmt(new AssignExpr(name(idx.index().javaName()), by, AssignExpr.Operator.PLUS)), until);
+        }
+        if (!(var instanceof Operand.Field f && f.numeric())) {
+            throw HandlerException.unsupported("PERFORM VARYING requires a numeric data item or an index");
+        }
+        Expression field = c.field(var);
+        Expression from = numericOperand(phrase.getFrom().getFromValueStmt(), c);
+        Expression by = numericOperand(phrase.getBy().getByValueStmt(), c);
+        return new Varying(stmt(call(field, "move", from)),
+                stmt(call(field.clone(), "store", call(call(field.clone(), "get"), "add", by), bool(false), bool(false))), until);
+    }
+
+    /**
+     * VARYING ... AFTER ... (test before): every variable starts at its FROM; the innermost loop
+     * runs the body; when a level's condition holds, the level above steps and this level
+     * restarts from its FROM, as the standard (and GnuCOBOL) order it.
+     */
+    private static List<Statement> varyingAfter(List<VaryingPhrase> phrases, BlockStmt body, TranslationContext c) throws HandlerException {
+        List<Varying> parts = new ArrayList<>();
+        for (VaryingPhrase p : phrases) {
+            parts.add(varyingParts(p, c));
+        }
+        List<Statement> out = new ArrayList<>();
+        parts.forEach(v -> out.add(v.init()));
+        Statement loop = null;
+        for (int k = parts.size() - 1; k >= 0; k--) {
+            // Not a clone at the innermost level: pending decisions hold references to placeholders inside body.
+            BlockStmt levelBody = loop == null ? body : new BlockStmt(NodeList.nodeList(loop));
+            levelBody.addStatement(parts.get(k).step().clone());
+            if (k + 1 < parts.size()) {
+                levelBody.addStatement(parts.get(k + 1).init().clone());
+            }
+            loop = new WhileStmt(not(parts.get(k).until()), levelBody);
+        }
+        out.add(loop);
+        return out;
     }
 
     private static boolean testAfter(TestClause clause) {
@@ -1699,5 +1762,48 @@ public final class Builtins implements MappingRegistry.Catalog {
             }
         }
         return call(chain, "replace");
+    }
+
+    // ------------------------------------------------------- GO TO / ALTER
+
+    private static List<Statement> goTo(OpUnit u, TranslationContext c) throws HandlerException {
+        var g = (io.proleap.cobol.asg.metamodel.procedure.gotostmt.GoToStatement) u.statement();
+        if (g.getGoToType() == io.proleap.cobol.asg.metamodel.procedure.gotostmt.GoToStatement.GoToType.SIMPLE) {
+            if (g.getSimple() == null || g.getSimple().getProcedureCall() == null) {
+                throw HandlerException.unsupported("GO TO without a procedure (altered GO TO.) is not supported");
+            }
+            return List.of(c.goTo(g.getSimple().getProcedureCall()));
+        }
+        // GO TO p1 p2 ... DEPENDING ON n: to the n-th procedure; outside 1..count, on to the next statement.
+        var depending = g.getDependingOnPhrase();
+        Operand n = c.operand(depending.getDependingOnCall());
+        if (!(n instanceof Operand.Field f && f.integer())) {
+            throw HandlerException.unsupported("GO TO ... DEPENDING ON needs an integer item");
+        }
+        NodeList<com.github.javaparser.ast.stmt.SwitchEntry> entries = new NodeList<>();
+        int k = 1;
+        for (Call target : depending.getProcedureCalls()) {
+            entries.add(new com.github.javaparser.ast.stmt.SwitchEntry(NodeList.nodeList(integer(k++)),
+                    com.github.javaparser.ast.stmt.SwitchEntry.Type.STATEMENT_GROUP,
+                    NodeList.nodeList(new com.github.javaparser.ast.stmt.ReturnStmt(integer(c.procedureNumber(target))))));
+        }
+        entries.add(new com.github.javaparser.ast.stmt.SwitchEntry(new NodeList<>(), com.github.javaparser.ast.stmt.SwitchEntry.Type.STATEMENT_GROUP,
+                NodeList.nodeList(new BreakStmt())));
+        return List.of(new com.github.javaparser.ast.stmt.SwitchStmt(call(c.field(n), "intValue"), entries));
+    }
+
+    private static List<Statement> alter(OpUnit u, TranslationContext c) throws HandlerException {
+        throw HandlerException.unprovable("ALTER changes the target of a GO TO while the program runs; "
+                + "the translation keeps that behaviour only through the dispatcher candidate, which needs review");
+    }
+
+    private static List<Statement> alterGoTo(OpUnit u, TranslationContext c) throws HandlerException {
+        var a = (io.proleap.cobol.asg.metamodel.procedure.alter.AlterStatement) u.statement();
+        List<Statement> out = new ArrayList<>();
+        for (var to : a.getProceedTos()) {
+            out.add(stmt(new AssignExpr(name(c.alteredField(to.getSourceCall())), integer(c.procedureNumber(to.getTargetCall())),
+                    AssignExpr.Operator.ASSIGN)));
+        }
+        return out;
     }
 }

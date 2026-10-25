@@ -96,6 +96,8 @@ public final class TestSupport {
                 Map.of("source_category", "numeric_edited", "target_category", "numeric"), 100));
         rules.add(rule("cobol.initialize", "INITIALIZE", "initialize", Map.of(), 100));
         rules.add(rule("cobol.string", "STRING", "string", Map.of(), 100));
+        rules.add(rule("cobol.go_to", "GO_TO", "go_to", Map.of(), 100));
+        rules.add(rule("cobol.alter", "ALTER", "alter", Map.of(), 100));
         rules.add(rule("cobol.unstring", "UNSTRING", "unstring", Map.of(), 100));
         rules.add(rule("cobol.inspect", "INSPECT", "inspect", Map.of(), 100));
         rules.add(rule("cobol.set.index", "SET", "set_index", Map.of("form", List.of("to", "up_by", "down_by")), 100));

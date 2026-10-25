@@ -58,7 +58,9 @@ public final class Facts {
             Map.entry("SEARCH", Set.of("all", "varying", "at_end")),
             Map.entry("STRING", Set.of("pointer", "overflow")),
             Map.entry("UNSTRING", Set.of("delimited", "pointer", "tallying", "overflow")),
-            Map.entry("INSPECT", Set.of("form")));
+            Map.entry("INSPECT", Set.of("form")),
+            Map.entry("GO_TO", Set.of("depending")),
+            Map.entry("ALTER", Set.of()));
 
     private Facts() {}
 
@@ -230,6 +232,8 @@ public final class Facts {
             }
             case "INSPECT" -> f.put("form", ((io.proleap.cobol.asg.metamodel.procedure.inspect.InspectStatement) s).getInspectType()
                     .name().toLowerCase(Locale.ROOT));
+            case "GO_TO" -> f.put("depending", ((io.proleap.cobol.asg.metamodel.procedure.gotostmt.GoToStatement) s).getGoToType()
+                    == io.proleap.cobol.asg.metamodel.procedure.gotostmt.GoToStatement.GoToType.DEPENDING_ON);
             case "SEARCH" -> {
                 var search = (io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement) s;
                 f.put("all", ((io.proleap.cobol.CobolParser.SearchStatementContext) s.getCtx()).ALL() != null);

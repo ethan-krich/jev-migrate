@@ -92,11 +92,11 @@ class ProgramTranslatorTest {
     @Test
     void unsupportedConstructsBecomeDecisionsNotApproximations() throws Exception {
         var r = translate(dir, program("01 F COMP-1.\n01 P POINTER.\n01 N PIC 99.",
-                "COMPUTE N = N / 2.", "GO TO X.", "X.", "    STOP RUN."), defaultRules());
+                "COMPUTE N = N / 2.", "SORT F ON ASCENDING KEY N USING F GIVING F.", "    STOP RUN."), defaultRules());
         List<String> got = r.decisions().stream().map(d -> d.reason().wire() + ":" + d.operation()).toList();
         assertEquals(List.of("unsupported_construct:DATA", "unsupported_construct:DATA", "unsupported_construct:COMPUTE",
-                "missing_mapping:GO_TO"), got);
-        assertTrue(java(r).contains("// UNRESOLVED GO_TO: GO TO X"));
+                "missing_mapping:SORT"), got);
+        assertTrue(java(r).contains("// UNRESOLVED SORT: SORT F"));
     }
 
     @Test
@@ -198,5 +198,27 @@ class ProgramTranslatorTest {
         assertTrue(out.contains("x_2.store(x_2.get().add(x.get()), false, false);"), out);
         assertTrue(out.contains("y_2.store(y_2.get().add(y.get()), false, false);"), out);
         assertTrue(out.contains("x_2.move(x);") && out.contains("y_2.move(y);"), out);
+    }
+
+    @Test
+    void dispatcherRefusesRangesItCannotReturnFrom() throws Exception {
+        var r = translate(dir, program("",
+                "MAIN-PARA.", "    PERFORM A THRU B.", "    PERFORM B THRU C.", "    PERFORM D.", "    STOP RUN.",
+                "A.", "    DISPLAY 'a'.", "B.", "    DISPLAY 'b'.", "C.", "    PERFORM E.",
+                "D.", "    GO TO A.", "E.", "    PERFORM E."), defaultRules());
+        List<String> got = r.decisions().stream().map(d -> d.operation() + ":" + d.message()).toList();
+        assertEquals(4, got.size(), got.toString());
+        assertTrue(got.get(0).startsWith("PERFORM:PERFORM range overlaps"), got.toString());
+        assertTrue(got.get(1).startsWith("PERFORM:PERFORM range overlaps"), got.toString());
+        assertTrue(got.get(2).startsWith("GO_TO:GO TO out of a PERFORMed range"), got.toString());
+        assertTrue(got.get(3).startsWith("PERFORM:recursive PERFORM"), got.toString());
+    }
+
+    @Test
+    void programsWithoutJumpsKeepTheMethodForm() throws Exception {
+        String out = java(translate(dir, program("", "MAIN-PARA.", "    PERFORM A.", "    STOP RUN.", "A.", "    DISPLAY 'a'."),
+                defaultRules()));
+        assertTrue(out.contains("private void paraA()"), out);
+        assertTrue(!out.contains("PerformStack"), out);
     }
 }

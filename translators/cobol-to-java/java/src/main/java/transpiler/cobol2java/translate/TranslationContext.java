@@ -43,6 +43,21 @@ public interface TranslationContext {
     /** Translates nested statements (IF branches, inline PERFORM, SIZE ERROR phrases). */
     BlockStmt nested(Scope scope);
 
+    /** Whether the program uses the procedure dispatcher (GO TO, PERFORM THRU, ALTER). */
+    boolean dispatcher();
+
+    /** {@code PERFORM from [THRU thru]} in the dispatcher form; overlapping and recursive ranges are refused. */
+    Statement performRange(Call from, Call thru) throws HandlerException;
+
+    /** {@code GO TO target} in the dispatcher form (to the ALTER target in an altered paragraph). */
+    Statement goTo(Call target) throws HandlerException;
+
+    /** The dispatcher's number for a procedure that GO TO may go to. */
+    int procedureNumber(Call target) throws HandlerException;
+
+    /** The field holding the GO TO target of a paragraph named by ALTER. */
+    String alteredField(Call paragraph) throws HandlerException;
+
     /** The method implementing a paragraph or section named by PERFORM. */
     String procedureMethod(Call call) throws HandlerException;
 

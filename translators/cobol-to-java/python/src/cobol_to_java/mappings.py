@@ -37,6 +37,9 @@ BUILTIN_HANDLERS = MappingProxyType({
     "move_from_edited": "MOVE",
     "initialize": "INITIALIZE",
     "string": "STRING",
+    "go_to": "GO_TO",
+    "alter": "ALTER",
+    "alter_goto": "ALTER",
     "unstring": "UNSTRING",
     "inspect": "INSPECT",
     "set_index": "SET",
@@ -48,7 +51,7 @@ BUILTIN_HANDLERS = MappingProxyType({
 
 # Handlers that no default rule selects: the worker offers them as candidates on a decision
 # (they are correct only under conditions it cannot prove, e.g. SEARCH ALL key order).
-CANDIDATE_HANDLERS = frozenset({"search_all_binary", "search_all_linear"})
+CANDIDATE_HANDLERS = frozenset({"search_all_binary", "search_all_linear", "alter_goto"})
 
 # Facts the worker computes per operation instance; usable as `when` condition keys.
 FACTS = MappingProxyType({
@@ -73,6 +76,8 @@ FACTS = MappingProxyType({
     "STRING": frozenset({"pointer", "overflow"}),
     "UNSTRING": frozenset({"delimited", "pointer", "tallying", "overflow"}),
     "INSPECT": frozenset({"form"}),
+    "GO_TO": frozenset({"depending"}),
+    "ALTER": frozenset(),
 })
 
 # COBOL statement verbs known to the parser (rules may target any of them, e.g. to mark one
@@ -124,6 +129,8 @@ DEFAULT_RULES: tuple[tuple[str, str, str, dict, str], ...] = (
     ("cobol.string", "STRING", "string", {}, "STRING ... INTO"),
     ("cobol.unstring", "UNSTRING", "unstring", {}, "UNSTRING ... INTO alphanumeric items"),
     ("cobol.inspect", "INSPECT", "inspect", {}, "INSPECT TALLYING / REPLACING / CONVERTING"),
+    ("cobol.go_to", "GO_TO", "go_to", {}, "GO TO / GO TO DEPENDING ON (procedure dispatcher)"),
+    ("cobol.alter", "ALTER", "alter", {}, "ALTER (a decision; the alter_goto candidate needs review)"),
     ("cobol.set.index", "SET", "set_index", {"form": ("to", "up_by", "down_by")}, "SET index TO / UP BY / DOWN BY"),
     ("cobol.search", "SEARCH", "search", {"all": False}, "serial SEARCH"),
     ("cobol.search_all", "SEARCH", "search_all", {"all": True},

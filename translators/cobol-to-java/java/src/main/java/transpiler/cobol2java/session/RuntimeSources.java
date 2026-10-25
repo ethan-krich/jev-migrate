@@ -18,7 +18,7 @@ public final class RuntimeSources {
     /** Kept in sync with runtime/src/main/java by RuntimeSourcesTest. */
     public static final List<String> CLASSES = List.of(
             "Accept", "AlphanumericField", "Arithmetic", "Bounds", "Clock", "CobolProgram", "Compare", "Display", "EditedField", "Goback",
-            "NumericField", "ProgramSupport", "StopRun", "Storage", "StringOps");
+            "NumericField", "PerformStack", "ProgramSupport", "StopRun", "Storage", "StringOps");
 
     private RuntimeSources() {}
 

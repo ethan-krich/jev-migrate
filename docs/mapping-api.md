@@ -55,7 +55,10 @@ Only plain JSON crosses process boundaries: no callables, AST objects or Python 
 | `exhibit` | EXHIBIT | `[NAMED]`: `NAME = value` with the name as written (CHANGED is a decision) |
 | `if` | IF | conditions incl. AND/OR precedence; `NEXT SENTENCE` branches |
 | `evaluate` | EVALUATE | if/else chain; `ALSO`, `THRU`, `ANY`, `NOT`, `TRUE`/`FALSE`, condition subjects, `OTHER` |
-| `perform` | PERFORM | procedure/inline, TIMES, UNTIL, VARYING, TEST AFTER; `EXIT PERFORM [CYCLE]` inside inline bodies |
+| `perform` | PERFORM | procedure/inline, `THRU`, TIMES, UNTIL, VARYING [`AFTER`], TEST AFTER; `EXIT PERFORM [CYCLE]` inside inline bodies; overlapping or recursive ranges are `unsupported_construct` |
+| `go_to` | GO_TO | `GO TO p` and `GO TO p1 p2 … DEPENDING ON n` through the procedure dispatcher; a GO TO out of a PERFORMed range is `unsupported_construct` |
+| `alter` | ALTER | always an `unsupported_construct` decision offering `alter_goto` |
+| `alter_goto` | ALTER | candidate only: assigns the altered paragraph's GO TO target |
 | `set_condition` | SET | `SET cond TO TRUE` moves the first value; `TO FALSE` needs `WHEN SET TO FALSE` |
 | `accept_stdin` | ACCEPT | one stdin line into a PIC X item (spaces at end of input); `FROM SYSIN / CONSOLE`; other devices `missing_target_api` |
 | `accept_datetime` | ACCEPT | `FROM DATE [YYYYMMDD]`, `DAY [YYYYDDD]`, `DAY-OF-WEEK`, `TIME` via runtime `Clock` (`COB_CURRENT_DATE` fixes it, as in GnuCOBOL) |
@@ -96,6 +99,20 @@ to `cobol_to_java.BUILTIN_HANDLERS` / `FACTS`.
 | STRING | `pointer`, `overflow` |
 | UNSTRING | `delimited`, `pointer`, `tallying`, `overflow` |
 | INSPECT | `form` (`tallying`, `replacing`, `tallying_replacing`, `converting`) |
+| GO_TO | `depending` |
+| ALTER | (none) |
+
+## Procedure dispatcher
+
+A program that uses `GO TO`, `PERFORM … THRU` or `ALTER` is generated in dispatcher form: each
+paragraph (and each section's own statements and end) is numbered in source order and becomes a
+method returning the number of the procedure a `GO TO` goes to, or `-1` when it ends normally.
+`run(n)` executes procedures in order from `n`; `perform(from, thru)` pushes `thru` on a runtime
+`PerformStack` and runs from `from`. When a procedure ends normally and it is the end of the
+innermost PERFORM, that PERFORM returns, which is GnuCOBOL's return-point rule (so a `GO TO` out
+of a range leaves the PERFORM waiting). Ranges that partially overlap, a PERFORM inside its own
+range, and a `GO TO` out of a performed range are refused statically. Programs without these
+statements keep the simpler form (one method per paragraph, fall-through calls).
 
 ## Callbacks
 

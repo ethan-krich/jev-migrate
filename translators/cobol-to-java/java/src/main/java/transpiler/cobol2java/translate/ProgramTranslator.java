@@ -32,6 +32,7 @@ import com.github.javaparser.ast.stmt.IfStmt;
 import com.github.javaparser.ast.stmt.LabeledStmt;
 import com.github.javaparser.ast.stmt.ReturnStmt;
 import com.github.javaparser.ast.stmt.Statement;
+import com.github.javaparser.ast.stmt.WhileStmt;
 import com.github.javaparser.ast.type.ArrayType;
 import com.github.javaparser.ast.type.PrimitiveType;
 import com.github.javaparser.ast.type.VoidType;
@@ -223,6 +224,18 @@ public final class ProgramTranslator implements TranslationContext {
     private final Set<Section> exitSections = Collections.newSetFromMap(new IdentityHashMap<>());
     private Paragraph currentParagraph;
     private Section currentSection;
+    // Procedure dispatcher (GO TO, PERFORM THRU, ALTER): procedures numbered in source order.
+    private boolean dispatcher;
+    /** A procedure of the dispatcher: a paragraph, a section's own statements, or the end of a section. */
+    private record Node(Scope scope, Section section, String method, boolean sectionEnd) {}
+    private final List<Node> nodes = new ArrayList<>();
+    private final Map<Object, Integer> nodeIndex = new IdentityHashMap<>();
+    private final Map<Section, Integer> sectionEnds = new IdentityHashMap<>();
+    /** PERFORM ranges [from, thru] (node indices) and the node each PERFORM is in. */
+    private final List<int[]> performRanges = new ArrayList<>();
+    /** Paragraphs named by ALTER: their GO TO goes where the int field says. */
+    private final Map<Paragraph, String> alterable = new IdentityHashMap<>();
+    private int currentNode = -1;
     private int statements;
     private int translated;
     private final boolean binaryTruncate;
@@ -244,6 +257,7 @@ public final class ProgramTranslator implements TranslationContext {
         cu.addImport(in.runtimePackage() + ".Display");
         cu.addImport(in.runtimePackage() + ".EditedField");
         cu.addImport(in.runtimePackage() + ".NumericField");
+        cu.addImport(in.runtimePackage() + ".PerformStack");
         cu.addImport(in.runtimePackage() + ".ProgramSupport");
         cu.addImport(in.runtimePackage() + ".Storage");
         cu.addImport(in.runtimePackage() + ".StringOps");
@@ -1268,6 +1282,10 @@ public final class ProgramTranslator implements TranslationContext {
             dataDecision(pd.getDeclaratives().getCtx(), "PROCEDURE", "DECLARATIVES are not supported");
         }
         scanProcedures(pd);
+        if (dispatcher) {
+            addDispatcher(cls, pd, body);
+            return;
+        }
         // Allocate method names first so PERFORM can reference later paragraphs.
         Set<String> methodNames = new HashSet<>(Set.of("procedureDivision", "returnCode", "instance", "main"));
         for (Paragraph p : pd.getRootParagraphs()) {
@@ -1301,6 +1319,182 @@ public final class ProgramTranslator implements TranslationContext {
         }
     }
 
+    /**
+     * The dispatcher form, for programs with GO TO, PERFORM THRU or ALTER: every procedure is a
+     * method returning the procedure to jump to (or -1 when it ends normally), {@code run} steps
+     * through them in order, and {@code perform(from, thru)} runs a range until its end procedure
+     * ends while it is the innermost PERFORM, as GnuCOBOL does.
+     */
+    private void addDispatcher(ClassOrInterfaceDeclaration cls, ProcedureDivision pd, BlockStmt main) {
+        Set<String> methodNames = new HashSet<>(Set.of("procedureDivision", "returnCode", "instance", "main", "using", "perform", "run",
+                "procedure"));
+        if (!pd.getStatements().isEmpty() || nextSentences.containsKey(pd)) {
+            addNode(pd, null, unique(methodNames, "start"), false);
+        }
+        for (Paragraph p : pd.getRootParagraphs()) {
+            addNode(p, null, unique(methodNames, Names.methodName("para", p.getName())), false);
+        }
+        for (Section s : pd.getSections()) {
+            addNode(s, s, unique(methodNames, Names.methodName("section", s.getName())), false);
+            for (Paragraph p : s.getParagraphs()) {
+                addNode(p, s, unique(methodNames, Names.methodName("para", p.getName())), false);
+            }
+            sectionEnds.put(s, nodes.size());
+            nodes.add(new Node(null, s, null, true));
+        }
+        collectPerformRanges(pd);
+        for (var e : alterTargets(pd).entrySet()) {
+            String field = allocateField("altered" + Names.className(e.getKey().getName()));
+            alterable.put(e.getKey(), field);
+            cls.addFieldWithInitializer(PrimitiveType.intType(), field, integer(e.getValue()), Modifier.Keyword.PRIVATE)
+                    .setLineComment(" GO TO target of " + e.getKey().getName() + " (changed by ALTER)");
+        }
+        cls.addFieldWithInitializer("PerformStack", "performs", create("PerformStack"), Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL);
+        for (int i = 0; i < nodes.size(); i++) {
+            Node n = nodes.get(i);
+            if (n.sectionEnd()) {
+                continue;
+            }
+            MethodDeclaration m = cls.addMethod(n.method(), Modifier.Keyword.PRIVATE);
+            m.setType(PrimitiveType.intType());
+            m.setLineComment(" " + (n.scope() instanceof Section ? "SECTION " : n.scope() instanceof Paragraph ? "PARAGRAPH " : "")
+                    + (n.scope() instanceof io.proleap.cobol.asg.metamodel.NamedElement named ? named.getName() : "PROCEDURE DIVISION")
+                    + " (procedure " + i + ")");
+            BlockStmt body = new BlockStmt();
+            currentNode = i;
+            currentParagraph = n.scope() instanceof Paragraph p ? p : null;
+            currentSection = n.section();
+            translateInto(n.scope(), body);
+            currentNode = -1;
+            currentParagraph = null;
+            currentSection = null;
+            body.addStatement(new ReturnStmt(integer(-1)));
+            m.setBody(body);
+        }
+        // procedure(n): runs procedure n.
+        MethodDeclaration proc = cls.addMethod("procedure", Modifier.Keyword.PRIVATE);
+        proc.setType(PrimitiveType.intType());
+        proc.addParameter(PrimitiveType.intType(), "n");
+        NodeList<com.github.javaparser.ast.stmt.SwitchEntry> entries = new NodeList<>();
+        for (int i = 0; i < nodes.size(); i++) {
+            if (!nodes.get(i).sectionEnd()) {
+                entries.add(new com.github.javaparser.ast.stmt.SwitchEntry(NodeList.nodeList(integer(i)),
+                        com.github.javaparser.ast.stmt.SwitchEntry.Type.STATEMENT_GROUP,
+                        NodeList.nodeList(new ReturnStmt(thisCall(nodes.get(i).method())))));
+            }
+        }
+        entries.add(new com.github.javaparser.ast.stmt.SwitchEntry(new NodeList<>(), com.github.javaparser.ast.stmt.SwitchEntry.Type.STATEMENT_GROUP,
+                NodeList.nodeList(new ReturnStmt(integer(-1)))));
+        proc.setBody(new BlockStmt(NodeList.nodeList(new com.github.javaparser.ast.stmt.SwitchStmt(name("n"), entries))));
+        proc.setJavadocComment("Runs procedure n; returns the procedure a GO TO goes to, or -1 when n ends normally (a section's end does nothing).");
+        // run(from): procedures in order from `from`, following GO TOs; returns when the innermost PERFORM ends.
+        MethodDeclaration run = cls.addMethod("run", Modifier.Keyword.PRIVATE);
+        run.setType(new VoidType());
+        run.addParameter(PrimitiveType.intType(), "from");
+        BlockStmt loop = new BlockStmt(NodeList.nodeList(
+                declare(Ast.intType(), "next", thisCall("procedure", name("p"))),
+                new IfStmt(new BinaryExpr(name("next"), integer(0), BinaryExpr.Operator.GREATER_EQUALS),
+                        new BlockStmt(NodeList.nodeList(stmt(new AssignExpr(name("p"), name("next"), AssignExpr.Operator.ASSIGN)))),
+                        new IfStmt(call(name("performs"), "returnsAt", name("p")), new ReturnStmt(),
+                                stmt(new UnaryExpr(name("p"), UnaryExpr.Operator.POSTFIX_INCREMENT))))));
+        run.setBody(new BlockStmt(NodeList.nodeList(
+                declare(Ast.intType(), "depth", call(name("performs"), "depth")),
+                declare(Ast.intType(), "p", name("from")),
+                new WhileStmt(new BinaryExpr(name("p"), integer(nodes.size()), BinaryExpr.Operator.LESS), loop),
+                // Falling off the end of the PROCEDURE DIVISION inside a PERFORM ends the program.
+                new IfStmt(new BinaryExpr(name("depth"), integer(0), BinaryExpr.Operator.GREATER),
+                        stmt(staticCall("ProgramSupport", "goback", new com.github.javaparser.ast.expr.ThisExpr())), null))));
+        MethodDeclaration perform = cls.addMethod("perform", Modifier.Keyword.PRIVATE);
+        perform.setType(new VoidType());
+        perform.addParameter(PrimitiveType.intType(), "from");
+        perform.addParameter(PrimitiveType.intType(), "thru");
+        perform.setBody(new BlockStmt(NodeList.nodeList(stmt(call(name("performs"), "push", name("thru"))),
+                stmt(thisCall("run", name("from"))))));
+        main.addStatement(stmt(thisCall("run", integer(0))));
+    }
+
+    private void addNode(Scope scope, Section section, String method, boolean sectionEnd) {
+        nodeIndex.put(scope, nodes.size());
+        nodes.add(new Node(scope, section, method, sectionEnd));
+    }
+
+    /** The first and last procedure of {@code PERFORM a [THRU b]} (a section ends at its end node). */
+    private int[] range(Call from, Call thru) throws HandlerException {
+        int a = procedureIndex(from, false);
+        int b = procedureIndex(thru == null ? from : thru, true);
+        if (b < a) {
+            throw HandlerException.unsupported("PERFORM ... THRU a procedure before the first one");
+        }
+        return new int[] {a, b};
+    }
+
+    private int procedureIndex(Call call, boolean end) throws HandlerException {
+        Object target = switch (call.unwrap()) {
+            case ProcedureCall p -> p.getParagraph();
+            case SectionCall s -> s.getSection();
+            default -> null;
+        };
+        if (target instanceof Section s && end) {
+            return sectionEnds.get(s);
+        }
+        Integer i = target == null ? null : nodeIndex.get(target);
+        if (i == null) {
+            throw HandlerException.unsupported("procedure " + call.getName() + " cannot be resolved");
+        }
+        return i;
+    }
+
+    private void collectPerformRanges(ProcedureDivision pd) {
+        var registry = in.unit().getProgram().getASGElementRegistry();
+        walk(pd.getCtx(), tree -> {
+            if (tree instanceof CobolParser.PerformProcedureStatementContext perform
+                    && registry.getASGElement(perform) instanceof PerformProcedureStatement proc) {
+                try {
+                    var calls = proc.getCalls();
+                    int[] r = range(calls.getFirst(), calls.size() > 1 ? calls.getLast() : null);
+                    performRanges.add(new int[] {r[0], r[1], nodeOf(perform)});
+                } catch (HandlerException e) {
+                    // The PERFORM itself reports it.
+                }
+            }
+        });
+    }
+
+    /** The node a statement is in. */
+    private int nodeOf(ParserRuleContext ctx) {
+        var registry = in.unit().getProgram().getASGElementRegistry();
+        for (ParserRuleContext up = ctx; up != null; up = up.getParent()) {
+            if (registry.getASGElement(up) instanceof Scope scope && nodeIndex.containsKey(scope)) {
+                return nodeIndex.get(scope);
+            }
+        }
+        return -1;
+    }
+
+    /** Paragraphs named by ALTER (each must hold only a GO TO), with their original target. */
+    private Map<Paragraph, Integer> alterTargets(ProcedureDivision pd) {
+        Map<Paragraph, Integer> out = new IdentityHashMap<>();
+        var registry = in.unit().getProgram().getASGElementRegistry();
+        walk(pd.getCtx(), tree -> {
+            if (tree instanceof CobolParser.AlterStatementContext a
+                    && registry.getASGElement(a) instanceof io.proleap.cobol.asg.metamodel.procedure.alter.AlterStatement alter) {
+                for (var to : alter.getProceedTos()) {
+                    if (to.getSourceCall().unwrap() instanceof ProcedureCall pc && pc.getParagraph() != null
+                            && pc.getParagraph().getStatements().size() == 1
+                            && pc.getParagraph().getStatements().getFirst() instanceof io.proleap.cobol.asg.metamodel.procedure.gotostmt.GoToStatement g
+                            && g.getGoToType() == io.proleap.cobol.asg.metamodel.procedure.gotostmt.GoToStatement.GoToType.SIMPLE) {
+                        try {
+                            out.put(pc.getParagraph(), procedureIndex(g.getSimple().getProcedureCall(), false));
+                        } catch (HandlerException e) {
+                            // The GO TO reports it.
+                        }
+                    }
+                }
+            }
+        });
+        return out;
+    }
+
     private void addProcedureMethod(ClassOrInterfaceDeclaration cls, Scope scope, Section section, String method, BlockStmt body) {
         MethodDeclaration m = cls.addMethod(method, Modifier.Keyword.PRIVATE);
         boolean reportsExit = scope instanceof Paragraph && section != null && exitSections.contains(section);
@@ -1327,11 +1521,16 @@ public final class ProgramTranslator implements TranslationContext {
         walk(pd.getCtx(), tree -> {
             if (tree instanceof CobolParser.PerformProcedureStatementContext perform
                     && registry.getASGElement(perform) instanceof PerformProcedureStatement proc) {
+                if (proc.getCalls().size() > 1) {
+                    dispatcher = true;
+                }
                 for (Call call : proc.getCalls()) {
                     if (call.unwrap() instanceof ProcedureCall pc && pc.getParagraph() != null) {
                         performedParagraphs.add(pc.getParagraph());
                     }
                 }
+            } else if (tree instanceof CobolParser.GoToStatementContext || tree instanceof CobolParser.AlterStatementContext) {
+                dispatcher = true;
             } else if (tree instanceof CobolParser.NextSentenceStatementContext next) {
                 allNextSentences.add(next);
                 for (ParserRuleContext up = next.getParent(); up != null; up = up.getParent()) {
@@ -2506,6 +2705,18 @@ public final class ProgramTranslator implements TranslationContext {
 
     @Override
     public Statement jump(Jump kind) throws HandlerException {
+        if (dispatcher && kind == Jump.EXIT_PARAGRAPH) {
+            if (currentParagraph == null) {
+                throw HandlerException.unsupported("EXIT PARAGRAPH outside a paragraph is not supported");
+            }
+            return new ReturnStmt(integer(-1));
+        }
+        if (dispatcher && kind == Jump.EXIT_SECTION) {
+            if (currentSection == null) {
+                throw HandlerException.unsupported("EXIT SECTION outside a section");
+            }
+            return new ReturnStmt(integer(sectionEnds.get(currentSection)));
+        }
         return switch (kind) {
             case EXIT_PARAGRAPH -> {
                 if (currentParagraph == null) {
@@ -2634,6 +2845,65 @@ public final class ProgramTranslator implements TranslationContext {
             throw HandlerException.unsupported("CLASS members other than nonnumeric literals are not supported");
         }
         return a.value();
+    }
+
+    @Override
+    public boolean dispatcher() {
+        return dispatcher;
+    }
+
+    @Override
+    public Statement performRange(Call from, Call thru) throws HandlerException {
+        int[] r = range(from, thru);
+        for (int[] other : performRanges) {
+            boolean partial = (other[0] < r[0] && r[0] <= other[1] && other[1] < r[1]) || (r[0] < other[0] && other[0] <= r[1] && r[1] < other[1]);
+            if (partial) {
+                throw HandlerException.unsupported("PERFORM range overlaps another PERFORM range (procedures " + r[0] + ".." + r[1]
+                        + " and " + other[0] + ".." + other[1] + ")");
+            }
+        }
+        if (currentNode >= r[0] && currentNode <= r[1]) {
+            throw HandlerException.unsupported("recursive PERFORM: the range contains this PERFORM");
+        }
+        return stmt(thisCall("perform", integer(r[0]), integer(r[1])));
+    }
+
+    @Override
+    public Statement goTo(Call target) throws HandlerException {
+        if (!dispatcher) {
+            throw HandlerException.unsupported("GO TO outside the dispatcher form");
+        }
+        int t = procedureIndex(target, false);
+        checkGoTo(t);
+        if (currentParagraph != null && alterable.containsKey(currentParagraph)) {
+            return new ReturnStmt(name(alterable.get(currentParagraph)));
+        }
+        return new ReturnStmt(integer(t));
+    }
+
+    @Override
+    public int procedureNumber(Call target) throws HandlerException {
+        int t = procedureIndex(target, false);
+        checkGoTo(t);
+        return t;
+    }
+
+    @Override
+    public String alteredField(Call paragraph) throws HandlerException {
+        if (paragraph.unwrap() instanceof ProcedureCall pc && alterable.containsKey(pc.getParagraph())) {
+            return alterable.get(pc.getParagraph());
+        }
+        throw HandlerException.unsupported("ALTER " + paragraph.getName() + ": the paragraph must hold only a GO TO");
+    }
+
+    /** A GO TO from inside a PERFORMed range to outside it never returns to the PERFORM. */
+    private void checkGoTo(int target) throws HandlerException {
+        for (int[] r : performRanges) {
+            if (currentNode >= r[0] && currentNode <= r[1] && (target < r[0] || target > r[1])) {
+                throw HandlerException.unsupported("GO TO out of a PERFORMed range (procedures " + r[0] + ".." + r[1]
+                        + "): the PERFORM would not return");
+            }
+        }
     }
 
     @Override

@@ -1,0 +1,6 @@
+{
+  "description": "Procedure dispatcher: GO TO, GO TO ... DEPENDING ON, PERFORM ... THRU, PERFORM of sections with GO TO inside, PERFORM VARYING ... AFTER, EXIT SECTION",
+  "expect": {"status": "ok"},
+  "equivalence": {"programs": ["GOTOP.cbl"], "main_class": "fixtures.goto_.Gotop"},
+  "layout": {"base_package": "fixtures.goto_"}
+}

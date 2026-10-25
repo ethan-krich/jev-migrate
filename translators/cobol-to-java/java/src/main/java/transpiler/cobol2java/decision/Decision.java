@@ -74,6 +74,10 @@ public final class Decision {
         return reason;
     }
 
+    public String message() {
+        return message;
+    }
+
     public String operation() {
         return operation;
     }

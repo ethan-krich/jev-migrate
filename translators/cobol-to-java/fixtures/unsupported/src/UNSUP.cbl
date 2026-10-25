@@ -23,6 +23,9 @@
            SEARCH ALL ITEM
                WHEN ITEM(IX) = 2 DISPLAY "found".
            CALL "SUB" USING SHORT-ARG.
+           ALTER SWITCH-PARA TO PROCEED TO DONE-PARA.
+           GO TO SWITCH-PARA.
+       SWITCH-PARA.
            GO TO DONE-PARA.
        DONE-PARA.
            STOP RUN.
