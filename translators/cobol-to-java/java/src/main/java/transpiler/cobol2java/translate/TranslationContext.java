@@ -106,6 +106,9 @@ public interface TranslationContext {
     /** The fully qualified class translated from the program with this PROGRAM-ID, if in the project. */
     Optional<String> programClass(String programId);
 
+    /** The ENTRY number a CALL name denotes in its program (0: a PROGRAM-ID). */
+    int entryIndex(String name);
+
     /** The PROGRAM-ID being translated, as written. */
     String programId();
 

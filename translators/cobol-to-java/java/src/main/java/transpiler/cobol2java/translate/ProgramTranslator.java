@@ -127,12 +127,13 @@ public final class ProgramTranslator implements TranslationContext {
             Function<String, Optional<String>> programDirectory,
             Dialect dialect,
             Function<String, Optional<List<Integer>>> programParameters,
-            Map<String, String> programs) {
+            Map<String, String> programs,
+            Map<String, Integer> entries) {
         public Input(ProgramUnit unit, SourceMap sourceMap, String sourceFile, String programId, String packageName, String className,
                 String runtimePackage, MappingRegistry registry, Builtins builtins, Function<String, Optional<String>> programDirectory,
                 Dialect dialect) {
             this(unit, sourceMap, sourceFile, programId, packageName, className, runtimePackage, registry, builtins, programDirectory,
-                    dialect, id -> Optional.empty(), Map.of());
+                    dialect, id -> Optional.empty(), Map.of(), Map.of());
         }
     }
 
@@ -141,16 +142,50 @@ public final class ProgramTranslator implements TranslationContext {
      * check against; empty when it has none that can be called this way.
      */
     public static Optional<List<Integer>> parameters(ProgramUnit unit, SourceMap sourceMap, String sourceFile, String programId,
-            Dialect dialect) {
+            Dialect dialect, int entry) {
         ProgramTranslator t = new ProgramTranslator(new Input(unit, sourceMap, sourceFile, programId, "p", "P", "r", null, null,
                 id -> Optional.empty(), dialect));
         t.checkUnsupportedDivisions();
         t.buildDataModel();
         try {
-            return Optional.of(t.usingItems().stream().map(DataItem::totalSize).toList());
+            return Optional.of((entry == 0 ? t.usingItems() : t.entryUsing(entry)).stream().map(DataItem::totalSize).toList());
         } catch (HandlerException e) {
             return Optional.empty();
         }
+    }
+
+    /** The ENTRY statements of a program, in source order (entry {@code n} is the n-th, 1-based). */
+    private static List<io.proleap.cobol.asg.metamodel.procedure.entry.EntryStatement> entries(ProgramUnit unit) {
+        List<io.proleap.cobol.asg.metamodel.procedure.entry.EntryStatement> out = new ArrayList<>();
+        if (unit.getProcedureDivision() != null) {
+            var registry = unit.getProgram().getASGElementRegistry();
+            walk(unit.getProcedureDivision().getCtx(), tree -> {
+                if (tree instanceof CobolParser.EntryStatementContext e
+                        && registry.getASGElement(e) instanceof io.proleap.cobol.asg.metamodel.procedure.entry.EntryStatement s) {
+                    out.add(s);
+                }
+            });
+        }
+        return out;
+    }
+
+    /** The names of a program's ENTRY statements (nonnumeric literals; others have no name here). */
+    public static List<String> entryNames(ProgramUnit unit) {
+        return entries(unit).stream().map(e -> e.getEntryValueStmt() instanceof LiteralValueStmt lit
+                && lit.getLiteral().getLiteralType() == Literal.LiteralType.NON_NUMERIC ? lit.getLiteral().getNonNumericLiteral() : "").toList();
+    }
+
+    /** The USING items of ENTRY number {@code entry}: level-01 / level-77 LINKAGE items. */
+    private List<DataItem> entryUsing(int entry) throws HandlerException {
+        List<DataItem> out = new ArrayList<>();
+        for (Call c : entries(in.unit()).get(entry - 1).getUsingCalls()) {
+            if (!(c.unwrap() instanceof DataDescriptionEntryCall d) || !(items.get(d.getDataDescriptionEntry()) instanceof DataItem item)
+                    || item.parent() != null || !item.linkage() || item.kind() == DataItem.Kind.UNSUPPORTED) {
+                throw HandlerException.unsupported("ENTRY ... USING " + c.getName() + " must be a supported level-01 / level-77 LINKAGE item");
+            }
+            out.add(item);
+        }
+        return out;
     }
 
     /** The PROCEDURE DIVISION USING items: level-01 / level-77 LINKAGE items passed BY REFERENCE. */
@@ -1858,11 +1893,18 @@ public final class ProgramTranslator implements TranslationContext {
         }
         scanProcedures(pd);
         if (dispatcher) {
+            if (!entries(in.unit()).isEmpty()) {
+                dataDecision(entries(in.unit()).getFirst().getCtx(), "PROCEDURE", "ENTRY in a program with GO TO, PERFORM THRU or ALTER is not supported");
+            }
             if (pd.getDeclaratives() != null) {
                 dataDecision(pd.getDeclaratives().getCtx(), "PROCEDURE", "DECLARATIVES in a program with GO TO, PERFORM THRU or ALTER are not supported");
             }
             addDispatcher(cls, pd, body);
             return;
+        }
+        var entryStatements = entries(in.unit());
+        if (!entryStatements.isEmpty() && !pd.getSections().isEmpty()) {
+            dataDecision(entryStatements.getFirst().getCtx(), "PROCEDURE", "ENTRY in a program with sections is not supported");
         }
         // ProLeap attaches the paragraphs and sentences of declarative sections to the PROCEDURE DIVISION itself.
         ParserRuleContext declarativesCtx = pd.getDeclaratives() == null ? null : pd.getDeclaratives().getCtx();
@@ -1881,6 +1923,9 @@ public final class ProgramTranslator implements TranslationContext {
         }
         if (pd.getDeclaratives() != null) {
             addDeclaratives(cls, pd, methodNames);
+        }
+        if (!entryStatements.isEmpty() && pd.getSections().isEmpty()) {
+            addEntries(cls, entryStatements, rootParagraphs);
         }
         translateInto(pd, body, mainCode);
         // Control falls through paragraphs and sections in source order.
@@ -1902,6 +1947,102 @@ public final class ProgramTranslator implements TranslationContext {
                         : stmt(thisCall(procedureMethods.get(p))));
             }
         }
+    }
+
+    /**
+     * ENTRY points: {@code enter(n)} runs from the paragraph whose first statement is the n-th
+     * ENTRY through the following paragraphs; {@code using(n, ...)} binds that ENTRY's USING items
+     * (the other LINKAGE items are unbound, as GnuCOBOL passes them no address).
+     */
+    private void addEntries(ClassOrInterfaceDeclaration cls, List<io.proleap.cobol.asg.metamodel.procedure.entry.EntryStatement> entries,
+            List<Paragraph> paragraphs) {
+        var sw = new com.github.javaparser.ast.stmt.SwitchStmt();
+        sw.setSelector(name("entry"));
+        var using = new com.github.javaparser.ast.stmt.SwitchStmt();
+        using.setSelector(name("entry"));
+        using.getEntries().add(new com.github.javaparser.ast.stmt.SwitchEntry(NodeList.nodeList(integer(0)),
+                com.github.javaparser.ast.stmt.SwitchEntry.Type.STATEMENT_GROUP,
+                NodeList.nodeList(stmt(thisCall("using", name("arguments"))), new BreakStmt())));
+        var sizes = new com.github.javaparser.ast.stmt.SwitchStmt();
+        sizes.setSelector(name("entry"));
+        com.github.javaparser.ast.stmt.SwitchEntry current = null;
+        Set<Integer> placedEntries = new HashSet<>();
+        for (Paragraph p : paragraphs) {
+            int n = -1;
+            for (int i = 0; i < entries.size(); i++) {
+                var pc = (CobolParser.ParagraphContext) p.getCtx();
+                if (!pc.sentence().isEmpty() && !pc.sentence(0).statement().isEmpty() && within(entries.get(i).getCtx(), pc.sentence(0).statement(0))) {
+                    n = i + 1;
+                }
+            }
+            if (n > 0) {
+                placedEntries.add(n);
+                current = new com.github.javaparser.ast.stmt.SwitchEntry(NodeList.nodeList(integer(n)),
+                        com.github.javaparser.ast.stmt.SwitchEntry.Type.STATEMENT_GROUP, new NodeList<>());
+                sw.getEntries().add(current);
+            }
+            if (current != null) {
+                current.getStatements().add(stmt(thisCall(procedureMethods.get(p))));
+            }
+        }
+        for (int i = 0; i < entries.size(); i++) {
+            var e = entries.get(i);
+            int n = i + 1;
+            boolean placed = placedEntries.contains(n);
+            List<DataItem> items;
+            try {
+                if (!placed) {
+                    throw HandlerException.unsupported("ENTRY must be the first statement of a paragraph outside sections");
+                }
+                if (entryNames(in.unit()).get(i).isEmpty()) {
+                    throw HandlerException.unsupported("ENTRY needs a nonnumeric literal name");
+                }
+                items = entryUsing(n);
+            } catch (HandlerException ex) {
+                dataDecision(e.getCtx(), "PROCEDURE", ex.getMessage());
+                continue;
+            }
+            NodeList<Statement> bind = new NodeList<>();
+            for (var param : parameterFields.entrySet()) {
+                int at = items.indexOf(param.getKey());
+                bind.add(stmt(new AssignExpr(name(param.getValue()), at < 0 ? new NullLiteralExpr() : new com.github.javaparser.ast.expr.ConditionalExpr(
+                        new BinaryExpr(new com.github.javaparser.ast.expr.FieldAccessExpr(name("arguments"), "length"), integer(at), BinaryExpr.Operator.GREATER),
+                        new com.github.javaparser.ast.expr.ArrayAccessExpr(name("arguments"), integer(at)), new NullLiteralExpr()), AssignExpr.Operator.ASSIGN)));
+            }
+            if (in.unit().getProcedureDivision().getUsingClause() != null) {
+                bind.add(stmt(new AssignExpr(name("callParameters"), new com.github.javaparser.ast.expr.FieldAccessExpr(name("arguments"), "length"),
+                        AssignExpr.Operator.ASSIGN)));
+            }
+            bind.add(new BreakStmt());
+            using.getEntries().add(new com.github.javaparser.ast.stmt.SwitchEntry(NodeList.nodeList(integer(n)),
+                    com.github.javaparser.ast.stmt.SwitchEntry.Type.STATEMENT_GROUP, bind));
+            sizes.getEntries().add(new com.github.javaparser.ast.stmt.SwitchEntry(NodeList.nodeList(integer(n)),
+                    com.github.javaparser.ast.stmt.SwitchEntry.Type.STATEMENT_GROUP,
+                    NodeList.nodeList(new ReturnStmt(new com.github.javaparser.ast.expr.ArrayCreationExpr(PrimitiveType.intType(),
+                            NodeList.nodeList(new com.github.javaparser.ast.ArrayCreationLevel()),
+                            new com.github.javaparser.ast.expr.ArrayInitializerExpr(items.stream().map(it -> (Expression) integer(it.totalSize()))
+                                    .collect(NodeList.toNodeList())))))));
+        }
+        MethodDeclaration enter = cls.addMethod("enter", Modifier.Keyword.PUBLIC);
+        enter.addMarkerAnnotation("Override");
+        enter.addParameter(PrimitiveType.intType(), "entry");
+        enter.setJavadocComment("Runs from ENTRY number {@code entry} (0: the start of the PROCEDURE DIVISION); each entry falls through the paragraphs after it.");
+        enter.addSingleMemberAnnotation("SuppressWarnings", str("fallthrough"));
+        sw.getEntries().addFirst(new com.github.javaparser.ast.stmt.SwitchEntry(new NodeList<>(),
+                com.github.javaparser.ast.stmt.SwitchEntry.Type.STATEMENT_GROUP, NodeList.nodeList(stmt(thisCall("procedureDivision")), new BreakStmt())));
+        enter.setBody(new BlockStmt(NodeList.nodeList(sw)));
+        MethodDeclaration bindUsing = cls.addMethod("using", Modifier.Keyword.PUBLIC);
+        bindUsing.addMarkerAnnotation("Override");
+        bindUsing.addParameter(PrimitiveType.intType(), "entry");
+        bindUsing.addParameter(new Parameter(new ArrayType(type("AlphanumericField")), "arguments"));
+        bindUsing.setBody(new BlockStmt(NodeList.nodeList(using)));
+        MethodDeclaration sizeOf = cls.addMethod("parameterSizes", Modifier.Keyword.PUBLIC);
+        sizeOf.addMarkerAnnotation("Override");
+        sizeOf.setType(new ArrayType(PrimitiveType.intType()));
+        sizeOf.addParameter(PrimitiveType.intType(), "entry");
+        sizes.getEntries().add(new com.github.javaparser.ast.stmt.SwitchEntry(new NodeList<>(),
+                com.github.javaparser.ast.stmt.SwitchEntry.Type.STATEMENT_GROUP, NodeList.nodeList(new ReturnStmt(thisCall("parameterSizes")))));
+        sizeOf.setBody(new BlockStmt(NodeList.nodeList(sizes)));
     }
 
     private static boolean within(ParserRuleContext ctx, ParserRuleContext outer) {
@@ -3970,6 +4111,11 @@ public final class ProgramTranslator implements TranslationContext {
     }
 
     @Override
+    public int entryIndex(String name) {
+        return in.entries().getOrDefault(name, 0);
+    }
+
+    @Override
     public String className() {
         return in.className();
     }
@@ -3993,15 +4139,16 @@ public final class ProgramTranslator implements TranslationContext {
     private void addResolvers(ClassOrInterfaceDeclaration cls) {
         if (needsProgramResolver) {
             MethodDeclaration m = cls.addMethod("callTarget", Modifier.Keyword.PRIVATE, Modifier.Keyword.STATIC);
-            m.setType("CobolProgram");
+            m.setType(type("ProgramSupport.Entry"));
             m.addParameter(type("String"), "name");
-            m.setJavadocComment("The program a CALL identifier names: one of the translation project's (Dialect.dynamic_calls), or null.");
+            m.setJavadocComment("The program (and entry) a CALL identifier names: one of the translation project's (Dialect.dynamic_calls), or null.");
             var sw = new com.github.javaparser.ast.expr.SwitchExpr();
             sw.setSelector(name("name"));
             for (var e : in.programs().entrySet()) {
                 sw.getEntries().add(new com.github.javaparser.ast.stmt.SwitchEntry(NodeList.nodeList(str(e.getKey())),
                         com.github.javaparser.ast.stmt.SwitchEntry.Type.EXPRESSION,
-                        NodeList.nodeList(stmt(call(name(e.getValue()), "instance")))));
+                        NodeList.nodeList(stmt(new com.github.javaparser.ast.expr.ObjectCreationExpr(null, type("ProgramSupport.Entry"),
+                                NodeList.nodeList(call(name(e.getValue()), "instance"), integer(in.entries().getOrDefault(e.getKey(), 0))))))));
             }
             sw.getEntries().add(new com.github.javaparser.ast.stmt.SwitchEntry(new NodeList<>(),
                     com.github.javaparser.ast.stmt.SwitchEntry.Type.EXPRESSION, NodeList.nodeList(stmt(new NullLiteralExpr()))));

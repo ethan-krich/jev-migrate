@@ -18,4 +18,19 @@ public interface CobolProgram {
     default int[] parameterSizes() {
         return new int[0];
     }
+
+    /** Executes from ENTRY number {@code entry} (0: the start of the PROCEDURE DIVISION). */
+    default void enter(int entry) {
+        procedureDivision();
+    }
+
+    /** Binds the USING items of ENTRY number {@code entry} (0: PROCEDURE DIVISION USING); the other LINKAGE items are unbound. */
+    default void using(int entry, AlphanumericField[] arguments) {
+        using(arguments);
+    }
+
+    /** The sizes of the USING items of ENTRY number {@code entry}. */
+    default int[] parameterSizes(int entry) {
+        return parameterSizes();
+    }
 }

@@ -81,6 +81,15 @@ public final class ProgramSupport {
      * sets RETURN-CODE to -1, and without it ends the run unit.
      */
     public static boolean call(CobolProgram caller, CobolProgram callee, boolean exceptionPhrase, AlphanumericField... arguments) {
+        return callEntry(caller, callee, 0, exceptionPhrase, arguments);
+    }
+
+    /** A program and one of its entry points (0: the PROCEDURE DIVISION, n: its n-th ENTRY), as a CALL name denotes them. */
+    public record Entry(CobolProgram program, int entry) {}
+
+    /** CALL of ENTRY number {@code entry} of {@code callee} (0: the program itself); see {@link #call}. */
+    public static boolean callEntry(CobolProgram caller, CobolProgram callee, int entry, boolean exceptionPhrase,
+            AlphanumericField... arguments) {
         if (active.contains(callee.getClass())) {
             if (exceptionPhrase) {
                 caller.returnCode().move(BigDecimal.ONE.negate());
@@ -89,11 +98,11 @@ public final class ProgramSupport {
             Bounds.fail("recursive CALL from '" + caller.getClass().getSimpleName() + "' to '" + callee.getClass().getSimpleName()
                     + "' which is NOT RECURSIVE");
         }
-        callee.using(arguments);
+        callee.using(entry, arguments);
         active.add(callee.getClass());
         depth++;
         try {
-            callee.procedureDivision();
+            callee.enter(entry);
         } catch (Goback back) {
             // Returned to the caller.
         } finally {
@@ -109,27 +118,28 @@ public final class ProgramSupport {
      * no program has is an exception (ON EXCEPTION), or ends the run unit; so does an argument
      * shorter than the callee's LINKAGE item, which GnuCOBOL would read past.
      */
-    public static boolean callNamed(CobolProgram caller, String value, Function<String, CobolProgram> programs, boolean exceptionPhrase,
+    public static boolean callNamed(CobolProgram caller, String value, Function<String, Entry> programs, boolean exceptionPhrase,
             AlphanumericField... arguments) {
         String name = programName(value);
         if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0 || SYSTEM_ROUTINES.contains(name)) {
             Bounds.fail("CALL '" + name + "': a module path or GnuCOBOL system routine has no target");
         }
-        CobolProgram callee = name.isEmpty() ? null : programs.apply(name);
-        if (callee == null) {
+        Entry target = name.isEmpty() ? null : programs.apply(name);
+        if (target == null) {
             if (exceptionPhrase) {
                 return true;
             }
             Bounds.fail("module '" + name + "' not found");
         }
-        int[] sizes = callee.parameterSizes();
+        CobolProgram callee = target.program();
+        int[] sizes = callee.parameterSizes(target.entry());
         for (int i = 0; i < Math.min(sizes.length, arguments.length); i++) {
             if (arguments[i].length() < sizes[i]) {
                 Bounds.fail("CALL '" + name + "' USING: argument " + (i + 1) + " has " + arguments[i].length()
                         + " bytes but the program's LINKAGE item has " + sizes[i]);
             }
         }
-        return call(caller, callee, exceptionPhrase, arguments);
+        return callEntry(caller, callee, target.entry(), exceptionPhrase, arguments);
     }
 
     /**

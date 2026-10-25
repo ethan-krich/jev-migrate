@@ -223,11 +223,16 @@ public final class Session {
     /** USING item sizes per PROGRAM-ID, computed on first use from the parsed programs. */
     private final Map<String, Optional<java.util.List<Integer>>> parameterCache = new HashMap<>();
 
+    /** ENTRY names (as written) to the program declaring them and the entry's number (1 for the first). */
+    private final Map<String, String> entryPrograms = new HashMap<>();
+    private final Map<String, Integer> entryIndexes = new HashMap<>();
+
     private Optional<java.util.List<Integer>> programParameters(String programId) {
         return parameterCache.computeIfAbsent(programId, pid -> {
             for (ProgramState ps : programs.values()) {
-                if (!ps.failed && pid.equals(ps.entryName)) {
-                    return ProgramTranslator.parameters(ps.unit, ps.sourceMap, ps.relativePath, ps.programId, dialect);
+                if (!ps.failed && (pid.equals(ps.entryName) || ps.fqcn().equals(entryPrograms.get(pid)))) {
+                    return ProgramTranslator.parameters(ps.unit, ps.sourceMap, ps.relativePath, ps.programId, dialect,
+                            entryIndexes.getOrDefault(pid, 0));
                 }
             }
             return Optional.empty();
@@ -259,6 +264,18 @@ public final class Session {
         for (ProgramState ps : programs.values()) {
             if (!ps.failed) {
                 programDirectory.put(ps.entryName, ps.fqcn());
+            }
+        }
+        for (ProgramState ps : programs.values()) {
+            if (!ps.failed) {
+                List<String> entries = ProgramTranslator.entryNames(ps.unit);
+                for (int i = 0; i < entries.size(); i++) {
+                    // An ENTRY name is called like a program; the first declaration of a name wins, as at link time.
+                    if (programDirectory.putIfAbsent(entries.get(i), ps.fqcn()) == null) {
+                        entryPrograms.put(entries.get(i), ps.fqcn());
+                        entryIndexes.put(entries.get(i), i + 1);
+                    }
+                }
             }
         }
     }
@@ -358,7 +375,7 @@ public final class Session {
                 var out = new ProgramTranslator(new ProgramTranslator.Input(ps.unit, ps.sourceMap, ps.relativePath, ps.programId,
                         ps.packageName, ps.className, layout.runtimePackage(), registry, builtins,
                         pid -> Optional.ofNullable(programDirectory.get(pid)), dialect, this::programParameters,
-                        new java.util.TreeMap<>(programDirectory))).translate();
+                        new java.util.TreeMap<>(programDirectory), Map.copyOf(entryIndexes))).translate();
                 ps.java = out.compilationUnit();
                 ps.statements = out.statements();
                 ps.translatedStatements = out.translated();

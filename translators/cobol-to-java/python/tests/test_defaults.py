@@ -11,7 +11,7 @@ def test_defaults_cover_the_supported_subset():
     assert {r.handler for r in m} == set(BUILTIN_HANDLERS) - CANDIDATE_HANDLERS
     assert CANDIDATE_HANDLERS <= set(BUILTIN_HANDLERS)
     assert m.sources() == sorted({"MOVE", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "COMPUTE", "DISPLAY", "IF",
-                                  "PERFORM", "STOP", "GOBACK", "EXIT", "CONTINUE", "CALL", "CANCEL", "SET", "EVALUATE",
+                                  "PERFORM", "STOP", "GOBACK", "EXIT", "CONTINUE", "CALL", "CANCEL", "ENTRY", "SET", "EVALUATE",
                                   "ACCEPT", "EXHIBIT", "INITIALIZE", "SEARCH", "STRING", "UNSTRING",
                                   "INSPECT", "GO_TO", "ALTER", "OPEN", "CLOSE", "READ", "WRITE",
                                   "REWRITE", "DELETE", "START", "SORT", "MERGE", "RELEASE", "RETURN"})

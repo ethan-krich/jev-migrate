@@ -101,6 +101,8 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("call_program", "CALL",
                 "CALL 'literal' of a program in the project, or CALL identifier (Dialect.dynamic_calls), [USING] [ON EXCEPTION]",
                 Builtins::callProgram));
+        register(Handler.of("entry", "ENTRY", "ENTRY reached in the flow of the program (no operation; CALL starts there)",
+                (u, c) -> List.of(noOp("ENTRY"))));
         register(Handler.of("cancel_program", "CANCEL", "CANCEL 'literal' / identifier: the program's next CALL starts it afresh",
                 Builtins::cancelProgram));
         register(Handler.of("set_condition", "SET",
@@ -1293,6 +1295,9 @@ public final class Builtins implements MappingRegistry.Catalog {
             String cls = c.programClass(name).orElseThrow(() -> new HandlerException(HandlerException.Kind.MISSING_TARGET,
                     "program '" + name + "' is not part of the translation project (unresolved cross-file dependency)"));
             args.add(call(name(cls), "instance"));
+            if (c.entryIndex(name) > 0) {
+                args.add(integer(c.entryIndex(name)));
+            }
             if (call.getUsingPhrase() != null) {
                 expected = c.programParameters(name).orElseThrow(() -> HandlerException.unsupported(
                         "the USING items of program '" + name + "' cannot be determined"));
@@ -1335,7 +1340,8 @@ public final class Builtins implements MappingRegistry.Catalog {
             throw HandlerException.unsupported("CALL '" + program + "' USING passes items of " + sizes + " bytes but the program expects "
                     + expected + " (USING items must match in number and size)");
         }
-        Expression invoke = new com.github.javaparser.ast.expr.MethodCallExpr(name("ProgramSupport"), dynamic ? "callNamed" : "call", args);
+        String method = dynamic ? "callNamed" : c.entryIndex(program) > 0 ? "callEntry" : "call";
+        Expression invoke = new com.github.javaparser.ast.expr.MethodCallExpr(name("ProgramSupport"), method, args);
         BlockStmt notOnException = call.getNotOnExceptionClause() == null ? new BlockStmt() : c.nested(call.getNotOnExceptionClause());
         if (onException == null) {
             return notOnException.isEmpty() ? List.of(stmt(invoke)) : List.of(stmt(invoke), notOnException);
