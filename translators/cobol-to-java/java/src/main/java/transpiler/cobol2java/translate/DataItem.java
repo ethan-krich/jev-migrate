@@ -135,7 +135,7 @@ public final class DataItem {
     }
 
     public boolean isInteger() {
-        return isNumeric() && numeric().scale() == 0;
+        return isNumeric() && numeric().scale() <= 0;
     }
 
     public String unsupportedReason() {

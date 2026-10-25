@@ -27,8 +27,15 @@ class PictureTest {
         assertEquals(new Picture.Edited(expanded, numeric, length), Picture.parse(pic).picture().orElseThrow());
     }
 
+    @org.junit.jupiter.api.Test
+    void scalingPositions() {
+        assertEquals(new Picture.Numeric(2, -2, false), Picture.parse("99PP").picture().orElseThrow());
+        assertEquals(new Picture.Numeric(2, 5, true), Picture.parse("SPPP99").picture().orElseThrow());
+        assertEquals(new Picture.Numeric(1, 3, false), Picture.parse("VPP9").picture().orElseThrow());
+    }
+
     @ParameterizedTest
-    @ValueSource(strings = {"N(2)", "99PP", "S", "9(0)", "9(40)", "X(", "-$$9.99", "S9.99", "ZZ9Q"})
+    @ValueSource(strings = {"N(2)", "Z9PP", "9P9", "S", "9(0)", "9(40)", "X(", "-$$9.99", "S9.99", "ZZ9Q"})
     void outsideTheSubsetIsUnsupported(String pic) {
         var r = Picture.parse(pic);
         assertTrue(r.picture().isEmpty());

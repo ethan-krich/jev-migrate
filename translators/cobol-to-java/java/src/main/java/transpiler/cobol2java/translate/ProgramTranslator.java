@@ -1025,7 +1025,9 @@ public final class ProgramTranslator implements TranslationContext {
                     problem = pic.unsupportedReason();
                 } else {
                     picture = pic.picture().get();
-                    if (g.getBlankWhenZeroClause() != null && usage == DataItem.Usage.DISPLAY
+                    if (g.getBlankWhenZeroClause() != null && picture instanceof Picture.Numeric n && (n.scale() < 0 || n.scale() > n.digits())) {
+                        problem = "BLANK WHEN ZERO on a PICTURE with P";
+                    } else if (g.getBlankWhenZeroClause() != null && usage == DataItem.Usage.DISPLAY
                             && picture instanceof Picture.Numeric n && !n.signed()) {
                         // BLANK WHEN ZERO makes a numeric DISPLAY item numeric-edited.
                         String digits = "9".repeat(n.digits() - n.scale()) + (n.scale() > 0 ? "V" + "9".repeat(n.scale()) : "");
@@ -1036,7 +1038,9 @@ public final class ProgramTranslator implements TranslationContext {
                         case Picture.Edited ed -> DataItem.Kind.EDITED;
                         case Picture.Alphanumeric a -> DataItem.Kind.ALPHANUMERIC;
                     };
-                    problem = elementaryClauses(g, picture);
+                    if (problem == null) {
+                        problem = elementaryClauses(g, picture);
+                    }
                     if (problem == null && g.getBlankWhenZeroClause() != null && !(picture instanceof Picture.Edited ed && ed.numeric())) {
                         problem = "BLANK WHEN ZERO on an item that is not unsigned numeric or numeric-edited";
                     }
@@ -1437,8 +1441,10 @@ public final class ProgramTranslator implements TranslationContext {
             case Operand.NumericLiteral lit -> {
                 BigDecimal v = lit.value();
                 int intDigits = v.precision() - v.scale();
-                if (Math.max(intDigits, 0) > n.digits() - n.scale() || Math.max(v.stripTrailingZeros().scale(), 0) > n.scale()
-                        || (!n.signed() && v.signum() < 0)) {
+                // The value must be held exactly: no digits beyond the picture's positions (P positions included).
+                boolean fits = v.stripTrailingZeros().scale() <= n.scale()
+                        && v.movePointRight(n.scale()).abs().compareTo(BigDecimal.TEN.pow(n.digits())) < 0;
+                if (Math.max(intDigits, 0) > Math.max(n.digits() - n.scale(), 0) || !fits || (!n.signed() && v.signum() < 0)) {
                     return "VALUE " + lit.text() + " does not fit PIC " + g.getPictureClause().getPictureString();
                 }
                 item.initialValue(v.toPlainString());

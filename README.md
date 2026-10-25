@@ -118,7 +118,7 @@ equivalence fixtures.
 |---|---|---|
 | ✅ | IDENTIFICATION / DATA / PROCEDURE divisions, WORKING-STORAGE | one program per file, fixed / variable / tandem format |
 | ✅ | Debugging lines (`D` indicator) | comments unless `Dialect.debugging_lines` or `WITH DEBUGGING MODE` |
-| ✅ | `PIC X(n)` / `A(n)`, `PIC [S]9(i)[V9(s)]`, levels 01–49, 77 and 78, `VALUE` literal / figurative | byte-addressed storage per record (GnuCOBOL byte images); default init: spaces / zero |
+| ✅ | `PIC X(n)` / `A(n)`, `PIC [S]9(i)[V9(s)]`, `P` scaling (`99PPP`, `PPP99`, `VPP9`), levels 01–49, 77 and 78, `VALUE` literal / figurative | byte-addressed storage per record (GnuCOBOL byte images); default init: spaces / zero |
 | ✅ | `USAGE DISPLAY`, `PACKED-DECIMAL` / `COMP-3`, `BINARY` / `COMP` / `COMP-4` / `COMP-X` (big-endian; `Dialect.binary_truncate`), `COMP-5`, `INDEX`; group USAGE | |
 | ✅ | Group items as operands (MOVE, compare, DISPLAY, ACCEPT), `REDEFINES`, `SIGN LEADING / TRAILING [SEPARATE]`, `JUSTIFIED RIGHT`, `BLANK WHEN ZERO`, `SYNCHRONIZED` (no slack bytes) | byte images of signed zoned / COMP-5 items need `Dialect.encoding` = ascii |
 | ✅ | Numeric-edited and alphanumeric-edited pictures, de-editing | GnuCOBOL's editing, byte for byte |
@@ -143,7 +143,7 @@ equivalence fixtures.
 | ✅ | `COPY` (copybook search path; decision lines map back to the original file), `CALL 'literal'` of a program in the project, `CALL identifier` (needs `Dialect.dynamic_calls`), `ON EXCEPTION` / `ON OVERFLOW`, `CANCEL` | persistent WORKING-STORAGE, RETURN-CODE propagation, PROGRAM-IDs matched case-sensitively as GnuCOBOL does |
 | ◐ | `REPLACE` statements | parsed by ProLeap; line numbers then fall back to the preprocessed source (warning `approximate_line_numbers`) |
 | ✅ | `EXTERNAL` data items and files, `SAME RECORD AREA` | shared by name across the run unit's programs (zero bytes until set, as in GnuCOBOL); an EXTERNAL file's FILE STATUS / RELATIVE KEY must be EXTERNAL |
-| ❌ | `COMP-1` / `COMP-2`, `POINTER`, `ADDRESS OF`, `P` / `N` pictures, a fixed sign before a floating currency string, `GLOBAL`, nested programs, `IS RECURSIVE`, `CALL … BY VALUE` | `unsupported_construct` |
+| ❌ | `COMP-1` / `COMP-2`, `POINTER`, `ADDRESS OF`, `N` pictures, `P` in edited pictures, a fixed sign before a floating currency string, `GLOBAL`, nested programs, `IS RECURSIVE`, `CALL … BY VALUE` | `unsupported_construct` |
 | ❌ | `**` with a non-integer or negative exponent, EBCDIC collating sequence | `unsupported_construct` |
 | ✅ | SEQUENTIAL and LINE SEQUENTIAL files: `OPEN`, `READ [INTO]`, `WRITE [FROM]`, `REWRITE`, `CLOSE`, `FILE STATUS` | paths from `Dialect.file_assignments`; GnuCOBOL status values; record areas start as zero bytes, as in GnuCOBOL |
 | ✅ | RELATIVE and INDEXED files: `ACCESS SEQUENTIAL / RANDOM / DYNAMIC`, `RELATIVE KEY`, `RECORD KEY`, `ALTERNATE RECORD KEY [WITH DUPLICATES]`, `READ [NEXT / PREVIOUS] [KEY IS]`, `START` (`= > >= < <= NOT < NOT >`, leading part of a key), `WRITE`, `REWRITE`, `DELETE`, `[NOT] INVALID KEY` | GnuCOBOL 3.2's statuses and file positioning, checked by dense random fixtures; RELATIVE files use GnuCOBOL's file format, INDEXED files the runtime's own (not Berkeley DB) |

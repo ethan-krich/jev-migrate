@@ -105,7 +105,7 @@ public final class AlphanumericField {
 
     /** MOVE of an integer numeric item: its unsigned digit string is moved as alphanumeric data. */
     public void set(NumericField source) {
-        set(source.digits());
+        set(source.alphanumericDigits());
     }
 
     /** This item's bytes as an alphanumeric view (the argument of CALL ... BY REFERENCE). */

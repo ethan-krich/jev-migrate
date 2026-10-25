@@ -48,6 +48,9 @@ public sealed interface Picture {
         if (s.chars().allMatch(c -> c == 'X' || c == 'A')) {
             return Result.of(new Alphanumeric(s.length()));
         }
+        if (s.matches("S?P+V?9+|S?VP+9+|S?9+P+")) {
+            return scaled(raw, s);
+        }
         if (!s.matches("S?[9V]*")) {
             return edited(raw, s);
         }
@@ -82,6 +85,22 @@ public sealed interface Picture {
             return Result.unsupported("PICTURE " + raw + " exceeds 38 digits");
         }
         return Result.of(new Numeric(digits, scale, signed));
+    }
+
+    /**
+     * A numeric picture with P (scaling) positions: P on the left puts the point before them
+     * (PPP99 = .000nn, scale greater than the digits), P on the right multiplies (99PPP = nn000,
+     * negative scale).
+     */
+    private static Result scaled(String raw, String s) {
+        boolean signed = s.startsWith("S");
+        String body = signed ? s.substring(1) : s;
+        int digits = (int) body.chars().filter(c -> c == '9').count();
+        int ps = (int) body.chars().filter(c -> c == 'P').count();
+        if (digits > 38) {
+            return Result.unsupported("PICTURE " + raw + " exceeds 38 digits");
+        }
+        return Result.of(new Numeric(digits, body.endsWith("P") ? -ps : digits + ps, signed));
     }
 
     private static Result edited(String raw, String s) {

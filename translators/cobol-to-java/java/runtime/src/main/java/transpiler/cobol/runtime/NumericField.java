@@ -73,7 +73,7 @@ public final class NumericField {
         this.bigEndian = bigEndian;
         this.size = size;
         this.displayDigits = displayDigits;
-        if (digits <= 0 || scale < 0 || scale > digits) {
+        if (digits <= 0) {
             throw new IllegalArgumentException("invalid numeric picture: digits=" + digits + " scale=" + scale);
         }
         if (!signed && (leading || separate)) {
@@ -350,9 +350,28 @@ public final class NumericField {
     }
 
     /** DISPLAY with {@code DECIMAL-POINT IS COMMA}: the decimal point is shown as {@code point}. */
+    /**
+     * The digits as moved to an alphanumeric item: with the zeros of P positions at the right
+     * (PIC 99PPP), as GnuCOBOL moves them.
+     */
+    public String alphanumericDigits() {
+        return scale < 0 ? digits() + "0".repeat(-scale) : digits();
+    }
+
     public String display(char point) {
         String raw = digits();
         int digits = raw.length();
+        if (scale < 0 || scale > digits) {
+            // P positions: zeros after the digits (99PPP), or before them after the point (PPP99).
+            raw = scale < 0 ? raw + "0".repeat(-scale) : "0".repeat(scale - digits) + raw;
+            digits = raw.length();
+            String body = scale < 0 ? raw : point + raw;
+            if (signSeparate) {
+                char sign = (char) (storage.bytes[signLeading ? offset : offset + this.digits] & 0xFF);
+                return signLeading ? sign + body : body + sign;
+            }
+            return signed ? (get().signum() < 0 ? '-' : '+') + body : body;
+        }
         StringBuilder sb = new StringBuilder(digits + 2);
         // A separate sign is shown where it is stored, as it is stored; an embedded one leads.
         char separate = signSeparate ? (char) (storage.bytes[signLeading ? offset : offset + digits] & 0xFF) : 0;

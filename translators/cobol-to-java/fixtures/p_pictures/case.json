@@ -1,0 +1,7 @@
+{
+  "description": "P (scaling) pictures: 99PPP, PPP99, VPP9, signed, COMP, COMP-3 and SIGN SEPARATE items in DISPLAY, MOVE, arithmetic, comparisons and moves to alphanumeric / edited items",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native"},
+  "equivalence": {"programs": ["PSCALE.cbl"], "main_class": "fixtures.p_pictures.Pscale"},
+  "layout": {"base_package": "fixtures.p_pictures"}
+}
