@@ -299,6 +299,7 @@ public final class ProgramTranslator implements TranslationContext {
         cu.addImport(in.runtimePackage() + ".Compare");
         cu.addImport(in.runtimePackage() + ".Display");
         cu.addImport(in.runtimePackage() + ".EditedField");
+        cu.addImport(in.runtimePackage() + ".Environment");
         cu.addImport(in.runtimePackage() + ".Functions");
         cu.addImport(in.runtimePackage() + ".IndexedFile");
         cu.addImport(in.runtimePackage() + ".NumericField");
@@ -1828,7 +1829,7 @@ public final class ProgramTranslator implements TranslationContext {
         MethodDeclaration main = cls.addMethod("main", Modifier.Keyword.PUBLIC, Modifier.Keyword.STATIC);
         main.addParameter(new Parameter(new ArrayType(type("String")), "args"));
         main.setBody(new BlockStmt(NodeList.nodeList(
-                stmt(staticCall("System", "exit", staticCall("ProgramSupport", "runMain", call(null, "instance")))))));
+                stmt(staticCall("System", "exit", staticCall("ProgramSupport", "runMain", call(null, "instance"), name("args")))))));
 
         MethodDeclaration rc = cls.addMethod("returnCode", Modifier.Keyword.PUBLIC);
         rc.addMarkerAnnotation("Override");

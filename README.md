@@ -151,7 +151,8 @@ equivalence fixtures.
 | ✅ | Exact intrinsic functions (see docs/mapping-api.md) | floating-point functions are decisions |
 | ✅ | `WRITE … BEFORE / AFTER ADVANCING n LINES / PAGE / mnemonic`, `LINAGE` (`FOOTING`, `TOP`, `BOTTOM`), `LINAGE-COUNTER`, `[NOT] AT END-OF-PAGE` | GnuCOBOL's control bytes and paging, byte for byte |
 | ❌ | `SELECT OPTIONAL`, `ASSIGN TO` a data item (file name chosen at run time), split keys, `SUPPRESS WHEN`, `LOCK` phrases, SORT / MERGE `USING` / `GIVING` of RELATIVE / INDEXED files, `REWRITE` of an INDEXED file with alternate keys in `ACCESS SEQUENTIAL`, `USE` declaratives, `RERUN` / `MULTIPLE FILE` | decisions |
-| ❌ | `CALL` of a program outside the project or of the program itself, `CALL … RETURNING`, `DISPLAY UPON` printer / other devices, `ACCEPT FROM` environment, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
+| ✅ | `ACCEPT FROM ENVIRONMENT-VALUE / ENVIRONMENT "name" / ARGUMENT-NUMBER / ARGUMENT-VALUE / COMMAND-LINE`, `DISPLAY UPON ENVIRONMENT-NAME / ENVIRONMENT-VALUE / ARGUMENT-NUMBER`, `[NOT] ON EXCEPTION` | as GnuCOBOL: unset variables give spaces and an exception |
+| ❌ | `CALL` of a program outside the project or of the program itself, `CALL … RETURNING`, `DISPLAY UPON` printer / other devices, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
 | ❌ | Other special registers (`DEBUG-ITEM`, `SORT-RETURN`, …), free format / other dialects | files ProLeap cannot parse (XML / JSON GENERATE, ALLOCATE, OO COBOL, …) fail with `unsupported_dialect` |
 
 Known divergence: GnuCOBOL 3.2 prints an empty value for a `COMPUTE` receiver when it is displayed

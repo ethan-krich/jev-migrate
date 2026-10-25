@@ -111,6 +111,9 @@ public final class Builtins implements MappingRegistry.Catalog {
                 "ACCEPT an alphanumeric item from standard input (one line; spaces at end of input)", Builtins::acceptStdin));
         register(Handler.of("accept_datetime", "ACCEPT",
                 "ACCEPT FROM DATE [YYYYMMDD] / DAY [YYYYDDD] / DAY-OF-WEEK / TIME via the runtime Clock", Builtins::acceptDatetime));
+        register(Handler.of("accept_environment", "ACCEPT",
+                "ACCEPT FROM ENVIRONMENT-VALUE / ENVIRONMENT name / ARGUMENT-NUMBER / ARGUMENT-VALUE / COMMAND-LINE [ON EXCEPTION]",
+                Builtins::acceptEnvironment));
         register(Handler.of("exhibit", "EXHIBIT", "EXHIBIT [NAMED] as GnuCOBOL: NAME = value for items", Builtins::exhibit));
         register(Handler.of("move_to_edited", "MOVE",
                 "MOVE into a numeric-edited (PICTURE editing) or alphanumeric-edited (insertion) item", Builtins::moveToEdited));
@@ -636,6 +639,9 @@ public final class Builtins implements MappingRegistry.Catalog {
         boolean err = false;
         if (d.getUpon() != null) {
             String device = c.device(deviceName(d.getUpon()));
+            if (device.equals("ENVIRONMENT-NAME") || device.equals("ENVIRONMENT-VALUE") || device.equals("ARGUMENT-NUMBER")) {
+                return displayEnvironment(d, device, c);
+            }
             switch (device) {
                 case "CONSOLE", "SYSOUT" -> err = false;
                 case "SYSERR" -> err = true;
@@ -653,6 +659,26 @@ public final class Builtins implements MappingRegistry.Catalog {
     }
 
     /** The DISPLAY text of an operand. */
+    /** DISPLAY ... UPON ENVIRONMENT-NAME / ENVIRONMENT-VALUE (an alphanumeric value) or ARGUMENT-NUMBER (a number). */
+    private static List<Statement> displayEnvironment(DisplayStatement d, String device, TranslationContext c) throws HandlerException {
+        if (d.getOperands().size() != 1 || d.getWith() != null) {
+            throw HandlerException.unsupported("DISPLAY UPON " + device + " takes one value");
+        }
+        Operand o = c.operand(d.getOperands().getFirst().getOperandValueStmt());
+        if (device.equals("ARGUMENT-NUMBER")) {
+            if (!o.isNumericValued() || o instanceof Operand.Arithmetic) {
+                throw HandlerException.unsupported("DISPLAY " + o.category() + " UPON ARGUMENT-NUMBER");
+            }
+            return List.of(stmt(staticCall("Environment", "argumentNumber", call(c.numeric(o), "intValue"))));
+        }
+        Expression value = switch (o) {
+            case Operand.AlphanumericLiteral a -> str(a.value());
+            case Operand.Field f when f.alphanumeric() && !f.edited() -> call(c.field(o), "get");
+            default -> throw HandlerException.unsupported("DISPLAY " + o.category() + " UPON " + device);
+        };
+        return List.of(stmt(staticCall("Environment", device.equals("ENVIRONMENT-NAME") ? "name" : "value", value)));
+    }
+
     private static Expression displayValue(Operand o, TranslationContext c) throws HandlerException {
         return switch (o) {
             case Operand.Field f when f.numeric() && c.decimalPointComma() && f.item().numeric().scale() > 0 ->
@@ -737,6 +763,96 @@ public final class Builtins implements MappingRegistry.Catalog {
             return List.of(stmt(call(c.field(target), "move", create("BigDecimal", value))));
         }
         throw HandlerException.unsupported("ACCEPT into " + target.category() + " is not supported");
+    }
+
+    /**
+     * ACCEPT of an environment variable or of the command line, as GnuCOBOL gives them: moved as
+     * alphanumeric data; a variable that is not set (or no further argument) raises the exception
+     * (ON EXCEPTION), and an unset variable moves spaces.
+     */
+    private static List<Statement> acceptEnvironment(OpUnit u, TranslationContext c) throws HandlerException {
+        AcceptStatement a = (AcceptStatement) u.statement();
+        var ctx = (io.proleap.cobol.CobolParser.AcceptStatementContext) a.getCtx();
+        String from;
+        Expression variable = null;
+        if (ctx.ENVIRONMENT() != null) {
+            from = "ENVIRONMENT";
+            if (ctx.literal() == null) {
+                throw HandlerException.unsupported("ACCEPT ... FROM ENVIRONMENT item (only a literal name)");
+            }
+            variable = str(literalText(ctx.literal()));
+        } else if (a.getAcceptType() == AcceptStatement.AcceptType.MNEMONIC) {
+            from = c.device(deviceName(a.getAcceptFromMnemonicStatement()));
+        } else {
+            throw HandlerException.notApplicable("not ACCEPT FROM the environment or command line");
+        }
+        Operand target = c.operand(a.getAcceptCall());
+        Expression value;
+        boolean canFail;
+        switch (from) {
+            case "ENVIRONMENT" -> {
+                value = staticCall("Environment", "get", variable);
+                canFail = true;
+            }
+            case "ENVIRONMENT-VALUE" -> {
+                value = staticCall("Environment", "value");
+                canFail = true;
+            }
+            case "ARGUMENT-VALUE" -> {
+                value = staticCall("Environment", "nextArgument");
+                canFail = true;
+            }
+            case "COMMAND-LINE" -> {
+                value = staticCall("Environment", "commandLine");
+                canFail = false;
+            }
+            case "ARGUMENT-NUMBER" -> {
+                if (!(target instanceof Operand.Field f && f.numeric())) {
+                    throw HandlerException.unsupported("ACCEPT ... FROM ARGUMENT-NUMBER into " + target.category());
+                }
+                List<Statement> out = new ArrayList<>();
+                out.add(stmt(call(c.field(target), "move", staticCall("BigDecimal", "valueOf", staticCall("Environment", "argumentCount")))));
+                if (a.getNotOnExceptionClause() != null) {
+                    out.add(c.nested(a.getNotOnExceptionClause()));
+                }
+                return out;
+            }
+            default -> throw HandlerException.notApplicable("ACCEPT FROM " + from + " is not the environment or command line");
+        }
+        if (!(target instanceof Operand.Field f) || !f.alphanumeric() || f.edited()) {
+            throw HandlerException.unsupported("ACCEPT ... FROM " + from + " into " + target.category() + " (only alphanumeric items)");
+        }
+        String v = c.fresh("value");
+        List<Statement> out = new ArrayList<>();
+        out.add(declare(type("String"), v, value));
+        Expression receiver = c.receiving(target);
+        if (!canFail) {
+            out.add(stmt(call(receiver, "set", name(v))));
+            if (a.getNotOnExceptionClause() != null) {
+                out.add(c.nested(a.getNotOnExceptionClause()));
+            }
+            return out;
+        }
+        // ARGUMENT-VALUE leaves the item unchanged after the last argument; an unset variable moves spaces.
+        BlockStmt missing = from.equals("ARGUMENT-VALUE") ? new BlockStmt() : new BlockStmt(NodeList.nodeList(stmt(call(receiver.clone(), "set", str(" ")))));
+        if (a.getOnExceptionClause() != null) {
+            missing.getStatements().addAll(c.nested(a.getOnExceptionClause()).getStatements());
+        }
+        BlockStmt found = new BlockStmt(NodeList.nodeList(stmt(call(receiver.clone(), "set", name(v)))));
+        if (a.getNotOnExceptionClause() != null) {
+            found.getStatements().addAll(c.nested(a.getNotOnExceptionClause()).getStatements());
+        }
+        out.add(new IfStmt(new BinaryExpr(name(v), new com.github.javaparser.ast.expr.NullLiteralExpr(), BinaryExpr.Operator.EQUALS),
+                missing, found));
+        return out;
+    }
+
+    private static String literalText(io.proleap.cobol.CobolParser.LiteralContext lit) throws HandlerException {
+        if (lit.NONNUMERICLITERAL() == null) {
+            throw HandlerException.unsupported("ACCEPT ... FROM ENVIRONMENT " + lit.getText());
+        }
+        String t = lit.getText();
+        return t.substring(1, t.length() - 1);
     }
 
     private static void rejectAcceptExceptions(AcceptStatement a) throws HandlerException {

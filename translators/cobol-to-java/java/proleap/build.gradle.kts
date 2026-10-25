@@ -31,6 +31,10 @@ val grammarExtensions = mapOf(
     "| COMPUTATIONAL_5 | CONTROL_POINT |" to "| COMPUTATIONAL_5 | COMP_X | COMPUTATIONAL_X | CONTROL_POINT |",
     // READ ... PREVIOUS [RECORD] (COBOL 2002; PREVIOUS lexes as a word).
     "readStatement\n   : READ fileName NEXT? RECORD?" to "readStatement\n   : READ fileName (NEXT | cobolWord)? RECORD?",
+    // ACCEPT ... FROM ENVIRONMENT name (GnuCOBOL).
+    "acceptStatement\n   : ACCEPT identifier (acceptFromDateStatement | acceptFromEscapeKeyStatement | acceptFromMnemonicStatement | acceptMessageCountStatement)?" to
+        "acceptStatement\n   : ACCEPT identifier (acceptFromDateStatement | acceptFromEscapeKeyStatement | acceptFromMnemonicStatement | acceptMessageCountStatement"
+            + " | FROM ENVIRONMENT (literal | qualifiedDataName))?",
     // START ... KEY IS < / <= / NOT > (COBOL 2002).
     "| GREATER THAN? OR EQUAL TO? | MORETHANOREQUAL) qualifiedDataName" to
         "| GREATER THAN? OR EQUAL TO? | MORETHANOREQUAL | LESS THAN? | LESSTHANCHAR | LESS THAN? OR EQUAL TO? | LESSTHANOREQUAL"

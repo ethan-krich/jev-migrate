@@ -70,6 +70,7 @@ Only plain JSON crosses process boundaries: no callables, AST objects or Python 
 | `alter_goto` | ALTER | candidate only: assigns the altered paragraph's GO TO target |
 | `set_condition` | SET | `SET cond TO TRUE` moves the first value; `TO FALSE` needs `WHEN SET TO FALSE` |
 | `accept_stdin` | ACCEPT | one stdin line into a PIC X item (spaces at end of input); `FROM SYSIN / CONSOLE`; other devices `missing_target_api` |
+| `accept_environment` | ACCEPT | `FROM ENVIRONMENT-VALUE` (the variable named by `DISPLAY ... UPON ENVIRONMENT-NAME`), `FROM ENVIRONMENT "name"`, `ARGUMENT-NUMBER`, `ARGUMENT-VALUE`, `COMMAND-LINE` into alphanumeric items (ARGUMENT-NUMBER into numeric ones); an unset variable moves spaces and, like a missing argument, raises `ON EXCEPTION`; `DISPLAY ... UPON ENVIRONMENT-VALUE` sets a variable for the rest of the run |
 | `accept_datetime` | ACCEPT | `FROM DATE [YYYYMMDD]`, `DAY [YYYYDDD]`, `DAY-OF-WEEK`, `TIME` via runtime `Clock` (`COB_CURRENT_DATE` fixes it, as in GnuCOBOL) |
 | `stop_run`, `goback`, `exit`, `continue` | … | run-unit control; `EXIT PARAGRAPH / SECTION / PERFORM [CYCLE]`; `STOP literal` is `missing_target_api` |
 | `call_program` | CALL | `CALL 'X'` of a program in the project (PROGRAM-IDs match case-sensitively, as written); `USING [BY REFERENCE | BY CONTENT]` items whose number and sizes match the callee's `PROCEDURE DIVISION USING` (otherwise `unsupported_construct`); `CALL identifier` with `Dialect.dynamic_calls` (the name is resolved at run time among the project's programs; a shorter argument than the callee's LINKAGE item, a module path or a GnuCOBOL system routine name ends the run unit); `ON EXCEPTION` / `ON OVERFLOW` when the program is not found or active (recursive CALL: RETURN-CODE -1), `NOT ON EXCEPTION` after it returns; a CALL of the program itself is `unsupported_construct` |
@@ -103,7 +104,7 @@ to `cobol_to_java.BUILTIN_HANDLERS` / `FACTS`.
 | CANCEL | (none) |
 | SET | `form` (`true`, `false`, `to`, `on_off`, `up_by`, `down_by`) |
 | EVALUATE | `subjects`, `has_other`, `has_thru` |
-| ACCEPT | `from` (`stdin`, `device`, `date`, `date_yyyymmdd`, `day`, `day_yyyyddd`, `day_of_week`, `time`, `other_date`, `escape_key`, `message_count`) |
+| ACCEPT | `from` (`stdin`, `device`, `environment`, `argument_number`, `argument_value`, `command_line`, `date`, `date_yyyymmdd`, `day`, `day_yyyyddd`, `day_of_week`, `time`, `other_date`, `escape_key`, `message_count`) |
 | EXHIBIT | `named`, `changed` |
 | INITIALIZE | `replacing`, `to_value`, `with_filler`, `then_default` |
 | SEARCH | `all`, `varying`, `at_end` |

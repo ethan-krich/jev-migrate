@@ -217,9 +217,18 @@ public final class Facts {
             case "ACCEPT" -> {
                 AcceptStatement a = (AcceptStatement) s;
                 String from = acceptFrom(a);
-                if (a.getAcceptType() == AcceptStatement.AcceptType.MNEMONIC) {
+                if (((io.proleap.cobol.CobolParser.AcceptStatementContext) a.getCtx()).ENVIRONMENT() != null) {
+                    from = "environment";
+                } else if (a.getAcceptType() == AcceptStatement.AcceptType.MNEMONIC) {
                     String device = ctx.device(Builtins.deviceName(a.getAcceptFromMnemonicStatement()));
-                    from = device.equals("SYSIN") || device.equals("CONSOLE") ? "stdin" : "device";
+                    from = switch (device) {
+                        case "SYSIN", "CONSOLE" -> "stdin";
+                        case "ENVIRONMENT-VALUE" -> "environment";
+                        case "ARGUMENT-NUMBER" -> "argument_number";
+                        case "ARGUMENT-VALUE" -> "argument_value";
+                        case "COMMAND-LINE" -> "command_line";
+                        default -> "device";
+                    };
                 }
                 f.put("from", from);
             }

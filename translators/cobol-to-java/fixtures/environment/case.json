@@ -1,0 +1,7 @@
+{
+  "description": "ACCEPT FROM ENVIRONMENT-VALUE / ENVIRONMENT name / ARGUMENT-NUMBER / ARGUMENT-VALUE / COMMAND-LINE with [NOT] ON EXCEPTION, DISPLAY UPON ENVIRONMENT-NAME / ENVIRONMENT-VALUE / ARGUMENT-NUMBER; set, empty and unset variables",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native"},
+  "equivalence": {"programs": ["ENVS.cbl"], "main_class": "fixtures.environment.Envs", "env": {"MYVAR": "hello", "EMPTYV": ""}},
+  "layout": {"base_package": "fixtures.environment"}
+}

@@ -1,0 +1,12 @@
+set [hello     ]
+short [hel]
+nope unset [          ]
+no phrase [          ]
+after set [new value ]
+empty set [          ]
+args 000
+cmd [          ]
+no arg [          ]
+named [new value ]
+named unset [          ]
+still no arg [same      ]

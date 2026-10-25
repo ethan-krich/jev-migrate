@@ -59,7 +59,8 @@ public final class ProgramSupport {
     }
 
     /** Runs {@code program} as the main program and returns RETURN-CODE as the process exit status. */
-    public static int runMain(CobolProgram program) {
+    public static int runMain(CobolProgram program, String... args) {
+        Environment.arguments(args);
         active.add(program.getClass());
         try {
             program.procedureDivision();
