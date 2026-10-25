@@ -49,6 +49,7 @@ class WorkerTest {
         assertEquals("cobol-to-java", ready.get("translator").asText());
         assertTrue(ready.get("handlers").size() >= 15);
         assertTrue(ready.get("facts").has("MOVE"));
-        assertFalse(ready.get("facts").has("CANCEL"));
+        assertTrue(ready.get("facts").has("CANCEL"));
+        assertFalse(ready.get("facts").has("PURGE"));
     }
 }

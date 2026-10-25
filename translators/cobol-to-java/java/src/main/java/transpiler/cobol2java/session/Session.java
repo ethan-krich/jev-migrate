@@ -51,6 +51,8 @@ public final class Session {
         ProgramUnit unit;
         transpiler.cobol2java.cobol.SourceMap sourceMap;
         String programId;
+        /** The PROGRAM-ID as written (a literal's contents): the name CALL and CANCEL match, case-sensitively. */
+        String entryName;
         String packageName;
         String className;
         Path outputPath;
@@ -203,6 +205,8 @@ public final class Session {
         var programId = idDivision.getProgramIdParagraph();
         // IS INITIAL is translated; the program's other attributes are decisions in its translation.
         ps.programId = programId.getName().toUpperCase(Locale.ROOT);
+        var name = ((io.proleap.cobol.CobolParser.ProgramIdParagraphContext) programId.getCtx()).programName();
+        ps.entryName = name.NONNUMERICLITERAL() != null ? name.getText().substring(1, name.getText().length() - 1) : name.getText();
         ps.packageName = layout.packageFor(Path.of(ps.relativePath));
         ps.className = Names.className(ps.programId);
         ps.outputPath = outputRoot.resolve(layout.javaSourceDir())
@@ -222,7 +226,7 @@ public final class Session {
     private Optional<java.util.List<Integer>> programParameters(String programId) {
         return parameterCache.computeIfAbsent(programId, pid -> {
             for (ProgramState ps : programs.values()) {
-                if (!ps.failed && ps.programId != null && ps.programId.equalsIgnoreCase(pid)) {
+                if (!ps.failed && pid.equals(ps.entryName)) {
                     return ProgramTranslator.parameters(ps.unit, ps.sourceMap, ps.relativePath, ps.programId, dialect);
                 }
             }
@@ -254,7 +258,7 @@ public final class Session {
                 "PROGRAM-ID " + ps.programId + " is declared by " + l.stream().map(p -> p.relativePath).toList())));
         for (ProgramState ps : programs.values()) {
             if (!ps.failed) {
-                programDirectory.put(ps.programId, ps.fqcn());
+                programDirectory.put(ps.entryName, ps.fqcn());
             }
         }
     }
@@ -353,7 +357,8 @@ public final class Session {
             if (!ps.failed) {
                 var out = new ProgramTranslator(new ProgramTranslator.Input(ps.unit, ps.sourceMap, ps.relativePath, ps.programId,
                         ps.packageName, ps.className, layout.runtimePackage(), registry, builtins,
-                        pid -> Optional.ofNullable(programDirectory.get(pid)), dialect, this::programParameters)).translate();
+                        pid -> Optional.ofNullable(programDirectory.get(pid)), dialect, this::programParameters,
+                        new java.util.TreeMap<>(programDirectory))).translate();
                 ps.java = out.compilationUnit();
                 ps.statements = out.statements();
                 ps.translatedStatements = out.translated();

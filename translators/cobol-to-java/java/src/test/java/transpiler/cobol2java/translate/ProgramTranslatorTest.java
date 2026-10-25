@@ -103,7 +103,9 @@ class ProgramTranslatorTest {
     void callResolvesOnlyWithinTheProject() throws Exception {
         String src = program("", "CALL 'SUB'.", "STOP RUN.");
         var found = translate(dir, src, defaultRules(), Map.of("SUB", "test.gen.Sub"));
-        assertTrue(java(found).contains("ProgramSupport.call(this, test.gen.Sub.instance());"));
+        assertTrue(java(found).contains("ProgramSupport.call(this, test.gen.Sub.instance(), false);"));
+        var otherCase = translate(dir, program("", "CALL 'sub'.", "STOP RUN."), defaultRules(), Map.of("SUB", "test.gen.Sub"));
+        assertEquals(Reason.MISSING_TARGET_API, otherCase.decisions().getFirst().reason(), "PROGRAM-IDs match case-sensitively");
         var missing = translate(dir, src, defaultRules());
         assertEquals(Reason.MISSING_TARGET_API, missing.decisions().getFirst().reason());
     }

@@ -13,4 +13,9 @@ public interface CobolProgram {
      * copies for BY CONTENT); items without an argument are left unbound.
      */
     default void using(AlphanumericField[] arguments) {}
+
+    /** The sizes of the PROCEDURE DIVISION USING items, which a dynamic CALL checks its arguments against. */
+    default int[] parameterSizes() {
+        return new int[0];
+    }
 }

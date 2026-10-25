@@ -72,7 +72,8 @@ Only plain JSON crosses process boundaries: no callables, AST objects or Python 
 | `accept_stdin` | ACCEPT | one stdin line into a PIC X item (spaces at end of input); `FROM SYSIN / CONSOLE`; other devices `missing_target_api` |
 | `accept_datetime` | ACCEPT | `FROM DATE [YYYYMMDD]`, `DAY [YYYYDDD]`, `DAY-OF-WEEK`, `TIME` via runtime `Clock` (`COB_CURRENT_DATE` fixes it, as in GnuCOBOL) |
 | `stop_run`, `goback`, `exit`, `continue` | … | run-unit control; `EXIT PARAGRAPH / SECTION / PERFORM [CYCLE]`; `STOP literal` is `missing_target_api` |
-| `call_program` | CALL | static `CALL 'X'` of a program in the project; `USING [BY REFERENCE | BY CONTENT]` items whose number and sizes match the callee's `PROCEDURE DIVISION USING` (otherwise `unsupported_construct`) |
+| `call_program` | CALL | `CALL 'X'` of a program in the project (PROGRAM-IDs match case-sensitively, as written); `USING [BY REFERENCE | BY CONTENT]` items whose number and sizes match the callee's `PROCEDURE DIVISION USING` (otherwise `unsupported_construct`); `CALL identifier` with `Dialect.dynamic_calls` (the name is resolved at run time among the project's programs; a shorter argument than the callee's LINKAGE item, a module path or a GnuCOBOL system routine name ends the run unit); `ON EXCEPTION` / `ON OVERFLOW` when the program is not found or active (recursive CALL: RETURN-CODE -1), `NOT ON EXCEPTION` after it returns; a CALL of the program itself is `unsupported_construct` |
+| `cancel_program` | CANCEL | `CANCEL 'X'` / identifier: the program's next CALL finds its WORKING-STORAGE initial; names that are not programs of the project are ignored, as in GnuCOBOL; CANCEL of an active program ends the run unit |
 | `initialize` | INITIALIZE | item by item: `WITH FILLER`, `ALL TO VALUE`, `REPLACING category BY`, `THEN TO DEFAULT`; REDEFINES and FILLER skipped; every occurrence of tables |
 | `set_index` | SET | `SET index TO n / index / item`, `SET item TO index`, `UP / DOWN BY` (indexes and USAGE INDEX items) |
 | `search` | SEARCH | serial: from the index's value, `AT END` past the occurrences in use, first `WHEN` that holds, `VARYING` |
@@ -99,6 +100,7 @@ to `cobol_to_java.BUILTIN_HANDLERS` / `FACTS`.
 | STOP | `kind` (`run`, `literal`, `giving`) |
 | EXIT | `kind` (`plain`, `program`, `paragraph`, `section`, `perform`, `perform_cycle`, `invalid`) |
 | CALL | `program`, `program_kind` (`literal`/`identifier`), `program_in_project`, `using` |
+| CANCEL | (none) |
 | SET | `form` (`true`, `false`, `to`, `on_off`, `up_by`, `down_by`) |
 | EVALUATE | `subjects`, `has_other`, `has_thru` |
 | ACCEPT | `from` (`stdin`, `device`, `date`, `date_yyyymmdd`, `day`, `day_yyyyddd`, `day_of_week`, `time`, `other_date`, `escape_key`, `message_count`) |
@@ -168,6 +170,7 @@ A key set both by `dialect=` and `options=` raises `TranspilerError`.
 | `source_format` | `fixed` | `fixed`, `variable`, `tandem` |
 | `file_assignments` | `{}` | `ASSIGN TO` name (literal text or word) → run-time path; an unmapped name is a `dialect:file_assignments` decision |
 | `when_compiled` | `None` | value of WHEN-COMPILED, `YYYY-MM-DDTHH:MM:SS` |
+| `dynamic_calls` | `None` | what `CALL identifier` can reach: `project` (the programs of this translation project; any other name is a program that is not found) |
 
 A program that needs an unset setting gets exactly one `missing_mapping` decision whose
 operation is `dialect:<field>` (no candidates; facts `{"field": ...}`), and its statements that

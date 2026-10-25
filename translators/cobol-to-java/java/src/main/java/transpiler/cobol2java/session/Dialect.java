@@ -31,19 +31,21 @@ public record Dialect(
         boolean debuggingLines,
         String sourceFormat,
         Map<String, String> fileAssignments,
-        Optional<String> whenCompiled) {
+        Optional<String> whenCompiled,
+        Optional<String> dynamicCalls) {
 
     /** Option keys of {@code initialize} that are not dialect settings. */
     static final Set<String> OTHER_OPTIONS = Set.of("source_encoding");
 
     static final Set<String> KEYS = Set.of("encoding", "collating_sequence", "out_of_range", "binary_truncate",
-            "sync_alignment", "debugging_lines", "source_format", "file_assignments", "when_compiled");
+            "sync_alignment", "debugging_lines", "source_format", "file_assignments", "when_compiled",
+            "dynamic_calls");
 
     private static final Pattern WHEN_COMPILED = Pattern.compile("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}");
 
     public static Dialect defaults() {
         return new Dialect(Optional.empty(), Optional.empty(), Optional.empty(), true, Optional.empty(), false, "fixed",
-                Map.of(), Optional.empty());
+                Map.of(), Optional.empty(), Optional.empty());
     }
 
     /** Parses {@code initialize.params.options}; unknown keys and malformed values are INVALID_PARAMS. */
@@ -87,7 +89,8 @@ public record Dialect(
                 bool(options, "debugging_lines").orElse(false),
                 text(options, "source_format", Set.of("fixed", "variable", "tandem")).orElse("fixed"),
                 Map.copyOf(files),
-                whenCompiled);
+                whenCompiled,
+                text(options, "dynamic_calls", Set.of("project")));
     }
 
     private static Optional<String> text(JsonNode options, String key, Set<String> allowed) throws ProtocolException {
@@ -134,6 +137,7 @@ public record Dialect(
         ObjectNode files = n.putObject("file_assignments");
         new TreeMap<>(fileAssignments).forEach(files::put);
         n.put("when_compiled", whenCompiled.orElse(null));
+        n.put("dynamic_calls", dynamicCalls.orElse(null));
         return n;
     }
 

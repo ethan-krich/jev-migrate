@@ -106,6 +106,21 @@ public interface TranslationContext {
     /** The fully qualified class translated from the program with this PROGRAM-ID, if in the project. */
     Optional<String> programClass(String programId);
 
+    /** The PROGRAM-ID being translated, as written. */
+    String programId();
+
+    /** The simple name of the class being generated. */
+    String className();
+
+    /**
+     * The static method resolving a dynamic CALL's program name among the project's programs
+     * ({@code CobolProgram name(String)}, null for none); generated on first use.
+     */
+    String programResolver();
+
+    /** The static method doing CANCEL of a program name ({@code void name(String)}); generated on first use. */
+    String cancelResolver();
+
     /** The sizes of the PROCEDURE DIVISION USING items of a program in the project, if known. */
     Optional<List<Integer>> programParameters(String programId);
 

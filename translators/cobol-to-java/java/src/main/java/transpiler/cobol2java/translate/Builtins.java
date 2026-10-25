@@ -98,7 +98,10 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("exit", "EXIT", "EXIT (no-op) and EXIT PROGRAM", Builtins::exit));
         register(Handler.of("continue", "CONTINUE", "CONTINUE (no-op)", (u, c) -> List.of(noOp("CONTINUE"))));
         register(Handler.of("call_program", "CALL",
-                "Static CALL 'literal' of a program in the same translation project, without USING", Builtins::callProgram));
+                "CALL 'literal' of a program in the project, or CALL identifier (Dialect.dynamic_calls), [USING] [ON EXCEPTION]",
+                Builtins::callProgram));
+        register(Handler.of("cancel_program", "CANCEL", "CANCEL 'literal' / identifier: the program's next CALL starts it afresh",
+                Builtins::cancelProgram));
         register(Handler.of("set_condition", "SET",
                 "SET condition-name TO TRUE (moves its first value), or TO FALSE with WHEN SET TO FALSE", Builtins::setCondition));
         register(Handler.of("evaluate", "EVALUATE",
@@ -1126,27 +1129,54 @@ public final class Builtins implements MappingRegistry.Catalog {
         return empty;
     }
 
+    /**
+     * CALL: a literal names a program of the project (checked against its USING items); an
+     * identifier is resolved at run time among the project's programs (Dialect.dynamic_calls).
+     * ON EXCEPTION / ON OVERFLOW runs when the program is not found or is active; NOT ON
+     * EXCEPTION after it returns.
+     */
     private static List<Statement> callProgram(OpUnit u, TranslationContext c) throws HandlerException {
         CallStatement call = (CallStatement) u.statement();
-        if (call.getGivingPhrase() != null || call.getOnExceptionClause() != null
-                || call.getNotOnExceptionClause() != null || call.getOnOverflowPhrase() != null) {
-            throw HandlerException.unsupported("CALL with RETURNING/GIVING or exception phrases is not supported");
+        if (call.getGivingPhrase() != null) {
+            throw HandlerException.unsupported("CALL ... RETURNING / GIVING is not supported");
         }
-        if (!(call.getProgramValueStmt() instanceof LiteralValueStmt lit)
-                || lit.getLiteral().getLiteralType() != Literal.LiteralType.NON_NUMERIC) {
-            throw HandlerException.unsupported("dynamic CALL through an identifier is not supported");
+        if (call.getOnExceptionClause() != null && call.getOnOverflowPhrase() != null) {
+            throw HandlerException.unsupported("CALL with both ON OVERFLOW and ON EXCEPTION");
         }
-        String program = lit.getLiteral().getNonNumericLiteral();
-        String cls = c.programClass(program).orElseThrow(() -> new HandlerException(HandlerException.Kind.MISSING_TARGET,
-                "program '" + program + "' is not part of the translation project (unresolved cross-file dependency)"));
-        if (call.getUsingPhrase() == null) {
-            return List.of(stmt(staticCall("ProgramSupport", "call", self(), call(name(cls), "instance"))));
+        Scope onException = call.getOnExceptionClause() != null ? call.getOnExceptionClause() : call.getOnOverflowPhrase();
+        boolean dynamic = !(call.getProgramValueStmt() instanceof LiteralValueStmt lit
+                && lit.getLiteral().getLiteralType() == Literal.LiteralType.NON_NUMERIC);
+        NodeList<Expression> args = NodeList.nodeList(self());
+        List<Integer> expected = null;
+        String program = null;
+        if (dynamic) {
+            c.require("dynamic_calls", c.dialect().dynamicCalls(), call.getCtx(), "CALL identifier");
+            Operand target = c.operand(call.getProgramValueStmt());
+            if (!(target instanceof Operand.Field f) || !f.alphanumeric() || f.edited()) {
+                throw HandlerException.unsupported("CALL through a " + target.category() + " item");
+            }
+            args.add(call(c.field(target), "get"));
+            args.add(new com.github.javaparser.ast.expr.MethodReferenceExpr(new com.github.javaparser.ast.expr.TypeExpr(type(c.className())),
+                    new NodeList<>(), c.programResolver()));
+        } else {
+            program = ((LiteralValueStmt) call.getProgramValueStmt()).getLiteral().getNonNumericLiteral();
+            String name = program;
+            if (name.equals(c.programId())) {
+                // GnuCOBOL then assumes IS RECURSIVE.
+                throw HandlerException.unsupported("CALL of the program itself (recursive CALL)");
+            }
+            String cls = c.programClass(name).orElseThrow(() -> new HandlerException(HandlerException.Kind.MISSING_TARGET,
+                    "program '" + name + "' is not part of the translation project (unresolved cross-file dependency)"));
+            args.add(call(name(cls), "instance"));
+            if (call.getUsingPhrase() != null) {
+                expected = c.programParameters(name).orElseThrow(() -> HandlerException.unsupported(
+                        "the USING items of program '" + name + "' cannot be determined"));
+            }
         }
-        List<Integer> expected = c.programParameters(program).orElseThrow(() -> HandlerException.unsupported(
-                "the USING items of program '" + program + "' cannot be determined"));
-        NodeList<Expression> args = NodeList.nodeList(self(), call(name(cls), "instance"));
+        args.add(bool(onException != null));
         List<Integer> sizes = new ArrayList<>();
-        for (var parameter : call.getUsingPhrase().getUsingParameters()) {
+        var using = call.getUsingPhrase();
+        for (var parameter : using == null ? List.<io.proleap.cobol.asg.metamodel.procedure.call.UsingParameter>of() : using.getUsingParameters()) {
             switch (parameter.getParameterType()) {
                 case REFERENCE -> {
                     for (var ref : parameter.getByReferencePhrase().getByReferences()) {
@@ -1176,11 +1206,45 @@ public final class Builtins implements MappingRegistry.Catalog {
                 case VALUE -> throw HandlerException.unsupported("CALL USING BY VALUE is not supported");
             }
         }
-        if (!sizes.equals(expected)) {
+        if (expected != null && !sizes.equals(expected)) {
             throw HandlerException.unsupported("CALL '" + program + "' USING passes items of " + sizes + " bytes but the program expects "
                     + expected + " (USING items must match in number and size)");
         }
-        return List.of(stmt(new com.github.javaparser.ast.expr.MethodCallExpr(name("ProgramSupport"), "call", args)));
+        Expression invoke = new com.github.javaparser.ast.expr.MethodCallExpr(name("ProgramSupport"), dynamic ? "callNamed" : "call", args);
+        BlockStmt notOnException = call.getNotOnExceptionClause() == null ? new BlockStmt() : c.nested(call.getNotOnExceptionClause());
+        if (onException == null) {
+            return notOnException.isEmpty() ? List.of(stmt(invoke)) : List.of(stmt(invoke), notOnException);
+        }
+        return List.of(new IfStmt(invoke, c.nested(onException), notOnException.isEmpty() ? null : notOnException));
+    }
+
+    /** CANCEL: a program of the project starts afresh at its next CALL; any other name is ignored, as in GnuCOBOL. */
+    private static List<Statement> cancelProgram(OpUnit u, TranslationContext c) throws HandlerException {
+        var cancel = (io.proleap.cobol.asg.metamodel.procedure.cancel.CancelStatement) u.statement();
+        List<Statement> out = new ArrayList<>();
+        for (var target : cancel.getCancelCalls()) {
+            if (target.getCancelType() != null) {
+                throw HandlerException.unsupported("CANCEL of a library name");
+            }
+            if (target.getValueStmt() instanceof LiteralValueStmt lit && lit.getLiteral().getLiteralType() == Literal.LiteralType.NON_NUMERIC) {
+                // As GnuCOBOL's cob_cancel: a directory part is ignored.
+                String written = lit.getLiteral().getNonNumericLiteral();
+                String name = written.substring(Math.max(written.lastIndexOf('/'), written.lastIndexOf('\\')) + 1);
+                var cls = c.programClass(name);
+                if (cls.isPresent()) {
+                    out.add(stmt(call(name(cls.get()), "cancel")));
+                } else {
+                    out.add(noOp("CANCEL '" + name + "' (not a program of the project)"));
+                }
+                continue;
+            }
+            Operand o = c.operand(target.getValueStmt());
+            if (!(o instanceof Operand.Field f) || !f.alphanumeric() || f.edited()) {
+                throw HandlerException.unsupported("CANCEL of a " + o.category() + " item");
+            }
+            out.add(stmt(call(null, c.cancelResolver(), staticCall("ProgramSupport", "cancelName", call(c.field(o), "get")))));
+        }
+        return out;
     }
 
     /** A CALL argument: a data item (a reference modification or variable-length group cannot be checked). */

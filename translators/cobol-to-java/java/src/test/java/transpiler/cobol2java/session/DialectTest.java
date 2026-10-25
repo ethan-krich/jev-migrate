@@ -26,15 +26,16 @@ class DialectTest {
         assertEquals(Dialect.defaults(), parse("""
                 {"encoding": null, "collating_sequence": null, "out_of_range": null, "binary_truncate": true,
                  "sync_alignment": null, "debugging_lines": false, "source_format": "fixed", "file_assignments": {},
-                 "when_compiled": null, "source_encoding": "ISO-8859-1"}"""));
+                 "when_compiled": null, "dynamic_calls": null, "source_encoding": "ISO-8859-1"}"""));
     }
 
     @Test
     void settingsAreParsed() throws Exception {
         Dialect d = parse("""
                 {"encoding": "ebcdic", "out_of_range": "fail", "sync_alignment": true, "binary_truncate": false,
-                 "file_assignments": {"IN": "/tmp/in"}, "when_compiled": "2024-01-02T03:04:05"}""");
+                 "file_assignments": {"IN": "/tmp/in"}, "when_compiled": "2024-01-02T03:04:05", "dynamic_calls": "project"}""");
         assertEquals(Optional.of("ebcdic"), d.encoding());
+        assertEquals(Optional.of("project"), d.dynamicCalls());
         assertEquals(Optional.of("fail"), d.outOfRange());
         assertEquals(Optional.of(true), d.syncAlignment());
         assertFalse(d.binaryTruncate());
@@ -48,7 +49,7 @@ class DialectTest {
     void unknownKeysAndBadValuesAreInvalidParams() {
         for (String bad : new String[] {
             "{\"colour\": \"blue\"}", "{\"encoding\": \"utf-8\"}", "{\"binary_truncate\": \"yes\"}",
-            "{\"source_format\": \"free\"}", "{\"when_compiled\": \"today\"}", "{\"file_assignments\": {\"A\": 1}}", "[]"}) {
+            "{\"source_format\": \"free\"}", "{\"when_compiled\": \"today\"}", "{\"file_assignments\": {\"A\": 1}}", "{\"dynamic_calls\": \"all\"}", "[]"}) {
             var e = assertThrows(ProtocolException.class, () -> parse(bad), bad);
             assertEquals(ErrorCode.INVALID_PARAMS, e.code(), bad);
         }

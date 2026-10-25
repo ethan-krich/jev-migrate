@@ -139,7 +139,7 @@ equivalence fixtures.
 | ✅ | Paragraphs, sections, fall-through, `PERFORM` proc / inline / `THRU`, `TIMES`, `UNTIL`, `VARYING … AFTER`, `WITH TEST AFTER` | |
 | ✅ | `GO TO`, `GO TO … DEPENDING ON` | procedure dispatcher with GnuCOBOL's PERFORM return points; overlapping / recursive ranges and GO TO out of a performed range are decisions; `ALTER` is a decision with a candidate |
 | ✅ | `STOP RUN`, `GOBACK`, `EXIT`, `EXIT PROGRAM`, `CONTINUE`, `RETURN-CODE` → exit status | |
-| ✅ | `COPY` (copybook search path; decision lines map back to the original file), static `CALL 'literal'` of a program in the project | persistent WORKING-STORAGE, RETURN-CODE propagation |
+| ✅ | `COPY` (copybook search path; decision lines map back to the original file), `CALL 'literal'` of a program in the project, `CALL identifier` (needs `Dialect.dynamic_calls`), `ON EXCEPTION` / `ON OVERFLOW`, `CANCEL` | persistent WORKING-STORAGE, RETURN-CODE propagation, PROGRAM-IDs matched case-sensitively as GnuCOBOL does |
 | ◐ | `REPLACE` statements | parsed by ProLeap; line numbers then fall back to the preprocessed source (warning `approximate_line_numbers`) |
 | ❌ | `RENAMES`, level 88 on groups, `COMP-1` / `COMP-2`, `POINTER`, `ADDRESS OF`, `P` / `N` pictures, a fixed sign before a floating currency string, `EXTERNAL`, `GLOBAL`, nested programs, `IS RECURSIVE`, `CALL … BY VALUE` | `unsupported_construct` |
 | ❌ | `**` with a non-integer or negative exponent, EBCDIC collating sequence | `unsupported_construct` |
@@ -148,7 +148,7 @@ equivalence fixtures.
 | ✅ | `SORT … WITH DUPLICATES IN ORDER`, `MERGE`, `RELEASE`, `RETURN`, `USING` / `GIVING` / INPUT and OUTPUT PROCEDURE | SORT without DUPLICATES IN ORDER is a decision with a stable-sort candidate |
 | ✅ | Exact intrinsic functions (see docs/mapping-api.md) | floating-point functions are decisions |
 | ❌ | `SELECT OPTIONAL`, split keys, `SUPPRESS WHEN`, `LOCK` phrases, SORT / MERGE `USING` / `GIVING` of RELATIVE / INDEXED files, `REWRITE` of an INDEXED file with alternate keys in `ACCESS SEQUENTIAL`, `WRITE … ADVANCING`, `LINAGE`, `USE` declaratives, `SAME RECORD AREA` | decisions |
-| ❌ | Dynamic `CALL`, `DISPLAY UPON` printer / other devices, `ACCEPT FROM` environment, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
+| ❌ | `CALL` of a program outside the project or of the program itself, `CALL … RETURNING`, `DISPLAY UPON` printer / other devices, `ACCEPT FROM` environment, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
 | ❌ | `TALLY` and other special registers, free format / other dialects | files ProLeap cannot parse (XML / JSON GENERATE, ALLOCATE, OO COBOL, …) fail with `unsupported_dialect` |
 
 Known divergence: GnuCOBOL 3.2 prints an empty value for a `COMPUTE` receiver when it is displayed

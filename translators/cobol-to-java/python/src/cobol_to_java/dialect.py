@@ -21,6 +21,7 @@ ENCODINGS = ("ascii", "ebcdic")
 COLLATING_SEQUENCES = ("native", "ascii", "ebcdic")
 OUT_OF_RANGE = ("fail", "decision")
 SOURCE_FORMATS = ("fixed", "variable", "tandem")
+DYNAMIC_CALLS = ("project",)
 _WHEN_COMPILED = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")
 
 
@@ -42,6 +43,8 @@ class Dialect:
     * ``source_format``: ``fixed`` (columns 8-72), ``variable`` or ``tandem``.
     * ``file_assignments``: ``ASSIGN TO`` name -> path used at run time.
     * ``when_compiled``: fixed value of the WHEN-COMPILED register, ``YYYY-MM-DDTHH:MM:SS``.
+    * ``dynamic_calls``: what ``CALL identifier`` can reach. ``project``: the programs of this
+      translation project and nothing else (any other name is a program that is not found).
     """
 
     encoding: str | None = None
@@ -53,6 +56,7 @@ class Dialect:
     source_format: str = "fixed"
     file_assignments: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}), hash=False)
     when_compiled: str | None = None
+    dynamic_calls: str | None = None
 
     def __post_init__(self) -> None:
         problems = []
@@ -60,6 +64,7 @@ class Dialect:
         _choice(problems, "collating_sequence", self.collating_sequence, COLLATING_SEQUENCES, optional=True)
         _choice(problems, "out_of_range", self.out_of_range, OUT_OF_RANGE, optional=True)
         _choice(problems, "source_format", self.source_format, SOURCE_FORMATS, optional=False)
+        _choice(problems, "dynamic_calls", self.dynamic_calls, DYNAMIC_CALLS, optional=True)
         for name in ("binary_truncate", "debugging_lines"):
             if not isinstance(getattr(self, name), bool):
                 problems.append(f"{name} must be a bool")
@@ -88,6 +93,7 @@ class Dialect:
             "source_format": self.source_format,
             "file_assignments": dict(self.file_assignments),
             "when_compiled": self.when_compiled,
+            "dynamic_calls": self.dynamic_calls,
         }
 
 

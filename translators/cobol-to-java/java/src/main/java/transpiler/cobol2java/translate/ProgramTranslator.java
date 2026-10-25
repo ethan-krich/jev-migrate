@@ -126,12 +126,13 @@ public final class ProgramTranslator implements TranslationContext {
             Builtins builtins,
             Function<String, Optional<String>> programDirectory,
             Dialect dialect,
-            Function<String, Optional<List<Integer>>> programParameters) {
+            Function<String, Optional<List<Integer>>> programParameters,
+            Map<String, String> programs) {
         public Input(ProgramUnit unit, SourceMap sourceMap, String sourceFile, String programId, String packageName, String className,
                 String runtimePackage, MappingRegistry registry, Builtins builtins, Function<String, Optional<String>> programDirectory,
                 Dialect dialect) {
             this(unit, sourceMap, sourceFile, programId, packageName, className, runtimePackage, registry, builtins, programDirectory,
-                    dialect, id -> Optional.empty());
+                    dialect, id -> Optional.empty(), Map.of());
         }
     }
 
@@ -307,6 +308,7 @@ public final class ProgramTranslator implements TranslationContext {
         addFields(cls);
         addEntryPoints(cls);
         addProcedureDivision(cls);
+        addResolvers(cls);
         for (ParserRuleContext next : allNextSentences) {
             if (!placedNextSentences.contains(next)) {
                 dataDecision(next, "PROCEDURE", "NEXT SENTENCE here cannot be translated (no enclosing sentence)");
@@ -1418,6 +1420,13 @@ public final class ProgramTranslator implements TranslationContext {
         body.addStatement(stmt(new AssignExpr(name("callParameters"),
                 new com.github.javaparser.ast.expr.FieldAccessExpr(name("arguments"), "length"), AssignExpr.Operator.ASSIGN)));
         m.setBody(body);
+        MethodDeclaration sizes = cls.addMethod("parameterSizes", Modifier.Keyword.PUBLIC);
+        sizes.addMarkerAnnotation("Override");
+        sizes.setType(new ArrayType(PrimitiveType.intType()));
+        sizes.setBody(new BlockStmt(NodeList.nodeList(new ReturnStmt(new com.github.javaparser.ast.expr.ArrayCreationExpr(PrimitiveType.intType(),
+                NodeList.nodeList(new com.github.javaparser.ast.ArrayCreationLevel()),
+                new com.github.javaparser.ast.expr.ArrayInitializerExpr(using.stream().map(i -> (Expression) integer(i.totalSize()))
+                        .collect(NodeList.toNodeList())))))));
         cls.addField(PrimitiveType.intType(), "callParameters", Modifier.Keyword.PRIVATE)
                 .setLineComment(" NUMBER-OF-CALL-PARAMETERS");
     }
@@ -1537,6 +1546,15 @@ public final class ProgramTranslator implements TranslationContext {
                             stmt(new AssignExpr(name("instance"), create(in.className()), AssignExpr.Operator.ASSIGN)), null),
                     new ReturnStmt(name("instance")))));
         }
+
+        MethodDeclaration cancel = cls.addMethod("cancel", Modifier.Keyword.PUBLIC, Modifier.Keyword.STATIC);
+        cancel.setJavadocComment("CANCEL: the next CALL starts the program with its WORKING-STORAGE in its initial state.");
+        BlockStmt cancelBody = new BlockStmt(NodeList.nodeList(stmt(staticCall("ProgramSupport", "cancel",
+                new com.github.javaparser.ast.expr.ClassExpr(type(in.className()))))));
+        if (attribute != io.proleap.cobol.asg.metamodel.identification.ProgramIdParagraph.Attribute.INITIAL) {
+            cancelBody.addStatement(stmt(new AssignExpr(name("instance"), new NullLiteralExpr(), AssignExpr.Operator.ASSIGN)));
+        }
+        cancel.setBody(cancelBody);
 
         MethodDeclaration main = cls.addMethod("main", Modifier.Keyword.PUBLIC, Modifier.Keyword.STATIC);
         main.addParameter(new Parameter(new ArrayType(type("String")), "args"));
@@ -3549,8 +3567,73 @@ public final class ProgramTranslator implements TranslationContext {
     }
 
     @Override
+    public String programId() {
+        return entryName();
+    }
+
+    /** The PROGRAM-ID as written (a literal's contents). */
+    private String entryName() {
+        var name = ((CobolParser.ProgramIdParagraphContext) in.unit().getIdentificationDivision().getProgramIdParagraph().getCtx()).programName();
+        return name.NONNUMERICLITERAL() != null ? name.getText().substring(1, name.getText().length() - 1) : name.getText();
+    }
+
+    @Override
+    public String className() {
+        return in.className();
+    }
+
+    @Override
+    public String programResolver() {
+        needsProgramResolver = true;
+        return "callTarget";
+    }
+
+    @Override
+    public String cancelResolver() {
+        needsCancelResolver = true;
+        return "cancelTarget";
+    }
+
+    private boolean needsProgramResolver;
+    private boolean needsCancelResolver;
+
+    /** {@code callTarget(name)} / {@code cancelTarget(name)}: a switch over the project's programs. */
+    private void addResolvers(ClassOrInterfaceDeclaration cls) {
+        if (needsProgramResolver) {
+            MethodDeclaration m = cls.addMethod("callTarget", Modifier.Keyword.PRIVATE, Modifier.Keyword.STATIC);
+            m.setType("CobolProgram");
+            m.addParameter(type("String"), "name");
+            m.setJavadocComment("The program a CALL identifier names: one of the translation project's (Dialect.dynamic_calls), or null.");
+            var sw = new com.github.javaparser.ast.expr.SwitchExpr();
+            sw.setSelector(name("name"));
+            for (var e : in.programs().entrySet()) {
+                sw.getEntries().add(new com.github.javaparser.ast.stmt.SwitchEntry(NodeList.nodeList(str(e.getKey())),
+                        com.github.javaparser.ast.stmt.SwitchEntry.Type.EXPRESSION,
+                        NodeList.nodeList(stmt(call(name(e.getValue()), "instance")))));
+            }
+            sw.getEntries().add(new com.github.javaparser.ast.stmt.SwitchEntry(new NodeList<>(),
+                    com.github.javaparser.ast.stmt.SwitchEntry.Type.EXPRESSION, NodeList.nodeList(stmt(new NullLiteralExpr()))));
+            m.setBody(new BlockStmt(NodeList.nodeList(new ReturnStmt(sw))));
+        }
+        if (needsCancelResolver) {
+            MethodDeclaration m = cls.addMethod("cancelTarget", Modifier.Keyword.PRIVATE, Modifier.Keyword.STATIC);
+            m.addParameter(type("String"), "name");
+            m.setJavadocComment("CANCEL of a program name: a program of the translation project; other names are ignored.");
+            var sw = new com.github.javaparser.ast.stmt.SwitchStmt();
+            sw.setSelector(name("name"));
+            for (var e : in.programs().entrySet()) {
+                sw.getEntries().add(new com.github.javaparser.ast.stmt.SwitchEntry(NodeList.nodeList(str(e.getKey())),
+                        com.github.javaparser.ast.stmt.SwitchEntry.Type.EXPRESSION, NodeList.nodeList(stmt(call(name(e.getValue()), "cancel")))));
+            }
+            sw.getEntries().add(new com.github.javaparser.ast.stmt.SwitchEntry(new NodeList<>(),
+                    com.github.javaparser.ast.stmt.SwitchEntry.Type.BLOCK, NodeList.nodeList(new BlockStmt())));
+            m.setBody(new BlockStmt(NodeList.nodeList(sw)));
+        }
+    }
+
+    @Override
     public Optional<String> programClass(String programId) {
-        return in.programDirectory().apply(programId.toUpperCase(Locale.ROOT));
+        return in.programDirectory().apply(programId);
     }
 
     /**
