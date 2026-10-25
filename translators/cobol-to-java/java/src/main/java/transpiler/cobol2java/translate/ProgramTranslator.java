@@ -218,6 +218,8 @@ public final class ProgramTranslator implements TranslationContext {
         CobolParser.QualifiedDataNameContext relativeKeyName;
         DataItem relativeKey;
         /** LINAGE values as IntSupplier lambdas (lines, footing, top, bottom; null when absent), and LINAGE-COUNTER's field. */
+        /** FD ... IS EXTERNAL: one connector (and record area) for the whole run unit. */
+        boolean external;
         io.proleap.cobol.asg.metamodel.data.file.LinageClause linageClause;
         Expression[] linage;
         String linageCounter;
@@ -229,6 +231,8 @@ public final class ProgramTranslator implements TranslationContext {
     }
 
     private final Map<String, FileInfo> files = new LinkedHashMap<>();
+    /** SAME RECORD AREA FOR f1 f2 ...: the files' records share one record area. */
+    private final List<CobolParser.SameClauseContext> sameRecordAreas = new ArrayList<>();
     /** Java field holding each LINKAGE record's binding. */
     private final Map<DataItem, String> parameterFields = new IdentityHashMap<>();
     /** Java field of each record's Storage. */
@@ -410,6 +414,9 @@ public final class ProgramTranslator implements TranslationContext {
                 if (item == null) {
                     continue;
                 }
+                if (item.externalName() != null) {
+                    dataDecision(e.getCtx(), "DATA", item.cobolName() + ": EXTERNAL in the LINKAGE SECTION");
+                }
                 item.markLinkage();
                 roots.add(item);
                 if (e instanceof DataDescriptionEntryGroup g && hasValue(g)) {
@@ -473,6 +480,11 @@ public final class ProgramTranslator implements TranslationContext {
             }
             if (problem == null && f.linageClause != null) {
                 problem = resolveLinage(f);
+            }
+            if (problem == null && f.external && (f.status != null && f.status.externalName() == null
+                    || f.relativeKey != null && f.relativeKey.externalName() == null)) {
+                // The shared connector sets one FILE STATUS / RELATIVE KEY for every program.
+                problem = "an EXTERNAL file's FILE STATUS and RELATIVE KEY items must be EXTERNAL too";
             }
             if (problem != null) {
                 dataDecision(f.ctx, "ENVIRONMENT", f.cobolName + ": " + problem);
@@ -627,7 +639,15 @@ public final class ProgramTranslator implements TranslationContext {
     /** SELECT entries: ASSIGN through Dialect.file_assignments, SEQUENTIAL / LINE SEQUENTIAL organisation, FILE STATUS. */
     private void fileControl(io.proleap.cobol.asg.metamodel.environment.inputoutput.InputOutputSection section) {
         if (section.getIoControlParagraph() != null) {
-            dataDecision(section.getIoControlParagraph().getCtx(), "ENVIRONMENT", "I-O-CONTROL (SAME RECORD AREA, RERUN, APPLY) is not supported");
+            var io = (CobolParser.IoControlParagraphContext) section.getIoControlParagraph().getCtx();
+            for (var clause : io.ioControlClause()) {
+                if (clause.sameClause() != null && clause.sameClause().RECORD() != null) {
+                    sameRecordAreas.add(clause.sameClause());
+                } else if (clause.sameClause() == null) {
+                    dataDecision(clause, "ENVIRONMENT", "I-O-CONTROL clause " + words(clause) + " is not supported");
+                }
+                // SAME [SORT / SORT-MERGE] AREA has no effect in GnuCOBOL.
+            }
         }
         if (section.getFileControlParagraph() == null) {
             return;
@@ -752,8 +772,10 @@ public final class ProgramTranslator implements TranslationContext {
             }
             if (problem != null) {
                 // reported below
-            } else if (fd.getExternalClause() != null || fd.getGlobalClause() != null) {
-                problem = "EXTERNAL / GLOBAL files are not supported";
+            } else if (fd.getGlobalClause() != null) {
+                problem = "GLOBAL files are not supported";
+            } else if (fd.getExternalClause() != null && (f == null || f.sort || f.linageClause != null)) {
+                problem = "EXTERNAL on a sort file or a file with LINAGE";
             } else if (fd.getCodeSetClause() != null || fd.getReportClause() != null) {
                 problem = "CODE-SET / REPORT files are not supported";
             } else if (fd.getRecordContainsClause() != null
@@ -771,6 +793,10 @@ public final class ProgramTranslator implements TranslationContext {
                 roots.add(item);
                 if (base == null) {
                     base = item;
+                    if (fd.getExternalClause() != null) {
+                        // The record area of an EXTERNAL file is shared with the connector.
+                        item.external("FD " + name);
+                    }
                 } else if (item.redefines() == null) {
                     item.redefines(base);
                 }
@@ -784,6 +810,29 @@ public final class ProgramTranslator implements TranslationContext {
             if (problem != null) {
                 dataDecision(fd.getCtx(), "DATA", fd.getName() + ": " + problem);
                 files.remove(name);
+            } else if (f != null) {
+                f.external = fd.getExternalClause() != null;
+            }
+        }
+        for (var same : sameRecordAreas) {
+            sameRecordArea(same);
+        }
+    }
+
+    /** SAME RECORD AREA: the first record of each later file redefines the first file's record. */
+    private void sameRecordArea(CobolParser.SameClauseContext same) {
+        DataItem base = null;
+        for (var fileName : same.fileName()) {
+            FileInfo f = files.get(fileName.getText().toUpperCase(Locale.ROOT));
+            if (f == null || f.records.isEmpty() || f.external) {
+                dataDecision(same, "ENVIRONMENT", "SAME RECORD AREA for " + fileName.getText() + " (not a supported non-EXTERNAL file with records)");
+                return;
+            }
+            DataItem first = f.records.getFirst();
+            if (base == null) {
+                base = first;
+            } else if (first.redefines() == null) {
+                first.redefines(base);
             }
         }
     }
@@ -1029,6 +1078,9 @@ public final class ProgramTranslator implements TranslationContext {
             }
             item.justified(g.getJustifiedClause() != null);
             item.blankWhenZero(g.getBlankWhenZeroClause() != null);
+            if (g.getExternalClause() != null) {
+                item.external(name.toUpperCase(Locale.ROOT));
+            }
             if (kind != DataItem.Kind.GROUP) {
                 String valueProblem = initialValue(item, g);
                 if (valueProblem != null) {
@@ -1237,8 +1289,17 @@ public final class ProgramTranslator implements TranslationContext {
     }
 
     private static String unsupportedClauses(DataDescriptionEntryGroup g) {
-        if (g.getExternalClause() != null || g.getGlobalClause() != null) {
-            return "EXTERNAL / GLOBAL is not supported";
+        if (g.getGlobalClause() != null) {
+            return "GLOBAL is not supported";
+        }
+        if (g.getExternalClause() != null) {
+            var ext = (CobolParser.DataExternalClauseContext) g.getExternalClause().getCtx();
+            if (g.getLevelNumber() != 1 && g.getLevelNumber() != 77) {
+                return "EXTERNAL on a subordinate item";
+            }
+            if (ext.literal() != null || g.getValueClause() != null || g.getRedefinesClause() != null) {
+                return "EXTERNAL with BY, VALUE or REDEFINES is not supported";
+            }
         }
         return null;
     }
@@ -1437,7 +1498,7 @@ public final class ProgramTranslator implements TranslationContext {
             if (item.hasAccessor()) {
                 String storage = storageField(cls, record, storages, sizes);
                 accessors.add(item);
-                if (!item.isGroup() && !item.inRedefines() && !item.fileRecord()) {
+                if (!item.isGroup() && !item.inRedefines() && !item.fileRecord() && item.externalName() == null) {
                     cls.addMember(tableInitializer(item, storage));
                 }
                 for (DataItem.IndexName idx : item.indexes()) {
@@ -1452,7 +1513,8 @@ public final class ProgramTranslator implements TranslationContext {
                         .setLineComment(" INDEX " + idx.cobolName() + " of " + item.cobolName());
             }
             Expression init;
-            if (item == record && !item.isGroup() && plain(item) && !item.fileRecord() && roots.stream().noneMatch(r -> r.redefines() == item)) {
+            if (item == record && !item.isGroup() && plain(item) && !item.fileRecord() && item.externalName() == null
+                    && roots.stream().noneMatch(r -> r.redefines() == item)) {
                 init = standalone(item);
             } else {
                 init = view(item, name(storageField(cls, record, storages, sizes)));
@@ -1463,7 +1525,8 @@ public final class ProgramTranslator implements TranslationContext {
         for (FileInfo f : files.values()) {
             DataItem base = storageRoot(f.records.getFirst());
             String storage = storageField(cls, base, storages, sizes);
-            int size = sizes.get(base);
+            // The file's own record length (SAME RECORD AREA may make the shared storage longer).
+            int size = f.records.stream().mapToInt(DataItem::totalSize).max().orElse(1);
             f.javaName = allocateField(Names.fieldName(f.cobolName));
             if (f.sort) {
                 cls.addFieldWithInitializer("SortFile", f.javaName, create("SortFile", str(f.cobolName),
@@ -1474,6 +1537,9 @@ public final class ProgramTranslator implements TranslationContext {
             Expression status = f.status == null ? new NullLiteralExpr() : name(f.status.javaName());
             Expression area = create("AlphanumericField", name(storage), integer(0), integer(size));
             Expression access = new com.github.javaparser.ast.expr.FieldAccessExpr(name("IndexedFile"), f.access.name());
+            String type;
+            Expression file;
+            String comment;
             switch (f.organization) {
                 case INDEXED -> {
                     NodeList<Expression> args = NodeList.nodeList(str(f.cobolName), str(f.path), area, status, access);
@@ -1482,15 +1548,19 @@ public final class ProgramTranslator implements TranslationContext {
                         args.add(integer(k.item().size()));
                         args.add(integer(k.duplicates() ? 1 : 0));
                     }
-                    cls.addFieldWithInitializer("IndexedFile", f.javaName, new com.github.javaparser.ast.expr.ObjectCreationExpr(null, type("IndexedFile"), args),
-                            Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL).setLineComment(" FD " + f.cobolName + " (INDEXED, ACCESS " + f.access + ")");
+                    type = "IndexedFile";
+                    file = new com.github.javaparser.ast.expr.ObjectCreationExpr(null, type("IndexedFile"), args);
+                    comment = "INDEXED, ACCESS " + f.access;
                 }
-                case RELATIVE -> cls.addFieldWithInitializer("RelativeFile", f.javaName, create("RelativeFile", str(f.cobolName), str(f.path), area, status,
-                        access, f.relativeKey == null ? new NullLiteralExpr() : name(f.relativeKey.javaName())), Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL)
-                        .setLineComment(" FD " + f.cobolName + " (RELATIVE, ACCESS " + f.access + ")");
+                case RELATIVE -> {
+                    type = "RelativeFile";
+                    file = create("RelativeFile", str(f.cobolName), str(f.path), area, status, access,
+                            f.relativeKey == null ? new NullLiteralExpr() : name(f.relativeKey.javaName()));
+                    comment = "RELATIVE, ACCESS " + f.access;
+                }
                 default -> {
-                    Expression file = create("CobolFile", str(f.cobolName), str(f.path), Ast.bool(f.organization == Organization.LINE_SEQUENTIAL),
-                            area, status);
+                    type = "CobolFile";
+                    file = create("CobolFile", str(f.cobolName), str(f.path), Ast.bool(f.organization == Organization.LINE_SEQUENTIAL), area, status);
                     if (f.linage != null) {
                         f.linageCounter = allocateField(Names.fieldName(f.cobolName) + "LinageCounter");
                         cls.addFieldWithInitializer("NumericField", f.linageCounter, create("NumericField", integer(10), integer(0), Ast.bool(false)),
@@ -1502,10 +1572,19 @@ public final class ProgramTranslator implements TranslationContext {
                         args.add(name(f.linageCounter));
                         file = new com.github.javaparser.ast.expr.MethodCallExpr(file, "linage", args);
                     }
-                    cls.addFieldWithInitializer("CobolFile", f.javaName, file, Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL)
-                            .setLineComment(" FD " + f.cobolName + " (" + f.organization.name().replace('_', ' ') + (f.linage != null ? ", LINAGE" : "") + ")");
+                    comment = f.organization.name().replace('_', ' ') + (f.linage != null ? ", LINAGE" : "");
                 }
             }
+            if (f.external) {
+                String signature = f.path + "|" + f.organization + "|" + f.access + "|" + size + "|"
+                        + f.keys.stream().map(k -> k.item().offset() + ":" + k.item().size() + (k.duplicates() ? "d" : "")).toList() + "|"
+                        + (f.status == null ? "" : f.status.externalName()) + "|" + (f.relativeKey == null ? "" : f.relativeKey.externalName());
+                file = staticCall("ProgramSupport", "externalFile", str(f.cobolName), str(signature),
+                        new com.github.javaparser.ast.expr.LambdaExpr(new NodeList<>(), file));
+                comment += ", EXTERNAL";
+            }
+            cls.addFieldWithInitializer(type, f.javaName, file, Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL)
+                    .setLineComment(" " + (f.sort ? "SD " : "FD ") + f.cobolName + " (" + comment + ")");
         }
         for (DataItem item : accessors) {
             addAccessor(cls, item, storages.get(storageRoot(item.record())));
@@ -1525,7 +1604,9 @@ public final class ProgramTranslator implements TranslationContext {
             storage = allocateField(Names.fieldName(record.cobolName()) + "Storage");
             storages.put(record, storage);
             int size = sizes.get(record);
-            Expression init = record.fileRecord() ? staticCall("Storage", "zeros", integer(Math.max(1, size)))
+            Expression init = record.externalName() != null
+                    ? staticCall("ProgramSupport", "external", str(record.externalName()), integer(Math.max(1, size)))
+                    : record.fileRecord() ? staticCall("Storage", "zeros", integer(Math.max(1, size)))
                     : create("Storage", integer(Math.max(1, size)));
             cls.addFieldWithInitializer("Storage", storage, init, Modifier.Keyword.PRIVATE, Modifier.Keyword.FINAL)
                     .setLineComment(" " + record.cobolName() + " (" + size + " bytes)");
@@ -1699,7 +1780,7 @@ public final class ProgramTranslator implements TranslationContext {
             return create("AlphanumericField", storage, integer(item.offset()), integer(Math.max(1, item.size())));
         }
         Expression v = viewConstructor(item, storage, integer(item.offset()));
-        if (item.inRedefines() || item.fileRecord()) {
+        if (item.inRedefines() || item.fileRecord() || item.externalName() != null) {
             return v;
         }
         return initialCall(item, v);

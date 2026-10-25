@@ -30,6 +30,34 @@ public final class ProgramSupport {
 
     private ProgramSupport() {}
 
+    private static final java.util.Map<String, Storage> externalStorage = new java.util.HashMap<>();
+    private static final java.util.Map<String, Object[]> externalFiles = new java.util.HashMap<>();
+
+    /**
+     * The storage of an EXTERNAL record, shared by every program of the run unit that declares
+     * it; zero bytes until a program sets it, as in GnuCOBOL.
+     */
+    public static Storage external(String name, int size) {
+        Storage s = externalStorage.computeIfAbsent(name, n -> Storage.zeros(size));
+        if (s.length() != size) {
+            Bounds.fail("EXTERNAL item '" + name + "' has " + size + " bytes here but " + s.length() + " where it was first declared");
+        }
+        return s;
+    }
+
+    /**
+     * An EXTERNAL file: the connector of the first program that declares it, shared by the others;
+     * {@code signature} (path, organisation, record, keys, FILE STATUS) must be the same in each.
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> T externalFile(String name, String signature, java.util.function.Supplier<T> create) {
+        Object[] entry = externalFiles.computeIfAbsent(name, n -> new Object[] {signature, create.get()});
+        if (!entry[0].equals(signature)) {
+            Bounds.fail("EXTERNAL file '" + name + "' is declared differently in two programs (" + entry[0] + " / " + signature + ")");
+        }
+        return (T) entry[1];
+    }
+
     /** Runs {@code program} as the main program and returns RETURN-CODE as the process exit status. */
     public static int runMain(CobolProgram program) {
         active.add(program.getClass());

@@ -51,6 +51,8 @@ public final class DataItem {
     private List<Key> keys = List.of();
     /** For a level-66 RENAMES item: the record whose bytes it renames. */
     private DataItem renamedRecord;
+    /** For an EXTERNAL record: the name its storage is shared under in the run unit. */
+    private String externalName;
 
     DataItem(String cobolName, Kind kind, Picture picture, String unsupportedReason, DataItem parent, int line) {
         this.cobolName = cobolName;
@@ -313,6 +315,19 @@ public final class DataItem {
     void renames(DataItem record, int offset, int size) {
         this.renamedRecord = record;
         layout(offset, size);
+    }
+
+    void external(String name) {
+        this.externalName = name;
+    }
+
+    /** The run-unit name of this item's EXTERNAL storage (its record's), or null when it is not EXTERNAL. */
+    public String externalName() {
+        DataItem r = record();
+        while (r.externalName == null && r.redefines != null && r.parent == null) {
+            r = r.redefines;
+        }
+        return r.externalName;
     }
 
     /** Whether this is a level-66 RENAMES item (a group renaming has no subordinate items of its own). */
