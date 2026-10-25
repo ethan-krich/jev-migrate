@@ -28,6 +28,12 @@ public final class ProgramSupport {
 
     /** Static CALL of a program without parameters. */
     public static void call(CobolProgram caller, CobolProgram callee) {
+        call(caller, callee, new AlphanumericField[0]);
+    }
+
+    /** Static CALL ... USING: the callee's LINKAGE records see {@code arguments}. */
+    public static void call(CobolProgram caller, CobolProgram callee, AlphanumericField... arguments) {
+        callee.using(arguments);
         depth++;
         try {
             callee.procedureDivision();
@@ -37,6 +43,14 @@ public final class ProgramSupport {
             depth--;
         }
         caller.returnCode().move(callee.returnCode());
+    }
+
+    /** A LINKAGE record's binding; using one the caller did not pass ends the run unit. */
+    public static AlphanumericField parameter(AlphanumericField binding, String name) {
+        if (binding == null) {
+            Bounds.fail("LINKAGE item '" + name + "' was not passed by the caller");
+        }
+        return binding;
     }
 
     public static void goback(CobolProgram self) {

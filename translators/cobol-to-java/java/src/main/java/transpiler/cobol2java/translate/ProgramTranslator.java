@@ -3,6 +3,7 @@ package transpiler.cobol2java.translate;
 import static transpiler.cobol2java.translate.Ast.call;
 import static transpiler.cobol2java.translate.Ast.create;
 import static transpiler.cobol2java.translate.Ast.decimal;
+import static transpiler.cobol2java.translate.Ast.declare;
 import static transpiler.cobol2java.translate.Ast.integer;
 import static transpiler.cobol2java.translate.Ast.name;
 import static transpiler.cobol2java.translate.Ast.staticCall;
@@ -123,7 +124,59 @@ public final class ProgramTranslator implements TranslationContext {
             MappingRegistry registry,
             Builtins builtins,
             Function<String, Optional<String>> programDirectory,
-            Dialect dialect) {}
+            Dialect dialect,
+            Function<String, Optional<List<Integer>>> programParameters) {
+        public Input(ProgramUnit unit, SourceMap sourceMap, String sourceFile, String programId, String packageName, String className,
+                String runtimePackage, MappingRegistry registry, Builtins builtins, Function<String, Optional<String>> programDirectory,
+                Dialect dialect) {
+            this(unit, sourceMap, sourceFile, programId, packageName, className, runtimePackage, registry, builtins, programDirectory,
+                    dialect, id -> Optional.empty());
+        }
+    }
+
+    /**
+     * The sizes of a program's PROCEDURE DIVISION USING items (BY REFERENCE), for callers to
+     * check against; empty when it has none that can be called this way.
+     */
+    public static Optional<List<Integer>> parameters(ProgramUnit unit, SourceMap sourceMap, String sourceFile, String programId,
+            Dialect dialect) {
+        ProgramTranslator t = new ProgramTranslator(new Input(unit, sourceMap, sourceFile, programId, "p", "P", "r", null, null,
+                id -> Optional.empty(), dialect));
+        t.checkUnsupportedDivisions();
+        t.buildDataModel();
+        try {
+            return Optional.of(t.usingItems().stream().map(DataItem::totalSize).toList());
+        } catch (HandlerException e) {
+            return Optional.empty();
+        }
+    }
+
+    /** The PROCEDURE DIVISION USING items: level-01 / level-77 LINKAGE items passed BY REFERENCE. */
+    private List<DataItem> usingItems() throws HandlerException {
+        var pd = in.unit().getProcedureDivision();
+        if (pd == null || pd.getUsingClause() == null) {
+            return List.of();
+        }
+        List<DataItem> out = new ArrayList<>();
+        for (var p : pd.getUsingClause().getUsingParameters()) {
+            if (p.getByValuePhrase() != null || p.getByReferencePhrase() == null) {
+                throw HandlerException.unsupported("PROCEDURE DIVISION USING BY VALUE is not supported");
+            }
+            for (var ref : p.getByReferencePhrase().getByReferences()) {
+                if (ref.isAny() || ref.isOptional() || !(ref.getReferenceCall() != null
+                        && ref.getReferenceCall().unwrap() instanceof DataDescriptionEntryCall d)) {
+                    throw HandlerException.unsupported("PROCEDURE DIVISION USING " + (ref.getCtx() == null ? "" : ref.getCtx().getText())
+                            + " is not supported");
+                }
+                DataItem item = items.get(d.getDataDescriptionEntry());
+                if (item == null || item.parent() != null || !item.linkage() || item.kind() == DataItem.Kind.UNSUPPORTED) {
+                    throw HandlerException.unsupported("USING " + d.getName() + " must be a supported level-01 / level-77 LINKAGE item");
+                }
+                out.add(item);
+            }
+        }
+        return out;
+    }
 
     /** The translation output; {@code decisions} are not yet registered with ids. */
     public record Result(CompilationUnit compilationUnit, List<Decision> decisions, int statements, int translated) {}
@@ -139,6 +192,8 @@ public final class ProgramTranslator implements TranslationContext {
     private final Map<String, DataItem.IndexName> indexesByName = new HashMap<>();
     /** USAGE written on a group, which its subordinate items inherit. */
     private final Map<DataItem, String> inheritedUsage = new IdentityHashMap<>();
+    /** Java field holding each LINKAGE record's binding. */
+    private final Map<DataItem, String> parameterFields = new IdentityHashMap<>();
     /** Java field of each record's Storage. */
     private final Map<DataItem, String> storageNames = new IdentityHashMap<>();
     /** The statement being translated, for decisions raised while resolving its operands. */
@@ -235,9 +290,6 @@ public final class ProgramTranslator implements TranslationContext {
         if (data.getFileSection() != null) {
             dataDecision(data.getFileSection().getCtx(), "DATA", "FILE SECTION is not supported");
         }
-        if (data.getLinkageSection() != null) {
-            dataDecision(data.getLinkageSection().getCtx(), "DATA", "LINKAGE SECTION is not supported");
-        }
         if (data.getLocalStorageSection() != null) {
             dataDecision(data.getLocalStorageSection().getCtx(), "DATA", "LOCAL-STORAGE SECTION is not supported");
         }
@@ -280,14 +332,26 @@ public final class ProgramTranslator implements TranslationContext {
     }
 
     private void buildDataModel() {
-        fieldNames.addAll(List.of("returnCode", "instance", "main", "procedureDivision"));
+        fieldNames.addAll(List.of("returnCode", "instance", "main", "procedureDivision", "using", "callParameters", "parameter"));
         var data = in.unit().getDataDivision();
-        if (data == null || data.getWorkingStorageSection() == null) {
+        if (data == null) {
             return;
         }
-        for (DataDescriptionEntry e : data.getWorkingStorageSection().getRootDataDescriptionEntries()) {
+        var ws = data.getWorkingStorageSection();
+        for (DataDescriptionEntry e : ws == null ? List.<DataDescriptionEntry>of() : ws.getRootDataDescriptionEntries()) {
             buildItem(e, null);
             roots.add(items.get(e));
+        }
+        if (data.getLinkageSection() != null) {
+            for (DataDescriptionEntry e : data.getLinkageSection().getRootDataDescriptionEntries()) {
+                buildItem(e, null);
+                DataItem item = items.get(e);
+                item.markLinkage();
+                roots.add(item);
+                if (e instanceof DataDescriptionEntryGroup g && hasValue(g)) {
+                    dataDecision(e.getCtx(), "DATA", item.cobolName() + ": VALUE in the LINKAGE SECTION is not supported");
+                }
+            }
         }
         for (PendingTable t : tables) {
             occurs(t.item(), t.entry());
@@ -349,14 +413,15 @@ public final class ProgramTranslator implements TranslationContext {
                     indexesByName.put(index.getName().toUpperCase(Locale.ROOT), n);
                 }
             }
-            for (var sort : clauses.getFirst().getOccursSorts()) {
-                for (Call key : sort.getKeyCalls()) {
-                    DataItem k = key.unwrap() instanceof DataDescriptionEntryCall d ? items.get(d.getDataDescriptionEntry()) : null;
+            // Keys are resolved by name: ProLeap leaves a key naming the table item itself undefined.
+            for (var sort : ctx.dataOccursSort()) {
+                for (var key : sort.qualifiedDataName()) {
+                    DataItem k = resolveData(key);
                     if (k == null || !isWithin(k, item)) {
-                        problem = "KEY " + key.getName() + " is not an item of the table";
+                        problem = "KEY " + key.getText() + " is not an item of the table";
                         break;
                     }
-                    keys.add(new DataItem.Key(k, sort.getOrder() != io.proleap.cobol.asg.metamodel.data.datadescription.OccursSort.Order.DESCENDING));
+                    keys.add(new DataItem.Key(k, sort.DESCENDING() == null));
                 }
             }
         }
@@ -402,6 +467,8 @@ public final class ProgramTranslator implements TranslationContext {
             problem = "OCCURS DEPENDING ON must be the last item of a record that is not redefined";
         } else if (isWithin(item.dependingOn(), item)) {
             problem = "DEPENDING ON item inside its own table";
+        } else if (item.linkage()) {
+            problem = "OCCURS DEPENDING ON in the LINKAGE SECTION is not supported";
         }
         if (problem != null) {
             dataDecision(g.getCtx(), "DATA", item.cobolName() + ": " + problem);
@@ -551,6 +618,14 @@ public final class ProgramTranslator implements TranslationContext {
         for (DataDescriptionEntry child : g.getDataDescriptionEntries()) {
             buildItem(child, item);
         }
+    }
+
+    private static boolean hasValue(DataDescriptionEntryGroup g) {
+        if (g.getValueClause() != null) {
+            return true;
+        }
+        return g.getDataDescriptionEntries().stream().anyMatch(c -> c instanceof DataDescriptionEntryGroup cg
+                && c.getDataDescriptionEntryType() != DataDescriptionEntry.DataDescriptionEntryType.CONDITION && hasValue(cg));
     }
 
     /** Entries that occupy storage in their parent: not level-88 condition-names or level-78 constants. */
@@ -903,11 +978,22 @@ public final class ProgramTranslator implements TranslationContext {
         Map<DataItem, Integer> sizes = new IdentityHashMap<>();
         for (DataItem r : roots) {
             DataItem base = storageRoot(r);
-            sizes.merge(base, r.size(), Math::max);
+            sizes.merge(base, r.totalSize(), Math::max);
+            if (r.linkage() && r == base && r.kind() != DataItem.Kind.UNSUPPORTED && r.kind() != DataItem.Kind.CONSTANT
+                    && !parameterFields.containsKey(r)) {
+                String param = allocateField(Names.fieldName(r.cobolName()) + "Parameter");
+                parameterFields.put(r, param);
+                cls.addField("AlphanumericField", param, Modifier.Keyword.PRIVATE)
+                        .setLineComment(" LINKAGE " + r.cobolName() + ": the caller's bytes (null until passed)");
+            }
         }
         List<DataItem> accessors = new ArrayList<>();
         for (DataItem item : fieldOrder) {
             DataItem record = storageRoot(item.record());
+            if (item.linkage()) {
+                accessors.add(item);
+                continue;
+            }
             if (item.hasAccessor()) {
                 String storage = storageField(cls, record, storages, sizes);
                 accessors.add(item);
@@ -936,6 +1022,9 @@ public final class ProgramTranslator implements TranslationContext {
         }
         for (DataItem item : accessors) {
             addAccessor(cls, item, storages.get(storageRoot(item.record())));
+        }
+        if (in.unit().getProcedureDivision() != null && in.unit().getProcedureDivision().getUsingClause() != null) {
+            addUsing(cls);
         }
     }
 
@@ -966,6 +1055,15 @@ public final class ProgramTranslator implements TranslationContext {
         m.setLineComment(" " + item.cobolName() + " (line " + item.line() + ")");
         List<DataItem> dims = item.dimensions();
         Expression offset = integer(item.offset());
+        BlockStmt body = new BlockStmt();
+        Expression storageExpr = storage == null ? null : name(storage);
+        if (item.linkage()) {
+            DataItem record = storageRoot(item.record());
+            body.addStatement(declare(type("AlphanumericField"), "parameter", staticCall("ProgramSupport", "parameter",
+                    name(parameterFields.get(record)), str(record.cobolName()))));
+            storageExpr = call(name("parameter"), "storage");
+            offset = new BinaryExpr(call(name("parameter"), "offset"), integer(item.offset()), BinaryExpr.Operator.PLUS);
+        }
         for (int d = 0; d < dims.size(); d++) {
             DataItem t = dims.get(d);
             String param = "s" + (d + 1);
@@ -989,11 +1087,41 @@ public final class ProgramTranslator implements TranslationContext {
                                 integer(table.occursMin()), integer(table.occurs()), str(table.dependingOn().cobolName())),
                         integer(table.size()), BinaryExpr.Operator.MULTIPLY), BinaryExpr.Operator.PLUS);
             }
-            view = create("AlphanumericField", name(storage), offset, length);
+            view = create("AlphanumericField", storageExpr, offset, length);
         } else {
-            view = viewConstructor(item, name(storage), offset);
+            view = viewConstructor(item, storageExpr, offset);
         }
-        m.setBody(new BlockStmt(NodeList.nodeList(new ReturnStmt(view))));
+        body.addStatement(new ReturnStmt(view));
+        m.setBody(body);
+    }
+
+    /** {@code using(arguments)}: binds the LINKAGE records named by PROCEDURE DIVISION USING to the caller's arguments. */
+    private void addUsing(ClassOrInterfaceDeclaration cls) {
+        MethodDeclaration m = cls.addMethod("using", Modifier.Keyword.PUBLIC);
+        m.addMarkerAnnotation("Override");
+        m.setType(new VoidType());
+        m.addParameter(new Parameter(new ArrayType(type("AlphanumericField")), "arguments"));
+        BlockStmt body = new BlockStmt();
+        List<DataItem> using;
+        try {
+            using = usingItems();
+        } catch (HandlerException e) {
+            dataDecision(in.unit().getProcedureDivision().getCtx(), "PROCEDURE", e.getMessage());
+            using = List.of();
+        }
+        for (int i = 0; i < using.size(); i++) {
+            String field = parameterFields.get(storageRoot(using.get(i)));
+            body.addStatement(stmt(new AssignExpr(name(field), new com.github.javaparser.ast.expr.ConditionalExpr(
+                    new BinaryExpr(new com.github.javaparser.ast.expr.FieldAccessExpr(name("arguments"), "length"), integer(i),
+                            BinaryExpr.Operator.GREATER),
+                    new com.github.javaparser.ast.expr.ArrayAccessExpr(name("arguments"), integer(i)), new NullLiteralExpr()),
+                    AssignExpr.Operator.ASSIGN)));
+        }
+        body.addStatement(stmt(new AssignExpr(name("callParameters"),
+                new com.github.javaparser.ast.expr.FieldAccessExpr(name("arguments"), "length"), AssignExpr.Operator.ASSIGN)));
+        m.setBody(body);
+        cls.addField(PrimitiveType.intType(), "callParameters", Modifier.Keyword.PRIVATE)
+                .setLineComment(" NUMBER-OF-CALL-PARAMETERS");
     }
 
     /** {@code { for (int i1 = 0; i1 < n1; i1++) ... view(i1, ...).initial(...); }} over every occurrence. */
@@ -1096,11 +1224,21 @@ public final class ProgramTranslator implements TranslationContext {
 
         MethodDeclaration instance = cls.addMethod("instance", Modifier.Keyword.PUBLIC, Modifier.Keyword.STATIC);
         instance.setType(in.className());
-        instance.setJavadocComment("The program's single instance in this run unit (WORKING-STORAGE persists across CALLs).");
-        instance.setBody(new BlockStmt(NodeList.nodeList(
-                new IfStmt(new BinaryExpr(name("instance"), new NullLiteralExpr(), BinaryExpr.Operator.EQUALS),
-                        stmt(new AssignExpr(name("instance"), create(in.className()), AssignExpr.Operator.ASSIGN)), null),
-                new ReturnStmt(name("instance")))));
+        var programId = in.unit().getIdentificationDivision() == null ? null : in.unit().getIdentificationDivision().getProgramIdParagraph();
+        var attribute = programId == null ? null : programId.getAttribute();
+        if (attribute == io.proleap.cobol.asg.metamodel.identification.ProgramIdParagraph.Attribute.INITIAL) {
+            instance.setJavadocComment("IS INITIAL: a fresh instance (WORKING-STORAGE in its initial state) for every CALL.");
+            instance.setBody(new BlockStmt(NodeList.nodeList(new ReturnStmt(create(in.className())))));
+        } else {
+            if (attribute != null) {
+                dataDecision(programId.getCtx(), "IDENTIFICATION", "PROGRAM-ID ... IS " + attribute + " is not supported");
+            }
+            instance.setJavadocComment("The program's single instance in this run unit (WORKING-STORAGE persists across CALLs).");
+            instance.setBody(new BlockStmt(NodeList.nodeList(
+                    new IfStmt(new BinaryExpr(name("instance"), new NullLiteralExpr(), BinaryExpr.Operator.EQUALS),
+                            stmt(new AssignExpr(name("instance"), create(in.className()), AssignExpr.Operator.ASSIGN)), null),
+                    new ReturnStmt(name("instance")))));
+        }
 
         MethodDeclaration main = cls.addMethod("main", Modifier.Keyword.PUBLIC, Modifier.Keyword.STATIC);
         main.addParameter(new Parameter(new ArrayType(type("String")), "args"));
@@ -1123,8 +1261,8 @@ public final class ProgramTranslator implements TranslationContext {
         if (pd == null) {
             return;
         }
-        if (pd.getUsingClause() != null || pd.getGivingClause() != null) {
-            dataDecision(pd.getCtx(), "PROCEDURE", "PROCEDURE DIVISION USING / RETURNING is not supported");
+        if (pd.getGivingClause() != null) {
+            dataDecision(pd.getCtx(), "PROCEDURE", "PROCEDURE DIVISION RETURNING is not supported");
         }
         if (pd.getDeclaratives() != null) {
             dataDecision(pd.getDeclaratives().getCtx(), "PROCEDURE", "DECLARATIVES are not supported");
@@ -1731,14 +1869,41 @@ public final class ProgramTranslator implements TranslationContext {
         if (u instanceof io.proleap.cobol.asg.metamodel.call.IndexCall ic && indexNames.containsKey(ic.getIndex())) {
             return new Operand.Index(indexNames.get(ic.getIndex()));
         }
-        if (u instanceof SpecialRegisterCall s && s.getSpecialRegisterType() == SpecialRegisterCall.SpecialRegisterType.RETURN_CODE) {
-            return new Operand.ReturnCode();
+        if (u instanceof SpecialRegisterCall s) {
+            return switch (s.getSpecialRegisterType()) {
+                case RETURN_CODE -> new Operand.ReturnCode();
+                case LENGTH_OF -> lengthOf(s);
+                case WHEN_COMPILED -> {
+                    String when = require("when_compiled", in.dialect().whenCompiled(), call.getCtx(), "WHEN-COMPILED");
+                    // GnuCOBOL's form: DD/MM/YYhh.mm.ss
+                    yield new Operand.AlphanumericLiteral(when.substring(8, 10) + "/" + when.substring(5, 7) + "/" + when.substring(2, 4)
+                            + when.substring(11, 13) + "." + when.substring(14, 16) + "." + when.substring(17, 19));
+                }
+                default -> throw HandlerException.unsupported("special register " + s.getSpecialRegisterType() + " is not supported");
+            };
+        }
+        if (call.getName() != null && call.getName().equalsIgnoreCase("NUMBER-OF-CALL-PARAMETERS")
+                && u.getCallType() == Call.CallType.UNDEFINED_CALL) {
+            if (in.unit().getProcedureDivision() == null || in.unit().getProcedureDivision().getUsingClause() == null) {
+                throw HandlerException.unsupported("NUMBER-OF-CALL-PARAMETERS in a program without PROCEDURE DIVISION USING");
+            }
+            return new Operand.Register("callParameters");
         }
         if (u instanceof DataDescriptionEntryCall || u.getCallType() == Call.CallType.UNDEFINED_CALL) {
             return dataOperand(call);
         }
         throw HandlerException.unsupported(call.getName() + " (" + call.getCallType()
                 + ") is not supported: functions and special registers other than RETURN-CODE");
+    }
+
+    /** LENGTH OF item: its size in bytes, known at translation time unless it varies with OCCURS DEPENDING ON. */
+    private Operand lengthOf(SpecialRegisterCall s) throws HandlerException {
+        Operand o = operand(s.getIdentifierCall());
+        if (!(o instanceof Operand.Field f) || f.refmod() != null || (f.item().isGroup() && f.item().variableTable() != null)) {
+            throw HandlerException.unsupported("LENGTH OF " + s.getCtx().getText() + " is not supported");
+        }
+        int size = f.item().size();
+        return new Operand.NumericLiteral(BigDecimal.valueOf(size), Integer.toString(size));
     }
 
     /**
@@ -2017,6 +2182,7 @@ public final class ProgramTranslator implements TranslationContext {
             case Operand.Field f when f.numeric() -> call(field(f), "get");
             case Operand.ReturnCode r -> call(name("returnCode"), "get");
             case Operand.Index i -> staticCall("BigDecimal", "valueOf", name(i.index().javaName()));
+            case Operand.Register r -> staticCall("BigDecimal", "valueOf", name(r.javaName()));
             case Operand.NumericLiteral n -> decimal(n.value().toPlainString());
             case Operand.Figurative f when f.isZero() -> decimal("0");
             case Operand.Arithmetic a -> arithmetic(a.stmt());
@@ -2392,6 +2558,11 @@ public final class ProgramTranslator implements TranslationContext {
             throw HandlerException.unsupported(call.getName() + " is not a supported WORKING-STORAGE item");
         }
         return item;
+    }
+
+    @Override
+    public Optional<List<Integer>> programParameters(String programId) {
+        return in.programParameters().apply(programId.toUpperCase(Locale.ROOT));
     }
 
     @Override

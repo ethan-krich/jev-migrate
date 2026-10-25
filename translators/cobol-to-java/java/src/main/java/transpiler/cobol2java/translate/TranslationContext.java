@@ -8,6 +8,7 @@ import io.proleap.cobol.asg.metamodel.call.Call;
 import io.proleap.cobol.asg.metamodel.valuestmt.ConditionValueStmt;
 import io.proleap.cobol.asg.metamodel.valuestmt.ValueStmt;
 import io.proleap.cobol.asg.metamodel.valuestmt.relation.RelationalOperator.RelationalOperatorType;
+import java.util.List;
 import java.util.Optional;
 import org.antlr.v4.runtime.ParserRuleContext;
 import transpiler.cobol2java.session.Dialect;
@@ -50,6 +51,9 @@ public interface TranslationContext {
 
     /** The fully qualified class translated from the program with this PROGRAM-ID, if in the project. */
     Optional<String> programClass(String programId);
+
+    /** The sizes of the PROCEDURE DIVISION USING items of a program in the project, if known. */
+    Optional<List<Integer>> programParameters(String programId);
 
     /** The project's dialect settings. */
     Dialect dialect();

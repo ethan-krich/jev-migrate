@@ -201,10 +201,7 @@ public final class Session {
             return;
         }
         var programId = idDivision.getProgramIdParagraph();
-        if (programId.getAttribute() != null) {
-            fail(ps, "unsupported_construct", "PROGRAM-ID attribute " + programId.getAttribute() + " is not supported");
-            return;
-        }
+        // IS INITIAL is translated; the program's other attributes are decisions in its translation.
         ps.programId = programId.getName().toUpperCase(Locale.ROOT);
         ps.packageName = layout.packageFor(Path.of(ps.relativePath));
         ps.className = Names.className(ps.programId);
@@ -218,6 +215,20 @@ public final class Session {
             RuntimeSources.CLASSES.stream(),
             java.util.stream.Stream.of("BigDecimal", "String", "Object", "Exception", "Override", "Math", "System"))
             .collect(java.util.stream.Collectors.toUnmodifiableSet());
+
+    /** USING item sizes per PROGRAM-ID, computed on first use from the parsed programs. */
+    private final Map<String, Optional<java.util.List<Integer>>> parameterCache = new HashMap<>();
+
+    private Optional<java.util.List<Integer>> programParameters(String programId) {
+        return parameterCache.computeIfAbsent(programId, pid -> {
+            for (ProgramState ps : programs.values()) {
+                if (!ps.failed && ps.programId != null && ps.programId.equalsIgnoreCase(pid)) {
+                    return ProgramTranslator.parameters(ps.unit, ps.sourceMap, ps.relativePath, ps.programId, dialect);
+                }
+            }
+            return Optional.empty();
+        });
+    }
 
     private void checkNameCollisions() {
         Map<String, List<ProgramState>> byClass = new LinkedHashMap<>();
@@ -342,7 +353,7 @@ public final class Session {
             if (!ps.failed) {
                 var out = new ProgramTranslator(new ProgramTranslator.Input(ps.unit, ps.sourceMap, ps.relativePath, ps.programId,
                         ps.packageName, ps.className, layout.runtimePackage(), registry, builtins,
-                        pid -> Optional.ofNullable(programDirectory.get(pid)), dialect)).translate();
+                        pid -> Optional.ofNullable(programDirectory.get(pid)), dialect, this::programParameters)).translate();
                 ps.java = out.compilationUnit();
                 ps.statements = out.statements();
                 ps.translatedStatements = out.translated();

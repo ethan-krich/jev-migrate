@@ -110,6 +110,11 @@ public final class EditedField {
         return this;
     }
 
+    /** The item's bytes as an alphanumeric view (the argument of CALL ... BY REFERENCE). */
+    public AlphanumericField view() {
+        return new AlphanumericField(storage, offset, size());
+    }
+
     public String get() {
         return storage.text(offset, size());
     }

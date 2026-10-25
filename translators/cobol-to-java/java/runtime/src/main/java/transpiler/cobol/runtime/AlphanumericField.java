@@ -108,6 +108,18 @@ public final class AlphanumericField {
         set(source.digits());
     }
 
+    /** This item's bytes as an alphanumeric view (the argument of CALL ... BY REFERENCE). */
+    public AlphanumericField view() {
+        return this;
+    }
+
+    /** A copy of the item's bytes in storage of its own (CALL ... BY CONTENT). */
+    public AlphanumericField copy() {
+        AlphanumericField c = new AlphanumericField(new Storage(Math.max(1, length)), 0, length);
+        System.arraycopy(storage.bytes, offset, c.storage.bytes, 0, length);
+        return c;
+    }
+
     public String get() {
         return storage.text(offset, length);
     }

@@ -42,6 +42,7 @@ public final class DataItem {
     private Usage usage = Usage.DISPLAY;
     private boolean blankWhenZero;
     private boolean initialIsNumber;
+    private boolean linkage;
     private int occurs;
     private int occursMin;
     private DataItem dependingOn;
@@ -283,9 +284,23 @@ public final class DataItem {
         return occurs > 0 ? size * occurs : size;
     }
 
-    /** Whether references go through a generated accessor method (tables, variable-length groups). */
+    /** Whether a reference to this item names all of it (it is not an element of a table). */
+    public boolean subscriptsOrNone() {
+        return dimensions().isEmpty();
+    }
+
+    /** Whether this item is in the LINKAGE SECTION (its storage is the caller's). */
+    public boolean linkage() {
+        return record().linkage;
+    }
+
+    void markLinkage() {
+        this.linkage = true;
+    }
+
+    /** Whether references go through a generated accessor method (tables, variable-length groups, LINKAGE items). */
     public boolean hasAccessor() {
-        return !dimensions().isEmpty() || (isGroup() && variableTable() != null);
+        return !dimensions().isEmpty() || (isGroup() && variableTable() != null) || linkage();
     }
 
     /** The VALUE of a level-78 constant. */

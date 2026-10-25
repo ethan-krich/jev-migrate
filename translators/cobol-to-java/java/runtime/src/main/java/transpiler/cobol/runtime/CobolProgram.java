@@ -7,4 +7,10 @@ public interface CobolProgram {
 
     /** This program's RETURN-CODE special register. */
     NumericField returnCode();
+
+    /**
+     * Binds the PROCEDURE DIVISION USING items to a CALL's arguments (the caller's bytes, or
+     * copies for BY CONTENT); items without an argument are left unbound.
+     */
+    default void using(AlphanumericField[] arguments) {}
 }

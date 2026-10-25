@@ -8,7 +8,7 @@
 | **Python** `cobol_to_java` (`translators/cobol-to-java/python/`) | Default mapping table (handler ids only), `Layout` folder convention, handler/fact catalog for early validation | Implement semantics |
 | **C++** `transpiler-core` (`core/`) | File discovery (dirs, files, globs incl. `**`), translator selection from `translators/*/translator.json`, worker process lifecycle, timeouts, NDJSON protocol, decision batching/validation/caching, run report | Know about COBOL, Java, ProLeap or JavaParser |
 | **Java** worker (`translators/cobol-to-java/java/`) | Parsing (ProLeap), semantic checks, mapping-rule selection, builtin handlers, JavaParser AST construction, session state (partial ASTs, decisions), writing output | Execute Python; write output while decisions are pending |
-| **Java** runtime (`…/java/runtime/`) | COBOL data semantics used by generated code: byte-addressed `Storage` per level-01 record with `AlphanumericField` / `NumericField` views (GnuCOBOL byte images, ASCII zoned sign), `Display`, `ProgramSupport` | Depend on anything; it is copied into every output |
+| **Java** runtime (`…/java/runtime/`) | COBOL data semantics used by generated code: byte-addressed `Storage` per level-01 record with `AlphanumericField` / `NumericField` (zoned, packed, binary) / `EditedField` views (GnuCOBOL byte images), `Bounds` (run-time range checks), `StringOps`, `Display`, `ProgramSupport` (CALL, LINKAGE binding) | Depend on anything; it is copied into every output |
 
 ## Data flow
 

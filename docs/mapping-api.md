@@ -44,8 +44,11 @@ Only plain JSON crosses process boundaries: no callables, AST objects or Python 
 
 | Handler | Operation | Behaviour |
 |---|---|---|
-| `move_to_alphanumeric` | MOVE | receiver must be PIC X; pad/truncate right; integer numeric → digits; figuratives incl. `ALL "lit"` |
-| `move_to_numeric` | MOVE | receiver must be PIC 9; decimal alignment, truncation, sign |
+| `move_to_alphanumeric` | MOVE | receiver PIC X / A or a reference modification; pad/truncate right (left with JUSTIFIED); integer numeric → digits; figuratives incl. `ALL "lit"` |
+| `move_to_numeric` | MOVE | receiver PIC 9 (any USAGE); decimal alignment, truncation, sign |
+| `move_group` | MOVE | receiver a group: the sending bytes unconverted (a numeric item's digits and sign as stored), space-padded / cut; a variable-length group with its DEPENDING ON item inside receives at its maximum length |
+| `move_to_edited` | MOVE | receiver numeric-edited (GnuCOBOL editing: `Z * $ + - CR DB . , B 0 /`, fixed and floating insertion, BLANK WHEN ZERO) or alphanumeric-edited (insertion) |
+| `move_from_edited` | MOVE | numeric-edited sender, numeric receiver: de-editing |
 | `add`, `subtract`, `multiply`, `divide` | … | exact `BigDecimal`, `ROUNDED`, `SIZE ERROR`; `CORRESPONDING` (one unit per pair, no SIZE ERROR); `DIVIDE … REMAINDER` (remainder from the quotient truncated to its scale, as GnuCOBOL) |
 | `compute` | COMPUTE | `+ - *`, unary minus |
 | `display` | DISPLAY | GnuCOBOL format, `NO ADVANCING`, `UPON CONSOLE / SYSOUT` (stdout) and `SYSERR` (stderr), mnemonic names; other devices are `missing_target_api` |
@@ -57,7 +60,15 @@ Only plain JSON crosses process boundaries: no callables, AST objects or Python 
 | `accept_stdin` | ACCEPT | one stdin line into a PIC X item (spaces at end of input); `FROM SYSIN / CONSOLE`; other devices `missing_target_api` |
 | `accept_datetime` | ACCEPT | `FROM DATE [YYYYMMDD]`, `DAY [YYYYDDD]`, `DAY-OF-WEEK`, `TIME` via runtime `Clock` (`COB_CURRENT_DATE` fixes it, as in GnuCOBOL) |
 | `stop_run`, `goback`, `exit`, `continue` | … | run-unit control; `EXIT PARAGRAPH / SECTION / PERFORM [CYCLE]`; `STOP literal` is `missing_target_api` |
-| `call_program` | CALL | static `CALL 'X'` of a program in the project |
+| `call_program` | CALL | static `CALL 'X'` of a program in the project; `USING [BY REFERENCE | BY CONTENT]` items whose number and sizes match the callee's `PROCEDURE DIVISION USING` (otherwise `unsupported_construct`) |
+| `initialize` | INITIALIZE | item by item: `WITH FILLER`, `ALL TO VALUE`, `REPLACING category BY`, `THEN TO DEFAULT`; REDEFINES and FILLER skipped; every occurrence of tables |
+| `set_index` | SET | `SET index TO n / index / item`, `SET item TO index`, `UP / DOWN BY` (indexes and USAGE INDEX items) |
+| `search` | SEARCH | serial: from the index's value, `AT END` past the occurrences in use, first `WHEN` that holds, `VARYING` |
+| `search_all` | SEARCH | `SEARCH ALL`: always an `unsupported_construct` decision (key order and uniqueness cannot be proven), offering the two candidates below |
+| `search_all_binary`, `search_all_linear` | SEARCH | candidates only (no default rule): binary search on the first KEY / serial scan; correct only for ordered / unique keys |
+| `string` | STRING | `DELIMITED BY SIZE / literal / item`, `WITH POINTER`, `[NOT] ON OVERFLOW`; the target keeps unwritten positions |
+| `unstring` | UNSTRING | `DELIMITED BY [ALL] x OR [ALL] y`, `DELIMITER IN`, `COUNT IN`, `WITH POINTER`, `TALLYING IN`, `[NOT] ON OVERFLOW`; alphanumeric receivers |
+| `inspect` | INSPECT | `TALLYING` (`CHARACTERS`, `ALL`, `LEADING`), `REPLACING` (`CHARACTERS`, `ALL`, `LEADING`, `FIRST`), `CONVERTING`, `BEFORE / AFTER INITIAL`; comparands in source order |
 
 The running worker announces this list (with facts) in its `ready` event. A test keeps it equal
 to `cobol_to_java.BUILTIN_HANDLERS` / `FACTS`.
@@ -66,7 +77,7 @@ to `cobol_to_java.BUILTIN_HANDLERS` / `FACTS`.
 
 | Operation | Facts |
 |---|---|
-| MOVE | `source_category` (`alphanumeric`, `numeric`, `alphanumeric_literal`, `numeric_literal`, `figurative`, `group`, `condition`, `unsupported`, `corresponding`), `target_category`, `source_figurative` (`zero`, `space`, `quote`, `high_value`, `low_value`, `all`, null). A MOVE CORRESPONDING pair has the categories of its items. |
+| MOVE | `source_category` (`alphanumeric`, `numeric`, `numeric_edited`, `alphanumeric_edited`, `alphanumeric_literal`, `numeric_literal`, `figurative`, `group`, `index`, `condition`, `unsupported`, `corresponding`; a reference modification is `alphanumeric`), `target_category`, `source_figurative` (`zero`, `space`, `quote`, `high_value`, `low_value`, `all`, null). A MOVE CORRESPONDING pair has the categories of its items. |
 | ADD / SUBTRACT / MULTIPLY | `form` (`to`/`from`/`by`, `giving`, `corresponding`), `rounded`, `size_error` |
 | DIVIDE | `form` (`into`, `into_giving`, `by_giving`), `rounded`, `size_error`, `remainder` |
 | COMPUTE | `rounded`, `size_error`, `receivers` |
@@ -80,6 +91,11 @@ to `cobol_to_java.BUILTIN_HANDLERS` / `FACTS`.
 | EVALUATE | `subjects`, `has_other`, `has_thru` |
 | ACCEPT | `from` (`stdin`, `device`, `date`, `date_yyyymmdd`, `day`, `day_yyyyddd`, `day_of_week`, `time`, `other_date`, `escape_key`, `message_count`) |
 | EXHIBIT | `named`, `changed` |
+| INITIALIZE | `replacing`, `to_value`, `with_filler`, `then_default` |
+| SEARCH | `all`, `varying`, `at_end` |
+| STRING | `pointer`, `overflow` |
+| UNSTRING | `delimited`, `pointer`, `tallying`, `overflow` |
+| INSPECT | `form` (`tallying`, `replacing`, `tallying_replacing`, `converting`) |
 
 ## Callbacks
 
@@ -96,11 +112,11 @@ A key set both by `dialect=` and `options=` raises `TranspilerError`.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `encoding` | `None` | `ascii` or `ebcdic`: the bytes of HIGH-VALUES / LOW-VALUES, class tests |
+| `encoding` | `None` | `ascii` or `ebcdic`: the bytes of HIGH-VALUES / LOW-VALUES, class tests, and the byte image of signed zoned and native binary items seen through groups, REDEFINES or reference modification (only `ascii`, GnuCOBOL's, is implemented) |
 | `collating_sequence` | `None` | `native` (follows `encoding`), `ascii` or `ebcdic` |
-| `out_of_range` | `None` | subscripts and reference modification out of range: `fail` (stop the run unit) or `decision` (refuse unprovable accesses) |
-| `binary_truncate` | `True` | COMP/BINARY truncates to the PICTURE (GnuCOBOL `-fbinary-truncate`) |
-| `sync_alignment` | `None` | whether SYNCHRONIZED inserts slack bytes |
+| `out_of_range` | `None` | subscripts, reference modification and OCCURS DEPENDING ON values that are not literals in range: `fail` (stop the run unit with status 1, as GnuCOBOL with `-fec=EC-BOUND-SUBSCRIPT,EC-BOUND-REF-MOD,EC-BOUND-ODO`) or `decision` (refuse them) |
+| `binary_truncate` | `True` | COMP/BINARY arithmetic is limited by the PICTURE (GnuCOBOL `binary-truncate`); `False` limits it by the bytes only (MOVE still cuts to the PICTURE) |
+| `sync_alignment` | `None` | whether SYNCHRONIZED inserts slack bytes before binary items (`False` only; `True` is a decision) |
 | `debugging_lines` | `False` | compile `D` lines (otherwise comments, as GnuCOBOL; `WITH DEBUGGING MODE` also enables them) |
 | `source_format` | `fixed` | `fixed`, `variable`, `tandem` |
 | `file_assignments` | `{}` | `ASSIGN TO` name → run-time path |

@@ -1027,9 +1027,9 @@ public final class Builtins implements MappingRegistry.Catalog {
 
     private static List<Statement> callProgram(OpUnit u, TranslationContext c) throws HandlerException {
         CallStatement call = (CallStatement) u.statement();
-        if (call.getUsingPhrase() != null || call.getGivingPhrase() != null || call.getOnExceptionClause() != null
+        if (call.getGivingPhrase() != null || call.getOnExceptionClause() != null
                 || call.getNotOnExceptionClause() != null || call.getOnOverflowPhrase() != null) {
-            throw HandlerException.unsupported("CALL with USING, RETURNING/GIVING or exception phrases is not supported");
+            throw HandlerException.unsupported("CALL with RETURNING/GIVING or exception phrases is not supported");
         }
         if (!(call.getProgramValueStmt() instanceof LiteralValueStmt lit)
                 || lit.getLiteral().getLiteralType() != Literal.LiteralType.NON_NUMERIC) {
@@ -1038,7 +1038,61 @@ public final class Builtins implements MappingRegistry.Catalog {
         String program = lit.getLiteral().getNonNumericLiteral();
         String cls = c.programClass(program).orElseThrow(() -> new HandlerException(HandlerException.Kind.MISSING_TARGET,
                 "program '" + program + "' is not part of the translation project (unresolved cross-file dependency)"));
-        return List.of(stmt(staticCall("ProgramSupport", "call", self(), call(name(cls), "instance"))));
+        if (call.getUsingPhrase() == null) {
+            return List.of(stmt(staticCall("ProgramSupport", "call", self(), call(name(cls), "instance"))));
+        }
+        List<Integer> expected = c.programParameters(program).orElseThrow(() -> HandlerException.unsupported(
+                "the USING items of program '" + program + "' cannot be determined"));
+        NodeList<Expression> args = NodeList.nodeList(self(), call(name(cls), "instance"));
+        List<Integer> sizes = new ArrayList<>();
+        for (var parameter : call.getUsingPhrase().getUsingParameters()) {
+            switch (parameter.getParameterType()) {
+                case REFERENCE -> {
+                    for (var ref : parameter.getByReferencePhrase().getByReferences()) {
+                        if (ref.getByReferenceType() != null) {
+                            throw HandlerException.unsupported("CALL USING BY REFERENCE " + ref.getByReferenceType() + " is not supported");
+                        }
+                        Operand o = c.operand(ref.getValueStmt());
+                        args.add(call(argumentField(o, c), "view"));
+                        sizes.add(argumentSize(o));
+                    }
+                }
+                case CONTENT -> {
+                    for (var content : parameter.getByContentPhrase().getByContents()) {
+                        if (content.getByContentType() != null) {
+                            throw HandlerException.unsupported("CALL USING BY CONTENT " + content.getByContentType() + " is not supported");
+                        }
+                        Operand o = c.operand(content.getValueStmt());
+                        if (o instanceof Operand.AlphanumericLiteral a) {
+                            args.add(create("AlphanumericField", integer(Math.max(1, a.value().length())), str(a.value())));
+                            sizes.add(a.value().length());
+                        } else {
+                            args.add(call(call(argumentField(o, c), "view"), "copy"));
+                            sizes.add(argumentSize(o));
+                        }
+                    }
+                }
+                case VALUE -> throw HandlerException.unsupported("CALL USING BY VALUE is not supported");
+            }
+        }
+        if (!sizes.equals(expected)) {
+            throw HandlerException.unsupported("CALL '" + program + "' USING passes items of " + sizes + " bytes but the program expects "
+                    + expected + " (USING items must match in number and size)");
+        }
+        return List.of(stmt(new com.github.javaparser.ast.expr.MethodCallExpr(name("ProgramSupport"), "call", args)));
+    }
+
+    /** A CALL argument: a data item (a reference modification or variable-length group cannot be checked). */
+    private static Expression argumentField(Operand o, TranslationContext c) throws HandlerException {
+        if (!(o instanceof Operand.Field f) || f.refmod() != null || (f.item().isGroup() && f.item().variableTable() != null)) {
+            throw HandlerException.unsupported("CALL argument of category " + o.category() + " is not supported");
+        }
+        return c.field(o);
+    }
+
+    private static int argumentSize(Operand o) {
+        DataItem item = ((Operand.Field) o).item();
+        return item.subscriptsOrNone() ? item.totalSize() : item.size();
     }
 
     /** An integer-valued operand (literal, integer item or index) as a Java int. */

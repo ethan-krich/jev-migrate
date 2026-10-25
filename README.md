@@ -118,7 +118,13 @@ equivalence fixtures.
 |---|---|---|
 | ✅ | IDENTIFICATION / DATA / PROCEDURE divisions, WORKING-STORAGE | one program per file, fixed / variable / tandem format |
 | ✅ | Debugging lines (`D` indicator) | comments unless `Dialect.debugging_lines` or `WITH DEBUGGING MODE` |
-| ✅ | `PIC X(n)`, `PIC [S]9(i)[V9(s)]` USAGE DISPLAY, levels 01–49 and 77, `VALUE` literal / figurative | default init: spaces / zero |
+| ✅ | `PIC X(n)` / `A(n)`, `PIC [S]9(i)[V9(s)]`, levels 01–49, 77 and 78, `VALUE` literal / figurative | byte-addressed storage per record (GnuCOBOL byte images); default init: spaces / zero |
+| ✅ | `USAGE DISPLAY`, `PACKED-DECIMAL` / `COMP-3`, `BINARY` / `COMP` / `COMP-4` / `COMP-X` (big-endian; `Dialect.binary_truncate`), `COMP-5`, `INDEX`; group USAGE | |
+| ✅ | Group items as operands (MOVE, compare, DISPLAY, ACCEPT), `REDEFINES`, `SIGN LEADING / TRAILING [SEPARATE]`, `JUSTIFIED RIGHT`, `BLANK WHEN ZERO`, `SYNCHRONIZED` (no slack bytes) | byte images of signed zoned / COMP-5 items need `Dialect.encoding` = ascii |
+| ✅ | Numeric-edited and alphanumeric-edited pictures, de-editing | GnuCOBOL's editing, byte for byte |
+| ✅ | `OCCURS` (nested, `VALUE`, `DEPENDING ON`, `KEY`), subscripts (`n`, `item`, `index`, `± n`), `INDEXED BY`, `SET` index, reference modification | ranges that are not literals need `Dialect.out_of_range` |
+| ✅ | `INITIALIZE`, `STRING`, `UNSTRING`, `INSPECT`, serial `SEARCH` | `SEARCH ALL` is a decision with candidates |
+| ✅ | LINKAGE SECTION, `PROCEDURE DIVISION USING`, `CALL 'literal' USING BY REFERENCE / BY CONTENT`, `NUMBER-OF-CALL-PARAMETERS`, `LENGTH OF`, `WHEN-COMPILED` (`Dialect.when_compiled`), `IS INITIAL` | argument number and sizes are checked against the callee |
 | ✅ | Level 88 (values, `THRU`, `WHEN SET TO FALSE`) on elementary items; `SET cond TO TRUE / FALSE` | |
 | ✅ | Figuratives ZERO, SPACE, QUOTE, HIGH-/LOW-VALUE (need `Dialect.encoding`), `ALL "lit"` | |
 | ✅ | Identification paragraphs, SOURCE-/OBJECT-COMPUTER, SPECIAL-NAMES `DECIMAL-POINT IS COMMA`, `CLASS`, `ALPHABET`, mnemonic names | other clauses are decisions |
@@ -126,19 +132,18 @@ equivalence fixtures.
 | ✅ | `ADD`, `SUBTRACT`, `MULTIPLY`, `DIVIDE` (TO/FROM/BY/INTO/GIVING), `ROUNDED`, `[NOT] ON SIZE ERROR` | exact `BigDecimal`; divide by zero is a size error |
 | ✅ | `COMPUTE` with `+ - *`, unary minus, parentheses | |
 | ✅ | `DISPLAY` literals and items, `WITH NO ADVANCING` | GnuCOBOL format (`+005`, `012.34`) |
-| ✅ | `IF`/`ELSE`, `EVALUATE`, relation (`= < > <= >= NOT`), sign, abbreviated (`A = 1 OR 2`) and combined (`A = (1 OR 2)`) conditions, condition-names, class conditions on PIC X (`NUMERIC`, `ALPHABETIC[-UPPER/-LOWER]`, user CLASS) | ordered alphanumeric comparisons need `Dialect.collating_sequence` (ASCII) |
+| ✅ | `IF`/`ELSE`, `EVALUATE`, relation (`= < > <= >= NOT`), sign, abbreviated (`A = 1 OR 2`) and combined (`A = (1 OR 2)`) conditions, condition-names, class conditions read from the bytes (`NUMERIC`, `ALPHABETIC[-UPPER/-LOWER]`, user CLASS) | ordered alphanumeric comparisons need `Dialect.collating_sequence` (ASCII) |
 | ✅ | `NEXT SENTENCE`, `EXIT PARAGRAPH / SECTION / PERFORM [CYCLE]` | exits that leave a PERFORMed range are decisions |
 | ✅ | `DIVIDE … REMAINDER`, `MOVE / ADD / SUBTRACT CORRESPONDING` | |
 | ✅ | `DISPLAY UPON CONSOLE / SYSERR`, `EXHIBIT [NAMED]`, `ACCEPT` from stdin and `FROM DATE / DAY / DAY-OF-WEEK / TIME` | |
 | ✅ | Paragraphs, sections, fall-through, `PERFORM` proc / inline, `TIMES`, `UNTIL`, single `VARYING`, `WITH TEST AFTER` | |
 | ✅ | `STOP RUN`, `GOBACK`, `EXIT`, `EXIT PROGRAM`, `CONTINUE`, `RETURN-CODE` → exit status | |
-| ✅ | `COPY` (copybook search path; decision lines map back to the original file), static `CALL 'literal'` of a program in the project (no USING) | persistent WORKING-STORAGE, RETURN-CODE propagation |
-| ◐ | Group items | declared (children become fields); referencing the group itself is unsupported |
+| ✅ | `COPY` (copybook search path; decision lines map back to the original file), static `CALL 'literal'` of a program in the project | persistent WORKING-STORAGE, RETURN-CODE propagation |
 | ◐ | `REPLACE` statements | parsed by ProLeap; line numbers then fall back to the preprocessed source (warning `approximate_line_numbers`) |
-| ❌ | `OCCURS`, `REDEFINES`, `RENAMES`, level 88 on groups, `USAGE` other than DISPLAY, edited / `P` / `A` / `N` pictures, `SIGN`, `JUSTIFIED` | `unsupported_construct` |
+| ❌ | `RENAMES`, level 88 on groups, `COMP-1` / `COMP-2`, `POINTER`, `ADDRESS OF`, `P` / `N` pictures, a fixed sign before a floating currency string, `EXTERNAL`, `GLOBAL`, nested programs, `IS RECURSIVE`, `CALL … BY VALUE` | `unsupported_construct` |
 | ❌ | `/` and `**` in COMPUTE (implementation-defined intermediate precision), EBCDIC collating sequence | `unsupported_construct` |
-| ❌ | `GO TO`, `PERFORM … THRU`, `STRING`, `INSPECT`, files, `CALL … USING`, dynamic `CALL`, `DISPLAY UPON` printer / other devices, `ACCEPT FROM` environment, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
-| ❌ | Tables, reference modification, intrinsic functions, special registers other than RETURN-CODE, free format / other dialects | |
+| ❌ | `GO TO`, `PERFORM … THRU`, files, dynamic `CALL`, `DISPLAY UPON` printer / other devices, `ACCEPT FROM` environment, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
+| ❌ | Intrinsic functions, `TALLY` and other special registers, free format / other dialects | |
 
 Known divergence: GnuCOBOL 3.2 prints an empty value for a `COMPUTE` receiver when it is displayed
 *inside that statement's own* `ON SIZE ERROR` phrase. The translation prints the (unchanged) value.
@@ -164,7 +169,7 @@ Documentation: [architecture](docs/architecture.md) · [mapping API](docs/mappin
 
 | Component | Version | License | Use |
 |---|---|---|---|
-| ProLeap COBOL Parser | 4.0.0 (commit `d1bfe75`) | MIT | COBOL parsing and semantic graph (built from the submodule; `proleap/build.gradle.kts` extends a copy of the grammar with `EXIT PARAGRAPH/SECTION/PERFORM [CYCLE]` and `WHEN SET TO FALSE`) |
+| ProLeap COBOL Parser | 4.0.0 (commit `d1bfe75`) | MIT | COBOL parsing and semantic graph (built from the submodule; `proleap/build.gradle.kts` extends a copy of the grammar with `EXIT PARAGRAPH/SECTION/PERFORM [CYCLE]`, `WHEN SET TO FALSE`, `INITIALIZE ... WITH FILLER / ALL TO VALUE / THEN TO DEFAULT` and `COMP-X`) |
 | ANTLR | 4.7.2 | BSD-3-Clause | ProLeap's parser runtime |
 | JavaParser | 3.28.2 | Apache-2.0 / LGPL-3.0 (dual) | Java AST construction and printing |
 | Jackson Databind | 2.22.4 | Apache-2.0 | worker JSON |

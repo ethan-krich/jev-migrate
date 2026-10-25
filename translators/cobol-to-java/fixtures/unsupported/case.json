@@ -1,15 +1,19 @@
 {
   "description": "Constructs outside the supported subset are reported, never approximated (including the constructs saved for Jev)",
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "out_of_range": "fail"},
   "expect": {
     "status": "incomplete",
     "decisions": [
       {"reason": "unsupported_construct", "operation": "DATA", "line": 7},
       {"reason": "unsupported_construct", "operation": "DATA", "line": 10},
-      {"reason": "unsupported_construct", "operation": "COMPUTE", "line": 18},
-      {"reason": "missing_target_api", "operation": "DISPLAY", "line": 19, "candidates": []},
-      {"reason": "missing_target_api", "operation": "ACCEPT", "line": 20, "candidates": []},
-      {"reason": "missing_target_api", "operation": "STOP", "line": 21, "candidates": []},
-      {"reason": "missing_mapping", "operation": "GO_TO", "line": 22, "candidates": []}
+      {"reason": "unsupported_construct", "operation": "COMPUTE", "line": 19},
+      {"reason": "missing_target_api", "operation": "DISPLAY", "line": 20, "candidates": []},
+      {"reason": "missing_target_api", "operation": "ACCEPT", "line": 21, "candidates": []},
+      {"reason": "missing_target_api", "operation": "STOP", "line": 22, "candidates": []},
+      {"reason": "unsupported_construct", "operation": "SEARCH", "line": 23,
+       "candidates": ["builtin:search_all_binary", "builtin:search_all_linear"]},
+      {"reason": "unsupported_construct", "operation": "CALL", "line": 25, "candidates": []},
+      {"reason": "missing_mapping", "operation": "GO_TO", "line": 26, "candidates": []}
     ]
   },
   "layout": {"base_package": "fixtures.unsupported"}

@@ -299,6 +299,11 @@ public final class NumericField {
         return storage.text(offset, size());
     }
 
+    /** The item's bytes as an alphanumeric view (the argument of CALL ... BY REFERENCE). */
+    public AlphanumericField view() {
+        return new AlphanumericField(storage, offset, size());
+    }
+
     /** Reference modification of the item's bytes. */
     public AlphanumericField ref(int start, int length, String name) {
         return Bounds.ref(storage, offset, size(), start, length, name);

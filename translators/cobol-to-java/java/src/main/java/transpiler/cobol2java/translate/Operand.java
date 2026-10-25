@@ -90,6 +90,9 @@ public sealed interface Operand {
         }
     }
 
+    /** A numeric special register held in a Java int field of the program (NUMBER-OF-CALL-PARAMETERS). */
+    record Register(String javaName) implements Operand {}
+
     /** An INDEXED BY name: its occurrence number. */
     record Index(DataItem.IndexName index) implements Operand {}
 
@@ -107,6 +110,7 @@ public sealed interface Operand {
             case Arithmetic a -> true;
             case ReturnCode r -> true;
             case Index i -> true;
+            case Register r -> true;
             case AlphanumericLiteral a -> false;
         };
     }
@@ -120,6 +124,7 @@ public sealed interface Operand {
             case Arithmetic a -> "arithmetic_expression";
             case ReturnCode r -> "numeric";
             case Index i -> "index";
+            case Register r -> "numeric";
         };
     }
 }
