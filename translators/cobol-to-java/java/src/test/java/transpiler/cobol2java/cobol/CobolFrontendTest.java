@@ -59,4 +59,13 @@ class CobolFrontendTest {
         assertTrue(failure.getMessage().contains("C.cpy"), failure.getMessage());
         assertEquals(2, statements(src, true).size());
     }
+
+    @Test
+    void parseFailuresNameTheDialectConstruct() throws Exception {
+        String src = transpiler.cobol2java.TestSupport.cobol("IDENTIFICATION DIVISION.", "PROGRAM-ID. M.", "DATA DIVISION.", "WORKING-STORAGE SECTION.",
+                "01 A PIC X(10).", "01 B PIC X(80).", "PROCEDURE DIVISION.", "    XML GENERATE B FROM A.", "    STOP RUN.");
+        var failure = assertThrows(CobolFrontend.ParseFailure.class, () -> statements(src, false));
+        assertEquals("unsupported_dialect", failure.kind());
+        assertTrue(failure.getMessage().startsWith("XML GENERATE, which ProLeap's COBOL grammar does not cover at line 8"), failure.getMessage());
+    }
 }

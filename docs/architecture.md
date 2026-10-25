@@ -45,7 +45,7 @@ changing the protocol.
 - `CALL 'X'` becomes a static call only if `X` is a program in the session. Otherwise it is a
   `missing_target_api` decision ("unresolved cross-file dependency").
 - Copybooks are expanded per program by ProLeap. Each program gets its own copy of the copied
-  data, which is COBOL's semantics. A missing copybook fails that file with `missing_copybook`.
+  data, which is COBOL's semantics. A missing copybook fails that file with `missing_copybook`. A file ProLeap cannot parse (a dialect construct its grammar does not cover, such as XML / JSON GENERATE, ALLOCATE, object-oriented COBOL or compiler directives, or invalid COBOL) fails with `unsupported_dialect`, naming the construct and line when they can be recognised.
 - Output paths and class names are deterministic. Collisions fail both files; nothing is renamed.
 
 ## Decisions

@@ -1,0 +1,8 @@
+{
+  "description": "A program using XML GENERATE, which ProLeap's grammar does not cover, fails at file level with unsupported_dialect naming the construct (never a partial translation)",
+  "expect": {
+    "status": "incomplete",
+    "diagnostics": {"XMLGEN.cbl": ["unsupported_dialect"]}
+  },
+  "layout": {"base_package": "fixtures.xml_generate"}
+}

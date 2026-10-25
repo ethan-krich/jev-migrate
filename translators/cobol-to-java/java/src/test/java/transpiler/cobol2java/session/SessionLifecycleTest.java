@@ -72,7 +72,7 @@ class SessionLifecycleTest {
         var m = new SessionManager();
         var init = m.initialize("s", init(good, bad), e -> {});
         assertEquals("failed", init.result().get("programs").get(1).get("status").asText());
-        assertEquals("syntax_error", init.result().get("programs").get(1).get("diagnostics").get(0).get("code").asText());
+        assertEquals("unsupported_dialect", init.result().get("programs").get(1).get("diagnostics").get(0).get("code").asText());
         var fin = m.finish("s", Json.object());
         assertEquals("incomplete", fin.status());
         assertEquals(2, fin.result().get("blocking").size());

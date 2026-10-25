@@ -148,7 +148,7 @@ equivalence fixtures.
 | ✅ | Exact intrinsic functions (see docs/mapping-api.md) | floating-point functions are decisions |
 | ❌ | INDEXED (`missing_target_api`) and RELATIVE files, `ACCESS RANDOM / DYNAMIC`, `WRITE … ADVANCING`, `LINAGE`, `USE` declaratives, `SAME RECORD AREA` | decisions |
 | ❌ | Dynamic `CALL`, `DISPLAY UPON` printer / other devices, `ACCEPT FROM` environment, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
-| ❌ | `TALLY` and other special registers, free format / other dialects | |
+| ❌ | `TALLY` and other special registers, free format / other dialects | files ProLeap cannot parse (XML / JSON GENERATE, ALLOCATE, OO COBOL, …) fail with `unsupported_dialect` |
 
 Known divergence: GnuCOBOL 3.2 prints an empty value for a `COMPUTE` receiver when it is displayed
 *inside that statement's own* `ON SIZE ERROR` phrase. The translation prints the (unchanged) value.

@@ -104,9 +104,69 @@ public final class CobolFrontend {
             return new CobolParserRunnerImpl().analyzeCode(source, unitName, params);
         } catch (RuntimeException | java.io.IOException e) {
             String message = rootMessage(e);
-            String kind = message != null && message.startsWith("Could not find copy book") ? "missing_copybook" : "syntax_error";
-            throw new ParseFailure(kind, message == null ? e.getClass().getSimpleName() : message, e);
+            if (message != null && message.startsWith("Could not find copy book")) {
+                throw new ParseFailure("missing_copybook", message, e);
+            }
+            // ProLeap cannot tell invalid COBOL from a dialect its grammar does not cover; either way
+            // the file cannot be translated. Name the construct when the failing line shows it.
+            String detail = message == null ? e.getClass().getSimpleName() : message;
+            if (detail.length() > 300) {
+                detail = detail.substring(0, 300) + "...";
+            }
+            int line = failingLine(detail);
+            String construct = line > 0 ? construct(source, line) : null;
+            throw new ParseFailure("unsupported_dialect", (construct == null ? "a construct outside ProLeap's COBOL grammar (or invalid COBOL)"
+                    : construct + ", which ProLeap's COBOL grammar does not cover") + (line > 0 ? " at line " + line : "") + ": " + detail, e);
         }
+    }
+
+    /** The line of a ProLeap "syntax error in line L:C" message, or 0. */
+    static int failingLine(String message) {
+        int at = message.indexOf("line ");
+        if (at < 0) {
+            return 0;
+        }
+        int i = at + 5;
+        int start = i;
+        while (i < message.length() && Character.isDigit(message.charAt(i))) {
+            i++;
+        }
+        return i > start ? Integer.parseInt(message.substring(start, i)) : 0;
+    }
+
+    /** Dialect constructs ProLeap does not parse, recognised by their words on the failing line (for the message only). */
+    static String construct(String source, int line) {
+        String[] lines = source.split("\n", -1);
+        if (line > lines.length) {
+            return null;
+        }
+        List<String> words = new java.util.ArrayList<>();
+        for (String w : lines[line - 1].toUpperCase(java.util.Locale.ROOT).split("[\\s.]+")) {
+            if (!w.isEmpty()) {
+                words.add(w);
+            }
+        }
+        for (int i = 0; i < words.size(); i++) {
+            String w = words.get(i);
+            String next = i + 1 < words.size() ? words.get(i + 1) : "";
+            if ((w.equals("XML") || w.equals("JSON")) && (next.equals("GENERATE") || next.equals("PARSE"))) {
+                return w + " " + next;
+            }
+            switch (w) {
+                case "ALLOCATE", "FREE" -> {
+                    return "ALLOCATE / FREE";
+                }
+                case "INVOKE", "CLASS-ID", "METHOD-ID", "FACTORY", "INTERFACE-ID" -> {
+                    return "object-oriented COBOL (" + w + ")";
+                }
+                default -> {
+                    if (w.startsWith(">>") || w.startsWith("$SET")) {
+                        return "the compiler directive " + w;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     /** ProLeap's compilation-unit name for a file (capitalised base name). */
