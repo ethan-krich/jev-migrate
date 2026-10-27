@@ -1288,10 +1288,6 @@ public final class Builtins implements MappingRegistry.Catalog {
         } else {
             program = ((LiteralValueStmt) call.getProgramValueStmt()).getLiteral().getNonNumericLiteral();
             String name = program;
-            if (name.equals(c.programId())) {
-                // GnuCOBOL then assumes IS RECURSIVE.
-                throw HandlerException.unsupported("CALL of the program itself (recursive CALL)");
-            }
             String cls = c.programClass(name).orElseThrow(() -> new HandlerException(HandlerException.Kind.MISSING_TARGET,
                     "program '" + name + "' is not part of the translation project (unresolved cross-file dependency)"));
             args.add(call(name(cls), "instance"));

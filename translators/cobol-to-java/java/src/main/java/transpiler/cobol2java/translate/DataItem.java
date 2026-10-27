@@ -53,6 +53,8 @@ public final class DataItem {
     private DataItem renamedRecord;
     /** For an EXTERNAL record: the name its storage is shared under in the run unit. */
     private String externalName;
+    /** A LOCAL-STORAGE record: initialised at each invocation. */
+    private boolean local;
 
     DataItem(String cobolName, Kind kind, Picture picture, String unsupportedReason, DataItem parent, int line) {
         this.cobolName = cobolName;
@@ -315,6 +317,15 @@ public final class DataItem {
     void renames(DataItem record, int offset, int size) {
         this.renamedRecord = record;
         layout(offset, size);
+    }
+
+    void markLocal() {
+        this.local = true;
+    }
+
+    /** Whether this item is in the LOCAL-STORAGE SECTION. */
+    public boolean local() {
+        return record().local;
     }
 
     void external(String name) {

@@ -1,0 +1,7 @@
+{
+  "description": "PROGRAM-ID IS RECURSIVE with LOCAL-STORAGE and LINKAGE per invocation (a recursive factorial), and LOCAL-STORAGE (VALUE, tables, default initial values) starting afresh at each CALL while WORKING-STORAGE persists",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native"},
+  "equivalence": {"programs": ["RMAIN.cbl", "FACT.cbl", "LOCALS.cbl"], "main_class": "fixtures.recursive.Rmain"},
+  "layout": {"base_package": "fixtures.recursive"}
+}

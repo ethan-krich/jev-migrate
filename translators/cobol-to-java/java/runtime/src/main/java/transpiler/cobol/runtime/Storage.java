@@ -28,6 +28,17 @@ public final class Storage {
         return s;
     }
 
+    /** A copy (an invocation's LOCAL-STORAGE, kept while a recursive CALL uses this storage). */
+    public Storage snapshot() {
+        Storage s = new Storage(bytes.length);
+        System.arraycopy(bytes, 0, s.bytes, 0, bytes.length);
+        return s;
+    }
+
+    public void restore(Storage saved) {
+        System.arraycopy(saved.bytes, 0, bytes, 0, bytes.length);
+    }
+
     public int length() {
         return bytes.length;
     }

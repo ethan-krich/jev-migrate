@@ -1,7 +1,6 @@
 package transpiler.cobol.runtime;
 
 import java.math.BigDecimal;
-import java.util.HashSet;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -15,8 +14,8 @@ import java.util.function.Function;
  */
 public final class ProgramSupport {
     private static int depth;
-    /** Programs with an invocation in progress (GnuCOBOL's module_active). */
-    private static final Set<Class<?>> active = new HashSet<>();
+    /** Programs with invocations in progress, and how many (GnuCOBOL's module_active). */
+    private static final java.util.Map<Class<?>, Integer> active = new java.util.HashMap<>();
     /** GnuCOBOL 3.2's system routines, which a CALL by name reaches without a program. */
     private static final Set<String> SYSTEM_ROUTINES = Set.of("SYSTEM", "CBL_AND", "CBL_ALARM_SOUND", "CBL_BELL_SOUND",
             "CBL_CHANGE_DIR", "CBL_CHECK_FILE_EXIST", "CBL_CLOSE_FILE", "CBL_COPY_FILE", "CBL_CREATE_DIR", "CBL_CREATE_FILE",
@@ -61,7 +60,8 @@ public final class ProgramSupport {
     /** Runs {@code program} as the main program and returns RETURN-CODE as the process exit status. */
     public static int runMain(CobolProgram program, String... args) {
         Environment.arguments(args);
-        active.add(program.getClass());
+        active.merge(program.getClass(), 1, Integer::sum);
+        program.enterFrame();
         try {
             program.procedureDivision();
             return program.returnCode().intValue();
@@ -90,7 +90,7 @@ public final class ProgramSupport {
     /** CALL of ENTRY number {@code entry} of {@code callee} (0: the program itself); see {@link #call}. */
     public static boolean callEntry(CobolProgram caller, CobolProgram callee, int entry, boolean exceptionPhrase,
             AlphanumericField... arguments) {
-        if (active.contains(callee.getClass())) {
+        if (active.containsKey(callee.getClass()) && !callee.recursive()) {
             if (exceptionPhrase) {
                 caller.returnCode().move(BigDecimal.ONE.negate());
                 return true;
@@ -98,8 +98,12 @@ public final class ProgramSupport {
             Bounds.fail("recursive CALL from '" + caller.getClass().getSimpleName() + "' to '" + callee.getClass().getSimpleName()
                     + "' which is NOT RECURSIVE");
         }
+        Object frame = callee.enterFrame();
+        for (int i = 0; i < arguments.length; i++) {
+            arguments[i] = callee.rebase(frame, arguments[i]);
+        }
         callee.using(entry, arguments);
-        active.add(callee.getClass());
+        active.merge(callee.getClass(), 1, Integer::sum);
         depth++;
         try {
             callee.enter(entry);
@@ -107,7 +111,8 @@ public final class ProgramSupport {
             // Returned to the caller.
         } finally {
             depth--;
-            active.remove(callee.getClass());
+            active.computeIfPresent(callee.getClass(), (k, n) -> n == 1 ? null : n - 1);
+            callee.leaveFrame(frame);
         }
         caller.returnCode().move(callee.returnCode());
         return false;
@@ -173,7 +178,7 @@ public final class ProgramSupport {
 
     /** CANCEL of a program (its WORKING-STORAGE is initial at the next CALL); cancelling an active program ends the run unit. */
     public static void cancel(Class<?> program) {
-        if (active.contains(program)) {
+        if (active.containsKey(program)) {
             Bounds.fail("attempt to CANCEL active program");
         }
     }

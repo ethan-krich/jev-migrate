@@ -1,0 +1,20 @@
+enter 05 calls 001 loc
+enter 04 calls 002 loc
+enter 03 calls 003 loc
+enter 02 calls 004 loc
+enter 01 calls 005 loc
+leave 01 01 000001 chg
+leave 02 02 000002 chg
+leave 03 03 000006 chg
+leave 04 04 000024 chg
+leave 05 05 000120 chg
+fact 000120
+w 1 l 1 xxx [  00]
+w 2 l 1 xxx [  00]
+enter 03 calls 006 loc
+enter 02 calls 007 loc
+enter 01 calls 008 loc
+leave 01 01 000001 chg
+leave 02 02 000002 chg
+leave 03 03 000006 chg
+fact 000006

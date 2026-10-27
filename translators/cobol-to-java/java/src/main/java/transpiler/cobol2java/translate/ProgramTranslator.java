@@ -357,6 +357,7 @@ public final class ProgramTranslator implements TranslationContext {
         addEntryPoints(cls);
         addProcedureDivision(cls);
         addResolvers(cls);
+        addFrames(cls);
         for (ParserRuleContext next : allNextSentences) {
             if (!placedNextSentences.contains(next)) {
                 dataDecision(next, "PROCEDURE", "NEXT SENTENCE here cannot be translated (no enclosing sentence)");
@@ -384,9 +385,6 @@ public final class ProgramTranslator implements TranslationContext {
         var data = in.unit().getDataDivision();
         if (data == null) {
             return;
-        }
-        if (data.getLocalStorageSection() != null) {
-            dataDecision(data.getLocalStorageSection().getCtx(), "DATA", "LOCAL-STORAGE SECTION is not supported");
         }
         if (data.getScreenSection() != null || data.getReportSection() != null || data.getCommunicationSection() != null) {
             dataDecision(data.getCtx(), "DATA", "SCREEN, REPORT and COMMUNICATION sections are not supported");
@@ -438,6 +436,19 @@ public final class ProgramTranslator implements TranslationContext {
             if (items.get(e) != null) {
                 // (a level-66 RENAMES item is resolved after the layout)
                 roots.add(items.get(e));
+            }
+        }
+        if (data.getLocalStorageSection() != null) {
+            for (DataDescriptionEntry e : data.getLocalStorageSection().getRootDataDescriptionEntries()) {
+                buildItem(e, null);
+                DataItem item = items.get(e);
+                if (item != null) {
+                    item.markLocal();
+                    if (item.externalName() != null) {
+                        dataDecision(e.getCtx(), "DATA", item.cobolName() + ": EXTERNAL in the LOCAL-STORAGE SECTION");
+                    }
+                    roots.add(item);
+                }
             }
         }
         if (data.getFileSection() != null) {
@@ -572,6 +583,104 @@ public final class ProgramTranslator implements TranslationContext {
     }
 
     private DataItem tally;
+    /** Statements putting LOCAL-STORAGE in its initial state. */
+    private final List<Statement> localInit = new ArrayList<>();
+
+    /**
+     * IS RECURSIVE (or a CALL of the program itself, for which GnuCOBOL assumes it) and
+     * LOCAL-STORAGE: {@code enterFrame} initialises LOCAL-STORAGE and saves the caller's
+     * invocation (its LOCAL-STORAGE bytes and LINKAGE bindings), which {@code leaveFrame} restores.
+     */
+    private void addFrames(ClassOrInterfaceDeclaration cls) {
+        boolean recursive = recursive();
+        if (recursive) {
+            if (dispatcher) {
+                dataDecision(in.unit().getIdentificationDivision().getProgramIdParagraph().getCtx(), "IDENTIFICATION",
+                        "a recursive program with GO TO, PERFORM THRU or ALTER is not supported");
+            }
+            MethodDeclaration m = cls.addMethod("recursive", Modifier.Keyword.PUBLIC);
+            m.addMarkerAnnotation("Override");
+            m.setType(PrimitiveType.booleanType());
+            m.setBody(new BlockStmt(NodeList.nodeList(new ReturnStmt(Ast.bool(true)))));
+        }
+        List<String> locals = roots.stream().filter(r -> r.local() && storageNames.containsKey(r)).map(storageNames::get).distinct().toList();
+        List<String> params = recursive ? List.copyOf(parameterFields.values()) : List.of();
+        boolean callParameters = recursive && in.unit().getProcedureDivision() != null && in.unit().getProcedureDivision().getUsingClause() != null;
+        if (locals.isEmpty() && localInit.isEmpty() && params.isEmpty()) {
+            return;
+        }
+        MethodDeclaration enter = cls.addMethod("enterFrame", Modifier.Keyword.PUBLIC);
+        enter.addMarkerAnnotation("Override");
+        enter.setType("Object");
+        NodeList<Expression> saved = new NodeList<>();
+        locals.forEach(s -> saved.add(call(name(s), "snapshot")));
+        params.forEach(p -> saved.add(name(p)));
+        if (callParameters) {
+            saved.add(name("callParameters"));
+        }
+        BlockStmt body = new BlockStmt();
+        body.addStatement(declare(new ArrayType(type("Object")), "frame",
+                new com.github.javaparser.ast.expr.ArrayCreationExpr(type("Object"), NodeList.nodeList(new com.github.javaparser.ast.ArrayCreationLevel()),
+                        new com.github.javaparser.ast.expr.ArrayInitializerExpr(saved))));
+        localInit.forEach(st -> body.addStatement(st.clone()));
+        body.addStatement(new ReturnStmt(name("frame")));
+        enter.setBody(body);
+        MethodDeclaration leave = cls.addMethod("leaveFrame", Modifier.Keyword.PUBLIC);
+        leave.addMarkerAnnotation("Override");
+        leave.addParameter(type("Object"), "frame");
+        BlockStmt restore = new BlockStmt();
+        restore.addStatement(declare(new ArrayType(type("Object")), "saved",
+                new com.github.javaparser.ast.expr.CastExpr(new ArrayType(type("Object")), name("frame"))));
+        int i = 0;
+        for (String s : locals) {
+            restore.addStatement(stmt(call(name(s), "restore", new com.github.javaparser.ast.expr.CastExpr(type("Storage"),
+                    new com.github.javaparser.ast.expr.ArrayAccessExpr(name("saved"), integer(i++))))));
+        }
+        for (String p : params) {
+            restore.addStatement(stmt(new AssignExpr(name(p), new com.github.javaparser.ast.expr.CastExpr(type("AlphanumericField"),
+                    new com.github.javaparser.ast.expr.ArrayAccessExpr(name("saved"), integer(i++))), AssignExpr.Operator.ASSIGN)));
+        }
+        if (callParameters) {
+            restore.addStatement(stmt(new AssignExpr(name("callParameters"), new com.github.javaparser.ast.expr.CastExpr(PrimitiveType.intType().toBoxedType(),
+                    new com.github.javaparser.ast.expr.ArrayAccessExpr(name("saved"), integer(i))), AssignExpr.Operator.ASSIGN)));
+        }
+        leave.setBody(restore);
+        if (recursive && !locals.isEmpty()) {
+            MethodDeclaration rebase = cls.addMethod("rebase", Modifier.Keyword.PUBLIC);
+            rebase.addMarkerAnnotation("Override");
+            rebase.setType("AlphanumericField");
+            rebase.addParameter(type("Object"), "frame");
+            rebase.addParameter(type("AlphanumericField"), "argument");
+            BlockStmt b = new BlockStmt();
+            for (int k = 0; k < locals.size(); k++) {
+                b.addStatement(new IfStmt(new BinaryExpr(call(name("argument"), "storage"), name(locals.get(k)), BinaryExpr.Operator.EQUALS),
+                        new ReturnStmt(create("AlphanumericField", new com.github.javaparser.ast.expr.CastExpr(type("Storage"),
+                                new com.github.javaparser.ast.expr.ArrayAccessExpr(new EnclosedExpr(new com.github.javaparser.ast.expr.CastExpr(new ArrayType(type("Object")),
+                                        name("frame"))), integer(k))), call(name("argument"), "offset"), call(name("argument"), "length"))), null));
+            }
+            b.addStatement(new ReturnStmt(name("argument")));
+            rebase.setBody(b);
+        }
+    }
+
+    /** IS RECURSIVE, or a CALL of its own PROGRAM-ID (GnuCOBOL then assumes RECURSIVE). */
+    private boolean recursive() {
+        var pid = in.unit().getIdentificationDivision().getProgramIdParagraph();
+        if (pid.getAttribute() == io.proleap.cobol.asg.metamodel.identification.ProgramIdParagraph.Attribute.RECURSIVE) {
+            return true;
+        }
+        boolean[] self = {false};
+        if (in.unit().getProcedureDivision() != null) {
+            String me = entryName();
+            walk(in.unit().getProcedureDivision().getCtx(), tree -> {
+                if (tree instanceof CobolParser.CallStatementContext call && call.literal() != null && call.literal().NONNUMERICLITERAL() != null) {
+                    String t = call.literal().getText();
+                    self[0] |= t.substring(1, t.length() - 1).equals(me);
+                }
+            });
+        }
+        return self[0];
+    }
 
     private boolean usesTally() {
         boolean[] found = {false};
@@ -1541,7 +1650,12 @@ public final class ProgramTranslator implements TranslationContext {
                 String storage = storageField(cls, record, storages, sizes);
                 accessors.add(item);
                 if (!item.isGroup() && !item.inRedefines() && !item.fileRecord() && item.externalName() == null) {
-                    cls.addMember(tableInitializer(item, storage));
+                    var init = tableInitializer(item, storage);
+                    if (item.local()) {
+                        localInit.addAll(init.getBody().getStatements());
+                    } else {
+                        cls.addMember(init);
+                    }
                 }
                 for (DataItem.IndexName idx : item.indexes()) {
                     // GnuCOBOL starts every index at occurrence 1.
@@ -1555,7 +1669,11 @@ public final class ProgramTranslator implements TranslationContext {
                         .setLineComment(" INDEX " + idx.cobolName() + " of " + item.cobolName());
             }
             Expression init;
-            if (item == record && !item.isGroup() && plain(item) && !item.fileRecord() && item.externalName() == null
+            if (item.local() && !item.isGroup() && !item.inRedefines()) {
+                // LOCAL-STORAGE starts afresh at each invocation (enterFrame).
+                localInit.add(stmt(initialCall(item, name(item.javaName()))));
+            }
+            if (item == record && !item.isGroup() && plain(item) && !item.fileRecord() && item.externalName() == null && !item.local()
                     && roots.stream().noneMatch(r -> r.redefines() == item)) {
                 init = standalone(item);
             } else {
@@ -1822,7 +1940,7 @@ public final class ProgramTranslator implements TranslationContext {
             return create("AlphanumericField", storage, integer(item.offset()), integer(Math.max(1, item.size())));
         }
         Expression v = viewConstructor(item, storage, integer(item.offset()));
-        if (item.inRedefines() || item.fileRecord() || item.externalName() != null) {
+        if (item.inRedefines() || item.fileRecord() || item.externalName() != null || item.local()) {
             return v;
         }
         return initialCall(item, v);
@@ -1848,7 +1966,7 @@ public final class ProgramTranslator implements TranslationContext {
             instance.setJavadocComment("IS INITIAL: a fresh instance (WORKING-STORAGE in its initial state) for every CALL.");
             instance.setBody(new BlockStmt(NodeList.nodeList(new ReturnStmt(create(in.className())))));
         } else {
-            if (attribute != null) {
+            if (attribute != null && attribute != io.proleap.cobol.asg.metamodel.identification.ProgramIdParagraph.Attribute.RECURSIVE) {
                 dataDecision(programId.getCtx(), "IDENTIFICATION", "PROGRAM-ID ... IS " + attribute + " is not supported");
             }
             instance.setJavadocComment("The program's single instance in this run unit (WORKING-STORAGE persists across CALLs).");
