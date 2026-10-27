@@ -3939,16 +3939,18 @@ public final class ProgramTranslator implements TranslationContext {
         Expression l = alphanumericSide(left, right);
         Expression rr = alphanumericSide(right, left);
         if (l != null && rr != null) {
-            requireCollatingSequence(op, where);
-            return Ast.compareToZero(staticCall("Compare", "alphanumeric", l, rr), javaOperator(op));
+            String seq = requireCollatingSequence(op, where);
+            return Ast.compareToZero(staticCall("Compare", seq.equals("ebcdic") ? "ebcdic" : "alphanumeric", l, rr), javaOperator(op));
         }
         if (l != null && right instanceof Operand.Figurative f) {
-            requireCollatingSequence(op, where);
-            return Ast.compareToZero(staticCall("Compare", "figurative", l, figurativeArg(f)), javaOperator(op));
+            String seq = requireCollatingSequence(op, where);
+            return Ast.compareToZero(staticCall("Compare", seq.equals("ebcdic") ? "figurativeEbcdic" : "figurative", l, figurativeArg(f)),
+                    javaOperator(op));
         }
         if (rr != null && left instanceof Operand.Figurative f) {
-            requireCollatingSequence(op, where);
-            return Ast.compareToZero(staticCall("Compare", "figurative", rr, figurativeArg(f)), javaOperator(mirror(op)));
+            String seq = requireCollatingSequence(op, where);
+            return Ast.compareToZero(staticCall("Compare", seq.equals("ebcdic") ? "figurativeEbcdic" : "figurative", rr, figurativeArg(f)),
+                    javaOperator(mirror(op)));
         }
         throw HandlerException.unsupported("comparison of " + left.category() + " with " + right.category() + " is not supported");
     }
@@ -3961,18 +3963,16 @@ public final class ProgramTranslator implements TranslationContext {
      * Equality does not depend on the collating sequence; ordering does. The runtime compares in
      * ASCII (ISO-8859-1) order, which is exact for an ASCII sequence and is refused otherwise.
      */
-    private void requireCollatingSequence(RelationalOperatorType op, ParserRuleContext where) throws HandlerException {
+    /** The collating sequence of an alphanumeric comparison: ascii or ebcdic (equality does not depend on it). */
+    private String requireCollatingSequence(RelationalOperatorType op, ParserRuleContext where) throws HandlerException {
         if (op == RelationalOperatorType.EQUAL || op == RelationalOperatorType.NOT_EQUAL) {
-            return;
+            return "ascii";
         }
         String sequence = require("collating_sequence", in.dialect().collatingSequence(), where, "an ordered alphanumeric comparison");
         if (sequence.equals("native")) {
             sequence = require("encoding", in.dialect().encoding(), where, "an ordered alphanumeric comparison in the native sequence");
         }
-        if (!sequence.equals("ascii")) {
-            throw HandlerException.unsupported("ordered alphanumeric comparison in the " + sequence.toUpperCase(Locale.ROOT)
-                    + " collating sequence is not supported");
-        }
+        return sequence;
     }
 
     /**
@@ -4204,13 +4204,12 @@ public final class ProgramTranslator implements TranslationContext {
             throw HandlerException.unsupported("KEY " + key.cobolName() + " must be an item of the sort record outside any table");
         }
         boolean numeric = key.isNumeric();
-        if (!numeric) {
-            requireCollatingSequence(RelationalOperatorType.GREATER, where);
-        }
+        String sequence = numeric ? "ascii" : requireCollatingSequence(RelationalOperatorType.GREATER, where);
         Expression view = key.isGroup() ? create("AlphanumericField", name("s"), integer(key.offset()), integer(key.size()))
                 : viewConstructor(key, name("s"), integer(key.offset()));
+        Expression value = call(view, "get");
         return new com.github.javaparser.ast.expr.LambdaExpr(new Parameter(new com.github.javaparser.ast.type.UnknownType(), "s"),
-                call(view, "get"));
+                sequence.equals("ebcdic") ? staticCall("Compare", "ebcdicKey", value) : value);
     }
 
     @Override

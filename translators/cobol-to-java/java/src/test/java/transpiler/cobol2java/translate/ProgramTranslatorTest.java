@@ -193,7 +193,8 @@ class ProgramTranslatorTest {
         String src = program("01 A PIC X(2).", "IF A < 'B' DISPLAY 'x' END-IF.", "IF A = 'B' DISPLAY 'y' END-IF.");
         assertEquals(List.of("dialect:collating_sequence"), operations(translate(dir, src, defaultRules())));
         var ebcdic = translate(dir, src, defaultRules(), Map.of(), TestSupport.dialect("{\"collating_sequence\": \"ebcdic\"}"));
-        assertEquals(List.of(Reason.UNSUPPORTED_CONSTRUCT), ebcdic.decisions().stream().map(Decision::reason).toList());
+        assertTrue(ebcdic.decisions().isEmpty(), () -> ebcdic.decisions().toString());
+        assertTrue(java(ebcdic).contains("Compare.ebcdic(") || java(ebcdic).contains("Compare.figurativeEbcdic("));
     }
 
     @Test

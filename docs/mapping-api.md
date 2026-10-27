@@ -173,7 +173,7 @@ A key set both by `dialect=` and `options=` raises `TranspilerError`.
 | Field | Default | Meaning |
 |---|---|---|
 | `encoding` | `None` | `ascii` or `ebcdic`: the bytes of HIGH-VALUES / LOW-VALUES, class tests, and the byte image of signed zoned and native binary items seen through groups, REDEFINES or reference modification (only `ascii`, GnuCOBOL's, is implemented) |
-| `collating_sequence` | `None` | `native` (follows `encoding`), `ascii` or `ebcdic` |
+| `collating_sequence` | `None` | `native` (follows `encoding`), `ascii` or `ebcdic`: the order of alphanumeric comparisons and SORT / MERGE keys (`ebcdic` is GnuCOBOL's `-fdefault-colseq=EBCDIC`; INDEXED keys stay in byte order, as in GnuCOBOL) |
 | `out_of_range` | `None` | subscripts, reference modification and OCCURS DEPENDING ON values that are not literals in range: `fail` (stop the run unit with status 1, as GnuCOBOL with `-fec=EC-BOUND-SUBSCRIPT,EC-BOUND-REF-MOD,EC-BOUND-ODO`) or `decision` (refuse them) |
 | `binary_truncate` | `True` | COMP/BINARY arithmetic is limited by the PICTURE (GnuCOBOL `binary-truncate`); `False` limits it by the bytes only (MOVE still cuts to the PICTURE) |
 | `sync_alignment` | `None` | whether SYNCHRONIZED inserts slack bytes before binary items (`False` only; `True` is a decision) |

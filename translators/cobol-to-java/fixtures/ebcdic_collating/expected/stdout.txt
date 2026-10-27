@@ -1,0 +1,14 @@
+lower < upper
+digits > letters
+a < a1
+a > spaces
+a < high
+a <= all 1
+# < a
+[ a1]
+[#!@]
+[abc]
+[zZ0]
+[ABC]
+[Zz9]
+[123]
