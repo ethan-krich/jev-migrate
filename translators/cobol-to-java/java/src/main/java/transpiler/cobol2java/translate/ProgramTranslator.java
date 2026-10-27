@@ -128,12 +128,13 @@ public final class ProgramTranslator implements TranslationContext {
             Dialect dialect,
             Function<String, Optional<List<Integer>>> programParameters,
             Map<String, String> programs,
-            Map<String, Integer> entries) {
+            Map<String, Integer> entries,
+            List<Map.Entry<ProgramUnit, String>> containers) {
         public Input(ProgramUnit unit, SourceMap sourceMap, String sourceFile, String programId, String packageName, String className,
                 String runtimePackage, MappingRegistry registry, Builtins builtins, Function<String, Optional<String>> programDirectory,
                 Dialect dialect) {
             this(unit, sourceMap, sourceFile, programId, packageName, className, runtimePackage, registry, builtins, programDirectory,
-                    dialect, id -> Optional.empty(), Map.of(), Map.of());
+                    dialect, id -> Optional.empty(), Map.of(), Map.of(), List.of());
         }
     }
 
@@ -428,6 +429,10 @@ public final class ProgramTranslator implements TranslationContext {
         fieldNames.addAll(List.of("returnCode", "instance", "main", "procedureDivision", "using", "callParameters", "parameter"));
         var data = in.unit().getDataDivision();
         if (data == null) {
+            // A nested program without a DATA DIVISION still sees its containers' GLOBAL items.
+            importGlobals();
+            layoutDataModel();
+            checkByteImages();
             return;
         }
         var ws = data.getWorkingStorageSection();
@@ -444,8 +449,8 @@ public final class ProgramTranslator implements TranslationContext {
                 DataItem item = items.get(e);
                 if (item != null) {
                     item.markLocal();
-                    if (item.externalName() != null) {
-                        dataDecision(e.getCtx(), "DATA", item.cobolName() + ": EXTERNAL in the LOCAL-STORAGE SECTION");
+                    if (item.externalName() != null || item.global()) {
+                        dataDecision(e.getCtx(), "DATA", item.cobolName() + ": EXTERNAL / GLOBAL in the LOCAL-STORAGE SECTION");
                     }
                     roots.add(item);
                 }
@@ -454,6 +459,7 @@ public final class ProgramTranslator implements TranslationContext {
         if (data.getFileSection() != null) {
             fileSection(data.getFileSection());
         }
+        importGlobals();
         if (data.getLinkageSection() != null) {
             for (DataDescriptionEntry e : data.getLinkageSection().getRootDataDescriptionEntries()) {
                 buildItem(e, null);
@@ -461,8 +467,8 @@ public final class ProgramTranslator implements TranslationContext {
                 if (item == null) {
                     continue;
                 }
-                if (item.externalName() != null) {
-                    dataDecision(e.getCtx(), "DATA", item.cobolName() + ": EXTERNAL in the LINKAGE SECTION");
+                if (item.externalName() != null || item.global()) {
+                    dataDecision(e.getCtx(), "DATA", item.cobolName() + ": EXTERNAL / GLOBAL in the LINKAGE SECTION");
                 }
                 item.markLinkage();
                 roots.add(item);
@@ -471,27 +477,7 @@ public final class ProgramTranslator implements TranslationContext {
                 }
             }
         }
-        for (PendingTable t : tables) {
-            occurs(t.item(), t.entry());
-        }
-        if (usesTally()) {
-            // GnuCOBOL's TALLY: GLOBAL PICTURE 9(5) USAGE BINARY VALUE ZERO.
-            DataItem tally = new DataItem("TALLY", DataItem.Kind.NUMERIC, new Picture.Numeric(5, 0, false), null, null, 0);
-            tally.usage(DataItem.Usage.BINARY);
-            tally.javaName(allocateField("tally"));
-            fieldOrder.add(tally);
-            roots.add(tally);
-            this.tally = tally;
-        }
-        for (DataItem root : roots) {
-            layout(root, 0);
-        }
-        for (PendingRename r : renames) {
-            resolveRename(r);
-        }
-        for (PendingTable t : tables) {
-            checkTable(t.item(), t.entry());
-        }
+        layoutDataModel();
         for (FileInfo f : List.copyOf(files.values())) {
             String problem = null;
             if (!f.sort) {
@@ -583,6 +569,60 @@ public final class ProgramTranslator implements TranslationContext {
     }
 
     private DataItem tally;
+
+    /**
+     * The GLOBAL WORKING-STORAGE records of the containing programs (innermost first): views over
+     * the container's own storage ({@code Container.instance().global(name)}), never initialised here.
+     */
+    private void importGlobals() {
+        int depth = 0;
+        for (var c : in.containers()) {
+            depth++;
+            var data = c.getKey().getDataDivision();
+            var ws = data == null ? null : data.getWorkingStorageSection();
+            for (DataDescriptionEntry e : ws == null ? List.<DataDescriptionEntry>of() : ws.getRootDataDescriptionEntries()) {
+                if (!(e instanceof DataDescriptionEntryGroup g) || g.getGlobalClause() == null) {
+                    continue;
+                }
+                var pid = c.getKey().getIdentificationDivision().getProgramIdParagraph();
+                if (pid.getAttribute() == io.proleap.cobol.asg.metamodel.identification.ProgramIdParagraph.Attribute.INITIAL) {
+                    dataDecision(e.getCtx(), "DATA", "GLOBAL items of an IS INITIAL program are not supported");
+                    continue;
+                }
+                buildItem(e, null);
+                DataItem item = items.get(e);
+                if (item != null && item.kind() != DataItem.Kind.UNSUPPORTED) {
+                    item.importGlobal(c.getValue(), depth);
+                    roots.add(item);
+                }
+            }
+            var file = data == null ? null : data.getFileSection();
+            if (file != null && file.getFileDescriptionEntries().stream().anyMatch(fd -> fd.getGlobalClause() != null)) {
+                dataDecision(file.getCtx(), "DATA", "GLOBAL files of a containing program are not supported");
+            }
+        }
+    }
+
+    /** {@code global(name)}: the storage of this program's GLOBAL records, which its nested programs share. */
+    private void addGlobalAccessor(ClassOrInterfaceDeclaration cls, Map<DataItem, String> storages) {
+        List<DataItem> globals = roots.stream().filter(r -> r.global() && r.globalOwner() == null && storages.containsKey(r)).toList();
+        if (globals.isEmpty()) {
+            return;
+        }
+        MethodDeclaration m = cls.addMethod("global", Modifier.Keyword.PUBLIC);
+        m.setType("Storage");
+        m.addParameter(type("String"), "name");
+        m.setJavadocComment("The storage of a GLOBAL record, for the nested programs that share it.");
+        var sw = new com.github.javaparser.ast.expr.SwitchExpr();
+        sw.setSelector(name("name"));
+        for (DataItem g : globals) {
+            sw.getEntries().add(new com.github.javaparser.ast.stmt.SwitchEntry(NodeList.nodeList(str(g.cobolName().toUpperCase(Locale.ROOT))),
+                    com.github.javaparser.ast.stmt.SwitchEntry.Type.EXPRESSION, NodeList.nodeList(stmt(name(storages.get(g))))));
+        }
+        sw.getEntries().add(new com.github.javaparser.ast.stmt.SwitchEntry(new NodeList<>(), com.github.javaparser.ast.stmt.SwitchEntry.Type.EXPRESSION,
+                NodeList.nodeList(stmt(new NullLiteralExpr()))));
+        m.setBody(new BlockStmt(NodeList.nodeList(new ReturnStmt(sw))));
+    }
     /** Statements putting LOCAL-STORAGE in its initial state. */
     private final List<Statement> localInit = new ArrayList<>();
 
@@ -779,6 +819,31 @@ public final class ProgramTranslator implements TranslationContext {
             f.linage[i] = new com.github.javaparser.ast.expr.LambdaExpr(new NodeList<>(), value);
         }
         return null;
+    }
+
+    /** OCCURS, TALLY, the layout of every record, RENAMES and table checks, once every item exists. */
+    private void layoutDataModel() {
+        for (PendingTable t : tables) {
+            occurs(t.item(), t.entry());
+        }
+        if (usesTally()) {
+            // GnuCOBOL's TALLY: GLOBAL PICTURE 9(5) USAGE BINARY VALUE ZERO.
+            DataItem tally = new DataItem("TALLY", DataItem.Kind.NUMERIC, new Picture.Numeric(5, 0, false), null, null, 0);
+            tally.usage(DataItem.Usage.BINARY);
+            tally.javaName(allocateField("tally"));
+            fieldOrder.add(tally);
+            roots.add(tally);
+            this.tally = tally;
+        }
+        for (DataItem root : roots) {
+            layout(root, 0);
+        }
+        for (PendingRename r : renames) {
+            resolveRename(r);
+        }
+        for (PendingTable t : tables) {
+            checkTable(t.item(), t.entry());
+        }
     }
 
     /** SELECT entries: ASSIGN through Dialect.file_assignments, SEQUENTIAL / LINE SEQUENTIAL organisation, FILE STATUS. */
@@ -1230,6 +1295,9 @@ public final class ProgramTranslator implements TranslationContext {
             if (g.getExternalClause() != null) {
                 item.external(name.toUpperCase(Locale.ROOT));
             }
+            if (g.getGlobalClause() != null) {
+                item.markGlobal();
+            }
             if (kind != DataItem.Kind.GROUP) {
                 String valueProblem = initialValue(item, g);
                 if (valueProblem != null) {
@@ -1438,8 +1506,8 @@ public final class ProgramTranslator implements TranslationContext {
     }
 
     private static String unsupportedClauses(DataDescriptionEntryGroup g) {
-        if (g.getGlobalClause() != null) {
-            return "GLOBAL is not supported";
+        if (g.getGlobalClause() != null && g.getLevelNumber() != 1 && g.getLevelNumber() != 77) {
+            return "GLOBAL on a subordinate item";
         }
         if (g.getExternalClause() != null) {
             var ext = (CobolParser.DataExternalClauseContext) g.getExternalClause().getCtx();
@@ -1649,7 +1717,7 @@ public final class ProgramTranslator implements TranslationContext {
             if (item.hasAccessor()) {
                 String storage = storageField(cls, record, storages, sizes);
                 accessors.add(item);
-                if (!item.isGroup() && !item.inRedefines() && !item.fileRecord() && item.externalName() == null) {
+                if (!item.isGroup() && !item.inRedefines() && !item.fileRecord() && item.externalName() == null && item.globalOwner() == null) {
                     var init = tableInitializer(item, storage);
                     if (item.local()) {
                         localInit.addAll(init.getBody().getStatements());
@@ -1674,7 +1742,7 @@ public final class ProgramTranslator implements TranslationContext {
                 localInit.add(stmt(initialCall(item, name(item.javaName()))));
             }
             if (item == record && !item.isGroup() && plain(item) && !item.fileRecord() && item.externalName() == null && !item.local()
-                    && roots.stream().noneMatch(r -> r.redefines() == item)) {
+                    && !item.global() && item.globalOwner() == null && roots.stream().noneMatch(r -> r.redefines() == item)) {
                 init = standalone(item);
             } else {
                 init = view(item, name(storageField(cls, record, storages, sizes)));
@@ -1749,6 +1817,7 @@ public final class ProgramTranslator implements TranslationContext {
         for (DataItem item : accessors) {
             addAccessor(cls, item, storages.get(storageRoot(item.record())));
         }
+        addGlobalAccessor(cls, storages);
         if (in.unit().getProcedureDivision() != null && in.unit().getProcedureDivision().getUsingClause() != null) {
             addUsing(cls);
         }
@@ -1764,7 +1833,9 @@ public final class ProgramTranslator implements TranslationContext {
             storage = allocateField(Names.fieldName(record.cobolName()) + "Storage");
             storages.put(record, storage);
             int size = sizes.get(record);
-            Expression init = record.externalName() != null
+            Expression init = record.globalOwner() != null
+                    ? call(staticCall(record.globalOwner(), "instance"), "global", str(record.cobolName().toUpperCase(Locale.ROOT)))
+                    : record.externalName() != null
                     ? staticCall("ProgramSupport", "external", str(record.externalName()), integer(Math.max(1, size)))
                     : record.fileRecord() ? staticCall("Storage", "zeros", integer(Math.max(1, size)))
                     : create("Storage", integer(Math.max(1, size)));
@@ -1940,7 +2011,7 @@ public final class ProgramTranslator implements TranslationContext {
             return create("AlphanumericField", storage, integer(item.offset()), integer(Math.max(1, item.size())));
         }
         Expression v = viewConstructor(item, storage, integer(item.offset()));
-        if (item.inRedefines() || item.fileRecord() || item.externalName() != null || item.local()) {
+        if (item.inRedefines() || item.fileRecord() || item.externalName() != null || item.local() || item.globalOwner() != null) {
             return v;
         }
         return initialCall(item, v);
@@ -3494,10 +3565,13 @@ public final class ProgramTranslator implements TranslationContext {
                 }
             }
             if (next == qualifiers.size()) {
-                if (found != null) {
+                // A program's own item hides a GLOBAL one of the same name; nearer containers hide farther ones.
+                if (found != null && found.globalDepth() == item.globalDepth()) {
                     throw HandlerException.unsupported(ctx.getText() + " is ambiguous");
                 }
-                found = item;
+                if (found == null || item.globalDepth() < found.globalDepth()) {
+                    found = item;
+                }
             }
         }
         if (found == null && qualifiers.isEmpty() && indexesByName.containsKey(name.toUpperCase(Locale.ROOT))) {

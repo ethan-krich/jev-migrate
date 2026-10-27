@@ -506,9 +506,21 @@ public final class Session {
         java.util.function.Function<String, Optional<List<Integer>>> parameters = pid -> scope.get(pid) != null && scope.get(pid)[1] instanceof Nested n
                 ? ProgramTranslator.parameters(n.unit(), ps.sourceMap, ps.relativePath, n.programId(), dialect, 0)
                 : programParameters(pid);
+        // The containing programs, innermost first, whose GLOBAL items this one sees.
+        List<Map.Entry<ProgramUnit, String>> containers = new ArrayList<>();
+        ProgramUnit at = unit;
+        while (at != ps.unit) {
+            ProgramUnit current = at;
+            Nested n = ps.nested.stream().filter(x -> x.unit() == current).findFirst().orElseThrow();
+            at = n.container() == null ? ps.unit : n.container();
+            ProgramUnit owner = at;
+            String ownerClass = owner == ps.unit ? ps.fqcn()
+                    : ps.fqcn() + "." + ps.nested.stream().filter(x -> x.unit() == owner).findFirst().orElseThrow().className();
+            containers.add(Map.entry(owner, ownerClass));
+        }
         return new ProgramTranslator(new ProgramTranslator.Input(unit, ps.sourceMap, ps.relativePath, programId,
                 ps.packageName, className, layout.runtimePackage(), registry, builtins,
-                pid -> Optional.ofNullable(classes.get(pid)), dialect, parameters, classes, Map.copyOf(entries))).translate();
+                pid -> Optional.ofNullable(classes.get(pid)), dialect, parameters, classes, Map.copyOf(entries), containers)).translate();
     }
 
     private void register(Decision d) {

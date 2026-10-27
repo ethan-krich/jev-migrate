@@ -1,0 +1,7 @@
+{
+  "description": "GLOBAL WORKING-STORAGE items (elementary, group, table) shared by a program and the programs nested in it at any depth; a nested program's own item hides a GLOBAL one of the same name",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native"},
+  "equivalence": {"programs": ["GOUTER.cbl"], "main_class": "fixtures.global_items.Gouter"},
+  "layout": {"base_package": "fixtures.global_items"}
+}

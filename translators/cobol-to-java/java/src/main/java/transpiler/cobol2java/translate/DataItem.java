@@ -55,6 +55,11 @@ public final class DataItem {
     private String externalName;
     /** A LOCAL-STORAGE record: initialised at each invocation. */
     private boolean local;
+    /** Declared GLOBAL (a record of this program that its nested programs share). */
+    private boolean global;
+    /** For a GLOBAL record of a containing program: that program's class, and how many levels out it is. */
+    private String globalOwner;
+    private int globalDepth;
 
     DataItem(String cobolName, Kind kind, Picture picture, String unsupportedReason, DataItem parent, int line) {
         this.cobolName = cobolName;
@@ -317,6 +322,30 @@ public final class DataItem {
     void renames(DataItem record, int offset, int size) {
         this.renamedRecord = record;
         layout(offset, size);
+    }
+
+    void markGlobal() {
+        this.global = true;
+    }
+
+    /** Whether this record (or the record of this item) is declared GLOBAL in this program. */
+    public boolean global() {
+        return record().global;
+    }
+
+    void importGlobal(String owner, int depth) {
+        this.globalOwner = owner;
+        this.globalDepth = depth;
+    }
+
+    /** The class of the containing program owning this GLOBAL item, or null for this program's own items. */
+    public String globalOwner() {
+        return record().globalOwner;
+    }
+
+    /** 0 for this program's own items, else how many containers out the GLOBAL item is declared. */
+    public int globalDepth() {
+        return record().globalDepth;
     }
 
     void markLocal() {
