@@ -156,8 +156,12 @@ equivalence fixtures.
 | ✅ | `WRITE … BEFORE / AFTER ADVANCING n LINES / PAGE / mnemonic`, `LINAGE` (`FOOTING`, `TOP`, `BOTTOM`), `LINAGE-COUNTER`, `[NOT] AT END-OF-PAGE` | GnuCOBOL's control bytes and paging, byte for byte |
 | ❌ | `SELECT OPTIONAL`, `ASSIGN TO` a data item (file name chosen at run time), split keys, `SUPPRESS WHEN`, `LOCK` phrases, SORT / MERGE `USING` / `GIVING` of RELATIVE / INDEXED files, `REWRITE` of an INDEXED file with alternate keys in `ACCESS SEQUENTIAL`, `USE FOR DEBUGGING` / `GLOBAL` declaratives, declaratives with `GO TO` / `PERFORM THRU`, `RERUN` / `MULTIPLE FILE` | decisions |
 | ✅ | `ACCEPT FROM ENVIRONMENT-VALUE / ENVIRONMENT "name" / ARGUMENT-NUMBER / ARGUMENT-VALUE / COMMAND-LINE`, `DISPLAY UPON ENVIRONMENT-NAME / ENVIRONMENT-VALUE / ARGUMENT-NUMBER`, `[NOT] ON EXCEPTION` | as GnuCOBOL: unset variables give spaces and an exception |
-| ❌ | `CALL` of a program outside the project or of the program itself, `CALL … RETURNING`, `DISPLAY UPON` printer / other devices, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
+| ❌ | `CALL` of a program outside the project, `CALL … RETURNING`, `DISPLAY UPON` printer / other devices, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
 | ❌ | Other special registers (`DEBUG-ITEM`, `SORT-RETURN`, …), free format / other dialects | files ProLeap cannot parse (XML / JSON GENERATE, ALLOCATE, OO COBOL, …) fail with `unsupported_dialect` |
+
+Constructs deliberately left to Phase 2 (floating point, pointers, national pictures, free
+format, operator and printer devices, EBCDIC data) are listed with the reasons in
+[docs/architecture.md](docs/architecture.md#constructs-deferred-to-phase-2).
 
 Known divergence: GnuCOBOL 3.2 prints an empty value for a `COMPUTE` receiver when it is displayed
 *inside that statement's own* `ON SIZE ERROR` phrase. The translation prints the (unchanged) value.
