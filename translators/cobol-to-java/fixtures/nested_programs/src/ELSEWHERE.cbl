@@ -1,0 +1,9 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ELSEWHERE.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 PN PIC X(8) VALUE "INNER-A".
+       PROCEDURE DIVISION.
+           CALL PN ON EXCEPTION DISPLAY "inner-a not visible here"
+           END-CALL.
+           GOBACK.

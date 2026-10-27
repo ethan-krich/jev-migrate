@@ -1966,7 +1966,8 @@ public final class ProgramTranslator implements TranslationContext {
             instance.setJavadocComment("IS INITIAL: a fresh instance (WORKING-STORAGE in its initial state) for every CALL.");
             instance.setBody(new BlockStmt(NodeList.nodeList(new ReturnStmt(create(in.className())))));
         } else {
-            if (attribute != null && attribute != io.proleap.cobol.asg.metamodel.identification.ProgramIdParagraph.Attribute.RECURSIVE) {
+            if (attribute != null && attribute != io.proleap.cobol.asg.metamodel.identification.ProgramIdParagraph.Attribute.RECURSIVE
+                    && attribute != io.proleap.cobol.asg.metamodel.identification.ProgramIdParagraph.Attribute.COMMON) {
                 dataDecision(programId.getCtx(), "IDENTIFICATION", "PROGRAM-ID ... IS " + attribute + " is not supported");
             }
             instance.setJavadocComment("The program's single instance in this run unit (WORKING-STORAGE persists across CALLs).");

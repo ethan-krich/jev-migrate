@@ -1,0 +1,10 @@
+inner-a 1 outr
+inner-c (nested in inner-a)
+inner-b
+inner-a 2 chgd
+inner-c (nested in inner-a)
+inner-b
+outer chgd
+inner-b
+inner-c not visible
+inner-a not visible here
