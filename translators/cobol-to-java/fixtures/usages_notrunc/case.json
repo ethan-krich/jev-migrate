@@ -1,0 +1,8 @@
+{
+  "description": "The usages fixture with binary items limited by their bytes, not their PICTURE (Dialect.binary_truncate = false, cobc -fno-binary-truncate)",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "out_of_range": "fail", "binary_truncate": false},
+  "equivalence": {"programs": ["USAGES.cbl"], "main_class": "fixtures.usages_notrunc.Usages",
+                  "cobc_flags": ["-fec=EC-BOUND-SUBSCRIPT", "-fno-binary-truncate"]},
+  "layout": {"base_package": "fixtures.usages_notrunc"}
+}

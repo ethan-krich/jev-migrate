@@ -8,7 +8,7 @@
 | **Python** `cobol_to_java` (`translators/cobol-to-java/python/`) | Default mapping table (handler ids only), `Layout` folder convention, handler/fact catalog for early validation | Implement semantics |
 | **C++** `transpiler-core` (`core/`) | File discovery (dirs, files, globs incl. `**`), translator selection from `translators/*/translator.json`, worker process lifecycle, timeouts, NDJSON protocol, decision batching/validation/caching, run report | Know about COBOL, Java, ProLeap or JavaParser |
 | **Java** worker (`translators/cobol-to-java/java/`) | Parsing (ProLeap), semantic checks, mapping-rule selection, builtin handlers, JavaParser AST construction, session state (partial ASTs, decisions), writing output | Execute Python; write output while decisions are pending |
-| **Java** runtime (`…/java/runtime/`) | COBOL data semantics used by generated code (`AlphanumericField`, `NumericField`, `Display`, `ProgramSupport`) | Depend on anything; it is copied into every output |
+| **Java** runtime (`…/java/runtime/`) | COBOL data semantics used by generated code: byte-addressed `Storage` per level-01 record with `AlphanumericField` / `NumericField` (zoned, packed, binary) / `EditedField` views (GnuCOBOL byte images), `Bounds` (run-time range checks), `StringOps`, `Functions`, `CobolFile` (sequential), `RelativeFile`, `IndexedFile`, `SortFile`, `PerformStack`, `Display`, `ProgramSupport` (CALL, LINKAGE binding) | Depend on anything; it is copied into every output |
 
 ## Data flow
 
@@ -45,7 +45,7 @@ changing the protocol.
 - `CALL 'X'` becomes a static call only if `X` is a program in the session. Otherwise it is a
   `missing_target_api` decision ("unresolved cross-file dependency").
 - Copybooks are expanded per program by ProLeap. Each program gets its own copy of the copied
-  data, which is COBOL's semantics. A missing copybook fails that file with `missing_copybook`.
+  data, which is COBOL's semantics. A missing copybook fails that file with `missing_copybook`. A file ProLeap cannot parse (a dialect construct its grammar does not cover, such as XML / JSON GENERATE, ALLOCATE, object-oriented COBOL or compiler directives, or invalid COBOL) fails with `unsupported_dialect`, naming the construct and line when they can be recognised.
 - Output paths and class names are deterministic. Collisions fail both files; nothing is renamed.
 
 ## Decisions
@@ -94,6 +94,28 @@ Nothing below is implemented. The interfaces it plugs into exist and are tested.
 
 Selections are constrained to worker-validated candidates by design. A model can never inject
 arbitrary target code.
+
+### Constructs deferred to Phase 2
+
+These constructs are deliberately not translated in Phase 1. They are decisions today, and
+they stay that way until Jev (or a project callback) can supply what the source alone does not
+determine. Each one either has no single correct Java behaviour, or GnuCOBOL 3.2 cannot serve
+as the reference to prove an exact one.
+
+| Construct | Decision today | Why it waits for Phase 2 |
+|---|---|---|
+| `COMP-1` / `COMP-2` (floating point) | `unsupported_construct` | IEEE results and GnuCOBOL's DISPLAY of floats depend on its C library; mainframe data uses hexadecimal floating point, which GnuCOBOL does not reproduce |
+| Floating-point intrinsic functions (`SQRT`, `LOG`, `EXP`, trigonometry, `RANDOM`, statistics, `PRESENT-VALUE`, `ANNUITY`) | `unsupported_construct` | Last-digit results differ between glibc / GMP and Java's `Math` |
+| `**` with a non-integer or negative exponent | `unsupported_construct` | Same: not provably bit-exact |
+| `POINTER`, `ADDRESS OF`, `ALLOCATE` / `FREE`, `SET ADDRESS` | `unsupported_construct` (`ALLOCATE`: `unsupported_dialect`, ProLeap cannot parse it) | Byte-addressed storage can model offsets, not arbitrary addresses or memory shared with C |
+| `N` (national) pictures | `unsupported_construct` | GnuCOBOL 3.2's national support is incomplete, so there is no reliable reference |
+| Free-format source | `source_format` accepts only `fixed`, `variable`, `tandem` | ProLeap's grammar does not read it; needs a reformatter or grammar work |
+| `STOP literal` | `missing_target_api` | Shows the literal and waits for an operator; the target system decides what replaces the console |
+| `DISPLAY UPON` printer / other devices | `missing_target_api` | The device has no Java counterpart until the project names one |
+| EBCDIC data (`Dialect.encoding = ebcdic`) | `missing_mapping` / `unsupported_construct` | GnuCOBOL runs on ASCII data, so EBCDIC byte images cannot be checked against it (the EBCDIC *collating sequence* is supported) |
+
+Like every decision, these may get worker-validated candidates over time; a model choosing
+among them still never writes target code itself.
 
 ## Adding a language pair
 

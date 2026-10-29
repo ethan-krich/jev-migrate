@@ -1,0 +1,26 @@
+suba 1
+suba 2
+rc +000000002
+suba 1
+suba 1
+suba 2
+1 noexc
+2 exc
+3 exc +000000007
+4 ovf
+5 spaces exc
+cancel unknown ok
+subb [abcd]
+arg zz  
+subb [1234]
+longa zz  56
+subb [abcd]
+content abcd
+sube
+main exc -000000001
+sube after
+back -000000001
+in mixed
+in mixed
+MIXED exc
+subf cancels itself

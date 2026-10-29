@@ -1,0 +1,6 @@
+{
+  "description": "DIVIDE REMAINDER (negative values, ROUNDED, size errors) and CORRESPONDING",
+  "expect": {"status": "ok"},
+  "equivalence": {"programs": ["CORRS.cbl"], "main_class": "fixtures.corresponding.Corrs"},
+  "layout": {"base_package": "fixtures.corresponding"}
+}

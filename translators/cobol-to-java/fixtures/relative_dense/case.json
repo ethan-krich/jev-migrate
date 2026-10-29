@@ -1,0 +1,7 @@
+{
+  "description": "Dense RELATIVE fixture (generate_dense_files.py): 500 seeded random statements through a DYNAMIC and a SEQUENTIAL connector of one file, statuses, RELATIVE KEYs and records after each",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "file_assignments": {"drel.dat": "drel.dat"}},
+  "equivalence": {"programs": ["RELDENSE.cbl"], "main_class": "fixtures.relative_dense.Reldense"},
+  "layout": {"base_package": "fixtures.relative_dense"}
+}

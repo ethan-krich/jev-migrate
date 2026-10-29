@@ -1,0 +1,9 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. COUNTER IS INITIAL.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 CALLS     PIC 9 VALUE 0.
+       PROCEDURE DIVISION.
+           ADD 1 TO CALLS.
+           DISPLAY "initial program call " CALLS.
+           GOBACK.

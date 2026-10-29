@@ -1,0 +1,31 @@
+missing open 35
+read closed 47
+open 00
+open again 41
+01 [short   ] 00
+02 [exactly8] 00
+03 [longer t] 06
+04 [han eigh] 06
+05 [t       ] 00
+06 [        ] 00
+07 [tab	here] 00
+08 [last-no-] 06
+09 [newline ] 00
+eof status 10
+close 00 00
+close again 42
+abcd -012 00
+wxyz +345 00
+bin eof 10
+out [short     ]
+out [exactly8  ]
+out [longer t  ]
+out [han eigh  ]
+out [t         ]
+out [          ]
+out [last-no-  ]
+out [newline   ]
+out [appended  ]
+second wxyz +345
+rewritten abcd +099 00
+unchecked open next

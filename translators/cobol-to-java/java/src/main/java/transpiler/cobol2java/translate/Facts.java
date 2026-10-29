@@ -4,17 +4,20 @@ import io.proleap.cobol.asg.metamodel.ASGElement;
 import io.proleap.cobol.asg.metamodel.Literal;
 import io.proleap.cobol.asg.metamodel.procedure.StatementType;
 import io.proleap.cobol.asg.metamodel.procedure.StatementTypeEnum;
+import io.proleap.cobol.asg.metamodel.procedure.accept.AcceptStatement;
 import io.proleap.cobol.asg.metamodel.procedure.add.AddStatement;
 import io.proleap.cobol.asg.metamodel.procedure.call.CallStatement;
 import io.proleap.cobol.asg.metamodel.procedure.compute.ComputeStatement;
 import io.proleap.cobol.asg.metamodel.procedure.display.DisplayStatement;
 import io.proleap.cobol.asg.metamodel.procedure.divide.DivideStatement;
+import io.proleap.cobol.asg.metamodel.procedure.evaluate.EvaluateStatement;
 import io.proleap.cobol.asg.metamodel.procedure.ifstmt.IfStatement;
 import io.proleap.cobol.asg.metamodel.procedure.move.MoveStatement;
 import io.proleap.cobol.asg.metamodel.procedure.multiply.MultiplyStatement;
 import io.proleap.cobol.asg.metamodel.procedure.perform.PerformStatement;
 import io.proleap.cobol.asg.metamodel.procedure.perform.PerformType;
 import io.proleap.cobol.asg.metamodel.procedure.perform.TestClause;
+import io.proleap.cobol.asg.metamodel.procedure.set.SetStatement;
 import io.proleap.cobol.asg.metamodel.procedure.stop.StopStatement;
 import io.proleap.cobol.asg.metamodel.procedure.subtract.SubtractStatement;
 import io.proleap.cobol.asg.metamodel.valuestmt.LiteralValueStmt;
@@ -46,7 +49,31 @@ public final class Facts {
             Map.entry("PERFORM", Set.of("form", "loop", "test", "thru")),
             Map.entry("STOP", Set.of("kind")),
             Map.entry("EXIT", Set.of("kind")),
-            Map.entry("CALL", Set.of("program", "program_kind", "program_in_project", "using")));
+            Map.entry("CALL", Set.of("program", "program_kind", "program_in_project", "using")),
+            Map.entry("CANCEL", Set.of()),
+            Map.entry("ENTRY", Set.of()),
+            Map.entry("SET", Set.of("form")),
+            Map.entry("EVALUATE", Set.of("subjects", "has_other", "has_thru")),
+            Map.entry("ACCEPT", Set.of("from")),
+            Map.entry("EXHIBIT", Set.of("named", "changed")),
+            Map.entry("INITIALIZE", Set.of("replacing", "to_value", "with_filler", "then_default")),
+            Map.entry("SEARCH", Set.of("all", "varying", "at_end")),
+            Map.entry("STRING", Set.of("pointer", "overflow")),
+            Map.entry("UNSTRING", Set.of("delimited", "pointer", "tallying", "overflow")),
+            Map.entry("INSPECT", Set.of("form")),
+            Map.entry("GO_TO", Set.of("depending")),
+            Map.entry("ALTER", Set.of()),
+            Map.entry("OPEN", Set.of()),
+            Map.entry("CLOSE", Set.of()),
+            Map.entry("READ", Set.of("at_end", "into", "organization", "direction", "key", "invalid_key")),
+            Map.entry("WRITE", Set.of("from", "advancing", "organization", "invalid_key")),
+            Map.entry("REWRITE", Set.of("from", "organization", "invalid_key")),
+            Map.entry("DELETE", Set.of("organization", "invalid_key")),
+            Map.entry("START", Set.of("organization", "key", "invalid_key")),
+            Map.entry("SORT", Set.of("duplicates", "input_procedure", "output_procedure")),
+            Map.entry("MERGE", Set.of("output_procedure")),
+            Map.entry("RELEASE", Set.of("from")),
+            Map.entry("RETURN", Set.of("into")));
 
     private Facts() {}
 
@@ -71,11 +98,18 @@ public final class Facts {
             case "MOVE" -> {
                 MoveStatement move = (MoveStatement) s;
                 if (move.getMoveType() == MoveStatement.MoveType.MOVE_TO) {
-                    Operand src = tryOperand(() -> ctx.operand(move.getMoveToStatement().getSendingArea().getSendingAreaValueStmt()));
+                    Operand src = tryOperand(() -> Builtins.moveAll(move,
+                            ctx.operand(move.getMoveToStatement().getSendingArea().getSendingAreaValueStmt())));
                     f.put("source_category", src == null ? "unsupported" : src.category());
-                    f.put("source_figurative", src instanceof Operand.Figurative fig ? (fig.fill() == '0' ? "zero" : "space") : null);
+                    f.put("source_figurative", src instanceof Operand.Figurative fig
+                            ? fig.name().toLowerCase(Locale.ROOT).replace('-', '_') : null);
                     Operand dst = tryOperand(() -> ctx.operand(unit.receiver()));
                     f.put("target_category", dst == null ? "unsupported" : dst.category());
+                } else if (unit.corresponding() != null && unit.corresponding().problem() == null) {
+                    // One pair of MOVE CORRESPONDING: matched like a plain MOVE of the pair.
+                    f.put("source_category", unit.corresponding().source().category());
+                    f.put("target_category", unit.corresponding().target().category());
+                    f.put("source_figurative", null);
                 } else {
                     f.put("source_category", "corresponding");
                     f.put("target_category", "corresponding");
@@ -127,7 +161,7 @@ public final class Facts {
             }
             case "DISPLAY" -> {
                 DisplayStatement d = (DisplayStatement) s;
-                f.put("upon", d.getUpon() == null ? null : d.getUpon().getUponCall().getName().toUpperCase(Locale.ROOT));
+                f.put("upon", d.getUpon() == null ? null : ctx.device(Builtins.deviceName(d.getUpon())));
                 f.put("no_advancing", d.getWith() != null);
                 f.put("operands", d.getOperands().size());
             }
@@ -152,7 +186,136 @@ public final class Facts {
                 case STOP_RUN_AND_DISPLAY -> "literal";
                 case STOP_RUN_GIVING -> "giving";
             });
-            case "EXIT" -> f.put("kind", containsToken(s, "PROGRAM") ? "program" : "plain");
+            case "EXIT" -> f.put("kind", exitKind(s));
+            case "SET" -> {
+                SetStatement set = (SetStatement) s;
+                String form;
+                if (set.getSetType() == SetStatement.SetType.BY) {
+                    form = set.getSetBy().getSetByType() == io.proleap.cobol.asg.metamodel.procedure.set.SetBy.SetByType.UP ? "up_by" : "down_by";
+                } else {
+                    form = "to";
+                    if (set.getSetTos().size() == 1 && set.getSetTos().getFirst().getValues().size() == 1) {
+                        var value = set.getSetTos().getFirst().getValues().getFirst();
+                        Boolean b = Builtins.booleanValue(value.getValueStmt());
+                        if (b != null) {
+                            form = b ? "true" : "false";
+                        } else if (value.getValueType() == io.proleap.cobol.asg.metamodel.procedure.set.Value.ValueType.ON
+                                || value.getValueType() == io.proleap.cobol.asg.metamodel.procedure.set.Value.ValueType.OFF) {
+                            form = "on_off";
+                        }
+                    }
+                }
+                f.put("form", form);
+            }
+            case "EVALUATE" -> {
+                EvaluateStatement e = (EvaluateStatement) s;
+                f.put("subjects", 1 + e.getAlsoSelects().size());
+                f.put("has_other", e.getWhenOther() != null);
+                f.put("has_thru", e.getWhenPhrases().stream().flatMap(p -> p.getWhens().stream())
+                        .anyMatch(w -> w.getCondition().getThrough() != null
+                                || w.getAlsoConditions().stream().anyMatch(a -> a.getCondition().getThrough() != null)));
+            }
+            case "ACCEPT" -> {
+                AcceptStatement a = (AcceptStatement) s;
+                String from = acceptFrom(a);
+                if (((io.proleap.cobol.CobolParser.AcceptStatementContext) a.getCtx()).ENVIRONMENT() != null) {
+                    from = "environment";
+                } else if (a.getAcceptType() == AcceptStatement.AcceptType.MNEMONIC) {
+                    String device = ctx.device(Builtins.deviceName(a.getAcceptFromMnemonicStatement()));
+                    from = switch (device) {
+                        case "SYSIN", "CONSOLE" -> "stdin";
+                        case "ENVIRONMENT-VALUE" -> "environment";
+                        case "ARGUMENT-NUMBER" -> "argument_number";
+                        case "ARGUMENT-VALUE" -> "argument_value";
+                        case "COMMAND-LINE" -> "command_line";
+                        default -> "device";
+                    };
+                }
+                f.put("from", from);
+            }
+            case "INITIALIZE" -> {
+                var init = (io.proleap.cobol.CobolParser.InitializeStatementContext) s.getCtx();
+                f.put("replacing", init.initializeReplacingPhrase() != null);
+                f.put("to_value", init.VALUE() != null);
+                f.put("with_filler", init.FILLER() != null);
+                f.put("then_default", init.DEFAULT() != null);
+            }
+            case "STRING" -> {
+                var st = (io.proleap.cobol.asg.metamodel.procedure.string.StringStatement) s;
+                f.put("pointer", st.getWithPointerPhrase() != null);
+                f.put("overflow", st.getOnOverflowPhrase() != null || st.getNotOnOverflowPhrase() != null);
+            }
+            case "UNSTRING" -> {
+                var un = (io.proleap.cobol.asg.metamodel.procedure.unstring.UnstringStatement) s;
+                f.put("delimited", un.getSending().getDelimitedByPhrase() != null);
+                f.put("pointer", un.getWithPointerPhrase() != null);
+                f.put("tallying", un.getTallyingPhrase() != null);
+                f.put("overflow", un.getOnOverflowPhrase() != null || un.getNotOnOverflowPhrase() != null);
+            }
+            case "INSPECT" -> f.put("form", ((io.proleap.cobol.asg.metamodel.procedure.inspect.InspectStatement) s).getInspectType()
+                    .name().toLowerCase(Locale.ROOT));
+            case "GO_TO" -> f.put("depending", ((io.proleap.cobol.asg.metamodel.procedure.gotostmt.GoToStatement) s).getGoToType()
+                    == io.proleap.cobol.asg.metamodel.procedure.gotostmt.GoToStatement.GoToType.DEPENDING_ON);
+            case "READ" -> {
+                var r = (io.proleap.cobol.asg.metamodel.procedure.read.ReadStatement) s;
+                f.put("at_end", r.getAtEnd() != null);
+                f.put("into", r.getInto() != null);
+                f.put("organization", organization(() -> ctx.file(r.getFileCall())));
+                String direction;
+                try {
+                    direction = Builtins.readDirection(r);
+                } catch (HandlerException e) {
+                    direction = "unsupported";
+                }
+                f.put("direction", direction);
+                f.put("key", r.getKey() != null);
+                f.put("invalid_key", r.getInvalidKeyPhrase() != null || r.getNotInvalidKeyPhrase() != null);
+            }
+            case "WRITE" -> {
+                var w = (io.proleap.cobol.asg.metamodel.procedure.write.WriteStatement) s;
+                f.put("from", w.getFrom() != null);
+                f.put("advancing", w.getAdvancingPhrase() != null);
+                f.put("organization", organization(() -> ctx.fileOfRecord(ctx.dataItem(w.getRecordCall()))));
+                f.put("invalid_key", w.getInvalidKeyPhrase() != null || w.getNotInvalidKeyPhrase() != null);
+            }
+            case "REWRITE" -> {
+                var w = (io.proleap.cobol.asg.metamodel.procedure.rewrite.RewriteStatement) s;
+                f.put("from", w.getFrom() != null);
+                f.put("organization", organization(() -> ctx.fileOfRecord(ctx.dataItem(w.getRecordCall()))));
+                f.put("invalid_key", w.getInvalidKeyPhrase() != null || w.getNotInvalidKeyPhrase() != null);
+            }
+            case "DELETE" -> {
+                var d = (io.proleap.cobol.asg.metamodel.procedure.delete.DeleteStatement) s;
+                f.put("organization", organization(() -> ctx.file(d.getFileCall())));
+                f.put("invalid_key", d.getInvalidKeyPhrase() != null || d.getNotInvalidKeyPhrase() != null);
+            }
+            case "START" -> {
+                var st = (io.proleap.cobol.asg.metamodel.procedure.start.StartStatement) s;
+                f.put("organization", organization(() -> ctx.file(st.getFileCall())));
+                f.put("key", st.getKey() != null);
+                f.put("invalid_key", st.getInvalidKeyPhrase() != null || st.getNotInvalidKeyPhrase() != null);
+            }
+            case "SORT" -> {
+                var so = (io.proleap.cobol.asg.metamodel.procedure.sort.SortStatement) s;
+                f.put("duplicates", so.getDuplicates() != null && so.getDuplicates().isDuplicatesInOrder());
+                f.put("input_procedure", so.getInputProcedure() != null);
+                f.put("output_procedure", so.getOutputProcedure() != null);
+            }
+            case "MERGE" -> f.put("output_procedure",
+                    ((io.proleap.cobol.asg.metamodel.procedure.merge.MergeStatement) s).getOutputProcedurePhrase() != null);
+            case "RELEASE" -> f.put("from", ((io.proleap.cobol.asg.metamodel.procedure.release.ReleaseStatement) s).getContentCall() != null);
+            case "RETURN" -> f.put("into", ((io.proleap.cobol.asg.metamodel.procedure.returnstmt.ReturnStatement) s).getInto() != null);
+            case "SEARCH" -> {
+                var search = (io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement) s;
+                f.put("all", ((io.proleap.cobol.CobolParser.SearchStatementContext) s.getCtx()).ALL() != null);
+                f.put("varying", search.getVaryingPhrase() != null);
+                f.put("at_end", search.getAtEndPhrase() != null);
+            }
+            case "EXHIBIT" -> {
+                var e = (io.proleap.cobol.CobolParser.ExhibitStatementContext) s.getCtx();
+                f.put("named", e.NAMED() != null);
+                f.put("changed", e.CHANGED() != null);
+            }
             case "CALL" -> {
                 CallStatement call = (CallStatement) s;
                 var program = call.getProgramValueStmt();
@@ -172,8 +335,66 @@ public final class Facts {
         return f;
     }
 
+    /** EXIT kind: plain, program, paragraph, section, perform, perform_cycle (or invalid). */
+    static String exitKind(io.proleap.cobol.asg.metamodel.procedure.Statement s) {
+        var e = (io.proleap.cobol.CobolParser.ExitStatementContext) s.getCtx();
+        if (e.PROGRAM() != null) {
+            return "program";
+        }
+        if (e.SECTION() != null) {
+            return "section";
+        }
+        String word = e.cobolWord() == null ? null : e.cobolWord().getText().toUpperCase(Locale.ROOT);
+        if (e.PERFORM() != null) {
+            return word == null ? "perform" : word.equals("CYCLE") ? "perform_cycle" : "invalid";
+        }
+        if (word != null) {
+            return word.equals("PARAGRAPH") ? "paragraph" : "invalid";
+        }
+        return "plain";
+    }
+
+    /**
+     * ACCEPT source: stdin (no FROM; FROM SYSIN / CONSOLE is resolved by the caller), date,
+     * date_yyyymmdd, day, day_yyyyddd, day_of_week, time, other_date, escape_key, message_count.
+     */
+    static String acceptFrom(AcceptStatement a) {
+        return switch (a.getAcceptType()) {
+            case NO_FROM -> "stdin";
+            case MNEMONIC -> "device";
+            case FROM_ESCAPE_KEY -> "escape_key";
+            case MESSAGE_COUNT -> "message_count";
+            case DATE -> {
+                var d = (io.proleap.cobol.CobolParser.AcceptFromDateStatementContext) a.getAcceptFromDateStatement().getCtx();
+                if (d.DATE() != null && d.TODAYS_DATE() == null) {
+                    yield d.YYYYMMDD() != null ? "date_yyyymmdd" : "date";
+                }
+                if (d.DAY() != null) {
+                    yield d.YYYYDDD() != null ? "day_yyyyddd" : "day";
+                }
+                if (d.DAY_OF_WEEK() != null) {
+                    yield "day_of_week";
+                }
+                yield d.TIME() != null ? "time" : "other_date";
+            }
+        };
+    }
+
     private interface OperandSupplier {
         Operand get() throws HandlerException;
+    }
+
+    private interface FileSupplier {
+        TranslationContext.FileRef get() throws HandlerException;
+    }
+
+    /** A file's organisation as a fact value (sequential, line_sequential, relative, indexed, sort), or unsupported. */
+    private static String organization(FileSupplier s) {
+        try {
+            return s.get().organization().name().toLowerCase(Locale.ROOT);
+        } catch (HandlerException | RuntimeException e) {
+            return "unsupported";
+        }
     }
 
     private static Operand tryOperand(OperandSupplier s) {

@@ -1,0 +1,7 @@
+{
+  "description": "CALL identifier among the project's programs (Dialect.dynamic_calls), ON EXCEPTION / ON OVERFLOW / NOT ON EXCEPTION, CANCEL (literal and identifier), case-sensitive PROGRAM-IDs, a recursive CALL caught by ON EXCEPTION, and CANCEL of an active program ending the run unit",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "dynamic_calls": "project"},
+  "equivalence": {"programs": ["MAINP.cbl", "SUBA.cbl", "SUBB.cbl", "SUBE.cbl", "MIXED.cbl", "SUBF.cbl"], "main_class": "fixtures.dynamic_calls.Mainp"},
+  "layout": {"base_package": "fixtures.dynamic_calls"}
+}

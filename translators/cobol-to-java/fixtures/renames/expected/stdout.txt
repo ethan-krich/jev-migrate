@@ -1,0 +1,19 @@
+[abc123][123][c1]][123c1]dddd][c1]
+[xyz999c1]dddd]
+[007][007]
+[008]
+c1 ok
+ab ok
+[xyz           ]
+yn
+ny
+not yn
+in range
+[YN]
+[  ]
+spaces
+tally 00000
+tally 00004
+tally 00007
+big
+tally 23456

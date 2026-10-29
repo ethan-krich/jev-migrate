@@ -1,6 +1,18 @@
 {
   "description": "Sections and paragraphs (fall-through and PERFORM), nested IF, PERFORM UNTIL/TIMES/VARYING with TEST AFTER, AND/OR precedence, sign and figurative conditions, GOBACK",
-  "expect": {"status": "ok"},
-  "equivalence": {"programs": ["FLOW.cbl"], "main_class": "fixtures.flow.Flow"},
-  "layout": {"base_package": "fixtures.flow"}
+  "expect": {
+    "status": "ok"
+  },
+  "dialect": {
+    "collating_sequence": "ascii"
+  },
+  "equivalence": {
+    "programs": [
+      "FLOW.cbl"
+    ],
+    "main_class": "fixtures.flow.Flow"
+  },
+  "layout": {
+    "base_package": "fixtures.flow"
+  }
 }

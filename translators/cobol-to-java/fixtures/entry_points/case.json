@@ -1,0 +1,7 @@
+{
+  "description": "ENTRY points: CALL of an ENTRY name (static and dynamic) starts at it with its own USING items, an ENTRY reached in the flow does nothing, and the entries share WORKING-STORAGE",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "dynamic_calls": "project"},
+  "equivalence": {"programs": ["MAINE.cbl", "SUBE.cbl"], "main_class": "fixtures.entry_points.Maine"},
+  "layout": {"base_package": "fixtures.entry_points"}
+}

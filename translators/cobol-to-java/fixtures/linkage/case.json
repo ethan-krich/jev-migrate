@@ -1,0 +1,8 @@
+{
+  "description": "LINKAGE SECTION, PROCEDURE DIVISION USING, CALL USING BY REFERENCE / BY CONTENT (sizes checked against the callee), NUMBER-OF-CALL-PARAMETERS, LENGTH OF, IS INITIAL",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "out_of_range": "fail"},
+  "equivalence": {"programs": ["CALLER.cbl", "CALLEE.cbl", "SHOWNAME.cbl", "COUNTER.cbl"], "main_class": "fixtures.linkage.Caller",
+                  "cobc_flags": ["-fec=EC-BOUND-SUBSCRIPT"]},
+  "layout": {"base_package": "fixtures.linkage"}
+}

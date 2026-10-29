@@ -1,0 +1,22 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CALLER.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 REC.
+          05 R-NAME PIC X(5) VALUE "abc".
+          05 R-AMT  PIC 9(3) VALUE 7.
+          05 R-TAB  PIC 99 OCCURS 3 VALUE 1.
+       01 CNT       PIC S9(4) COMP VALUE 1.
+       01 TOTAL     PIC 9(5) COMP-3 VALUE 0.
+       PROCEDURE DIVISION.
+           DISPLAY LENGTH OF REC " " LENGTH OF R-NAME " " LENGTH OF CNT.
+           CALL "CALLEE" USING REC BY CONTENT CNT
+                               BY REFERENCE TOTAL.
+           DISPLAY REC " " CNT " " TOTAL " " RETURN-CODE.
+           CALL "CALLEE" USING BY REFERENCE REC CNT TOTAL.
+           DISPLAY REC " " CNT " " TOTAL " " RETURN-CODE.
+           CALL "SHOWNAME" USING R-NAME.
+           CALL "SHOWNAME" USING BY CONTENT "hello".
+           CALL "COUNTER".
+           CALL "COUNTER".
+           STOP RUN.

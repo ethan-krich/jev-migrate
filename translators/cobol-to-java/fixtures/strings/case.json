@@ -1,0 +1,6 @@
+{
+  "description": "STRING (DELIMITED BY, POINTER, OVERFLOW), UNSTRING (OR, ALL, DELIMITER IN, COUNT IN, POINTER, TALLYING, OVERFLOW), INSPECT TALLYING / REPLACING / CONVERTING with BEFORE / AFTER INITIAL",
+  "expect": {"status": "ok"},
+  "equivalence": {"programs": ["STRINGS.cbl"], "main_class": "fixtures.strings.Strverbs"},
+  "layout": {"base_package": "fixtures.strings"}
+}

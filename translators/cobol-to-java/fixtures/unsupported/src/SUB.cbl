@@ -1,0 +1,8 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SUB.
+       DATA DIVISION.
+       LINKAGE SECTION.
+       01 L-ARG      PIC X(4).
+       PROCEDURE DIVISION USING L-ARG.
+           DISPLAY L-ARG.
+           GOBACK.

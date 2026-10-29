@@ -1,0 +1,10 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. SUBA.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 CNT PIC 9 VALUE 0.
+       PROCEDURE DIVISION.
+           ADD 1 TO CNT.
+           DISPLAY "suba " CNT.
+           MOVE CNT TO RETURN-CODE.
+           GOBACK.

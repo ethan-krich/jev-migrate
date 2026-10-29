@@ -1,0 +1,7 @@
+{
+  "description": "Nested programs (END PROGRAM): a program calls the programs it contains, a COMMON program is callable from its siblings, and nested programs are invisible elsewhere (also to CALL identifier); each keeps its WORKING-STORAGE",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "dynamic_calls": "project"},
+  "equivalence": {"programs": ["OUTER.cbl", "ELSEWHERE.cbl"], "main_class": "fixtures.nested_programs.Outer"},
+  "layout": {"base_package": "fixtures.nested_programs"}
+}

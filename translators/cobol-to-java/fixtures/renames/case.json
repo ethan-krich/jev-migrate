@@ -1,0 +1,7 @@
+{
+  "description": "Level-66 RENAMES (single items and THRU ranges, groups, numeric and packed items), level-88 condition-names on a group (values, THRU, SPACES, SET TO TRUE), and the TALLY special register",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native"},
+  "equivalence": {"programs": ["RENAMING.cbl"], "main_class": "fixtures.renames.Renaming"},
+  "layout": {"base_package": "fixtures.renames"}
+}

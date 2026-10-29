@@ -1,0 +1,37 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GOUTER.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 SHARED-CNT PIC 9(3) VALUE 10 GLOBAL.
+       01 SHARED-REC GLOBAL.
+          05 S-NAME PIC X(5) VALUE "outer".
+          05 S-TBL  PIC 9 OCCURS 3 VALUE 1.
+       01 SAME-NAME PIC X(5) VALUE "outer" GLOBAL.
+       01 PRIVATE-X PIC X(3) VALUE "prv".
+       PROCEDURE DIVISION.
+           CALL "GINNER".
+           DISPLAY "outer " SHARED-CNT " " SHARED-REC " " SAME-NAME.
+           CALL "GINNER".
+           DISPLAY "outer " SHARED-CNT " " SHARED-REC.
+           STOP RUN.
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GINNER.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 SAME-NAME PIC X(5) VALUE "inner".
+       PROCEDURE DIVISION.
+           ADD 1 TO SHARED-CNT.
+           MOVE "inner" TO S-NAME.
+           ADD 1 TO S-TBL(2).
+           DISPLAY "inner " SHARED-CNT " " SAME-NAME " " S-TBL(2).
+           MOVE "chgd" TO SAME-NAME.
+           CALL "GDEEP".
+           GOBACK.
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. GDEEP.
+       PROCEDURE DIVISION.
+           DISPLAY "deep " SHARED-CNT " " SAME-NAME.
+           GOBACK.
+       END PROGRAM GDEEP.
+       END PROGRAM GINNER.
+       END PROGRAM GOUTER.

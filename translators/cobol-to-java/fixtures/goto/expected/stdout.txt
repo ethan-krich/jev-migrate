@@ -1,0 +1,16 @@
+main
+a
+c
+back in main
+111213212223 end 31
+s2a
+s2c
+s2a
+s2b
+s2c
+n=05
+b
+b
+x2
+out of range, next statement
+s3a

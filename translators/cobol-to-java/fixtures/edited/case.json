@@ -1,0 +1,7 @@
+{
+  "description": "Numeric editing (Z * $ + - CR DB . , B 0 /, fixed and floating insertion), BLANK WHEN ZERO, alphanumeric editing, de-editing",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native"},
+  "equivalence": {"programs": ["EDITED.cbl"], "main_class": "fixtures.edited.Edited"},
+  "layout": {"base_package": "fixtures.edited"}
+}

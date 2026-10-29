@@ -1,0 +1,6 @@
+{
+  "description": "Debugging lines (D in the indicator area) are comments by default",
+  "expect": {"status": "ok"},
+  "equivalence": {"programs": ["DEBUGLN.cbl"], "main_class": "fixtures.debugging_lines.Debugln"},
+  "layout": {"base_package": "fixtures.debugging_lines"}
+}

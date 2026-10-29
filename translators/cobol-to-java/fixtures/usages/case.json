@@ -1,0 +1,8 @@
+{
+  "description": "USAGE PACKED-DECIMAL / COMP-3, BINARY / COMP / COMP-4 (truncated to the PICTURE), COMP-5, COMP-X, INDEX: byte images, DISPLAY, arithmetic and SIZE ERROR",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "out_of_range": "fail"},
+  "equivalence": {"programs": ["USAGES.cbl"], "main_class": "fixtures.usages.Usages",
+                  "cobc_flags": ["-fec=EC-BOUND-SUBSCRIPT"]},
+  "layout": {"base_package": "fixtures.usages"}
+}

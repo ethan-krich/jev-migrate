@@ -1,0 +1,59 @@
+open missing 35
+open io missing 35
+open out 00
+w1 00
+w2 00
+w3 00
+dup 22
+w5 00
+read on output 47
+close 00
+open io 00
+got C003PARIS 030 00
+nf 23 Z999PARIS 030
+next after nf D004PARIS 050 00
+start ge 00 B000PARIS 050
+seq B002PARIS 010 00
+seq C003PARIS 030 00
+seq D004PARIS 050 00
+eof 10
+start city 00
+city B002PARIS 010 00
+city C003PARIS 030 00
+city D004PARIS 050 00
+city A001ROME  020 00
+rk city B002PARIS 010 00
+r B002PARIS 010 00
+rw 00
+rw inv 21
+del 00
+del again 23
+start inv 23
+after bad start 46
+start lo 00
+all A001ROME  020 00
+all B002LYON  010 00
+all D004PARIS 050 00
+eof 10
+start le 00
+prev D004PARIS 050 00
+prev B002LYON  010 00
+sw 00
+sw out of order 21
+sw dup 21
+rw no read 43
+sr 005five  00
+rw key chg 00
+sr 006five  00
+rw 00
+sdel 43
+sdel again 43
+sr end 00
+sr end2 10
+ext 00
+ext low 00
+ext hi 00
+fin 002nine 
+fin 006NINE 
+fin 007nine 
+fin 009nine 

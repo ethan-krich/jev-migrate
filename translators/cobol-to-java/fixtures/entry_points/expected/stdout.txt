@@ -1,0 +1,9 @@
+main entry 1
+alt entry 2 aaaa
+a zz  
+two zz   07
+fell through
+rc +000000009
+alt entry 3 zz  
+main entry 4
+fell through

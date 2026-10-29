@@ -38,6 +38,12 @@ class Layout(Protocol):
     def to_dict(self) -> dict[str, Any]: ...
 
 
+class Dialect(Protocol):
+    """A language pair's project settings (e.g. ``cobol_to_java.Dialect``)."""
+
+    def to_options(self) -> dict[str, Any]: ...
+
+
 @dataclass(frozen=True)
 class LanguagePair:
     """What a language package contributes; registered via the ``transpiler.language_pairs`` entry point."""
@@ -49,6 +55,7 @@ class LanguagePair:
     default_mappings: Callable[[], MappingRegistry]
     default_layout: Callable[[], Layout]
     catalog: HandlerCatalog
+    default_dialect: Callable[[], Dialect] | None = None
 
 
 def language_pairs() -> dict[str, LanguagePair]:
@@ -167,6 +174,7 @@ def transpile(
     target: str = "java",
     mappings: MappingRegistry | None = None,
     layout: Layout | None = None,
+    dialect: Dialect | None = None,
     source_root: str | os.PathLike[str] | None = None,
     provider: DecisionProvider | None = None,
     options: dict[str, Any] | None = None,
@@ -182,6 +190,10 @@ def transpile(
     of those. Output files are written only when every operation was translated; otherwise the
     result is ``incomplete`` and lists the pending decisions. A ``transpile-report.json`` is
     written to ``output`` in every case.
+
+    ``dialect`` holds the project settings the source does not determine (``cobol_to_java.Dialect``);
+    without it the language pair's default dialect is used. A key given both by an explicit
+    ``dialect`` and in ``options`` is an error; ``options`` may override the default dialect.
     """
     if mappings is not None:
         pair = find_language_pair(target, source_language, mappings.language_pair)
@@ -191,6 +203,7 @@ def transpile(
     layout = layout or pair.default_layout()
     provider = provider or DeterministicProvider()
 
+    worker_options = _merge_options(dialect, pair, options or {})
     inputs = [source] if isinstance(source, (str, os.PathLike)) else list(source)
     output_path = Path(output).resolve()
     job = {
@@ -205,7 +218,7 @@ def transpile(
         "discovery": layout.discovery(),
         "translator_params": {
             "layout": layout.to_dict(),
-            "options": options or {},
+            "options": worker_options,
             "copybook_paths": [str(Path(p).resolve()) for p in copybook_paths],
         },
         "mappings": mappings.to_dict(),
@@ -234,6 +247,18 @@ def transpile(
         programs=[ProgramResult.from_json(p) for p in report.get("programs", [])],
         decisions=[DecisionRequest.from_json(d) for d in report.get("decisions", [])],
     )
+
+
+def _merge_options(dialect: Dialect | None, pair: LanguagePair, options: dict[str, Any]) -> dict[str, Any]:
+    if dialect is not None:
+        settings = dialect.to_options()
+        clash = sorted(set(settings) & set(options))
+        if clash:
+            raise TranspilerError(f"options {clash} are also set by dialect; set them in one place")
+        return {**settings, **options}
+    if pair.default_dialect is None:
+        return dict(options)
+    return {**pair.default_dialect().to_options(), **options}
 
 
 def _absolute_input(value: str | os.PathLike[str]) -> str:

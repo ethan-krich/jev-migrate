@@ -32,7 +32,7 @@ class SourceMapTest {
                 "    DISPLAY X.");            // 9
         Path file = dir.resolve("M.cbl");
         Files.writeString(file, src, StandardCharsets.ISO_8859_1);
-        var parsed = new CobolFrontend(new CobolFrontend.Options(CobolSourceFormatEnum.FIXED, StandardCharsets.ISO_8859_1))
+        var parsed = new CobolFrontend(new CobolFrontend.Options(CobolSourceFormatEnum.FIXED, StandardCharsets.ISO_8859_1, false))
                 .parse(file, List.of(dir), List.of(".cpy"));
         SourceMap map = parsed.sourceMap();
         assertTrue(map.exact());

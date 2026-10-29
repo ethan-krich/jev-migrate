@@ -1,0 +1,23 @@
+read one  00
+read two  00
+use in-file 10 count 01
+  in-errors paragraph
+after eof 10
+use in-file 46 count 02
+  in-errors paragraph
+after 46 46
+use in-file 41 count 03
+  in-errors paragraph
+after reopen 41
+use input mode
+after missing
+use input mode
+after read missing
+use output mode
+after read output
+use output mode
+after double close
+use keyed
+after dup
+invalid key phrase
+errors 03

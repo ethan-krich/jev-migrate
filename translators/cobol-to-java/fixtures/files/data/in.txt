@@ -1,0 +1,6 @@
+short
+exactly8
+longer than eight
+
+tab	here
+last-no-newline

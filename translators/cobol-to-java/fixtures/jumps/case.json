@@ -1,0 +1,6 @@
+{
+  "description": "NEXT SENTENCE (IF and standalone), EXIT PARAGRAPH, EXIT SECTION, EXIT PERFORM [CYCLE]",
+  "expect": {"status": "ok"},
+  "equivalence": {"programs": ["JUMPS.cbl"], "main_class": "fixtures.jumps.Jumps"},
+  "layout": {"base_package": "fixtures.jumps"}
+}

@@ -1,0 +1,19 @@
+[Ada Lovelace********]
+overflow at 07
+[  abcd]
+bad pointer 09
+fits, pointer 05
+[abcdcd]
+unstring overflow
+[alpha ][,]05[beta  ][,]04
+[      ][gamma ] 04
+[      ][a     ][b     ] 10 03
+[abcdef][ghij  ]
+007 000 002
+001
+[AABxy  xxB xXx      ]
+[..Bxy  xxB xXx      ]
+[..bXY  XXb XXX      ]
+009 [__a__b___c__]
+01
+[12!dcd]

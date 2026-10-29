@@ -1,0 +1,21 @@
+[k101k202k303k404]
+[555555] 5 555
+[575555]
+[709890]
+unequal
+found k3
+X=+03
+none
+X=+05
+X=+03
+X=+06
+k101k202k303k404 
+X past the end
+[3   ]
+[3abc] b
+[5abcxx]
+[2ab]
+[4----]
+[  00  00  00  00]
+[  00zz00  00  00]
+before the bad subscript

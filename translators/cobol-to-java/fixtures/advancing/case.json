@@ -1,0 +1,8 @@
+{
+  "description": "WRITE BEFORE / AFTER ADVANCING n LINES (literal and item), 0 LINES, PAGE and a channel mnemonic on LINE SEQUENTIAL and SEQUENTIAL files, the newline CLOSE adds after AFTER ADVANCING, and LINAGE with FOOTING / TOP / BOTTOM, LINAGE-COUNTER and [NOT] AT END-OF-PAGE; the files' bytes are read back",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native",
+              "file_assignments": {"adv.txt": "adv.txt", "adv.dat": "adv.dat", "page.txt": "page.txt"}},
+  "equivalence": {"programs": ["ADVANCE.cbl"], "main_class": "fixtures.advancing.Advance"},
+  "layout": {"base_package": "fixtures.advancing"}
+}

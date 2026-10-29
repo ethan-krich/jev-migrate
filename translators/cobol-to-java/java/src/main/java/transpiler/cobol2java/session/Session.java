@@ -43,6 +43,12 @@ public final class Session {
 
     enum State { ACTIVE, FINALIZED }
 
+    /**
+     * A nested program: its container ({@code null} for the file's top-level program), its
+     * PROGRAM-ID as written, its class (nested in the top-level class) and IS COMMON.
+     */
+    record Nested(ProgramUnit unit, ProgramUnit container, String programId, String entryName, String className, boolean common) {}
+
     /** One discovered COBOL program and everything known about it. */
     static final class ProgramState {
         final Path path;
@@ -51,6 +57,8 @@ public final class Session {
         ProgramUnit unit;
         transpiler.cobol2java.cobol.SourceMap sourceMap;
         String programId;
+        /** The PROGRAM-ID as written (a literal's contents): the name CALL and CANCEL match, case-sensitively. */
+        String entryName;
         String packageName;
         String className;
         Path outputPath;
@@ -59,6 +67,8 @@ public final class Session {
         int statements;
         int translatedStatements;
         boolean failed;
+        /** Programs nested in this file's program (directly or not), in source order; generated as static nested classes. */
+        final List<Nested> nested = new ArrayList<>();
 
         ProgramState(Path path, String relativePath) {
             this.path = path;
@@ -76,6 +86,7 @@ public final class Session {
     private final Layout layout;
     private final MappingRegistry registry;
     private final Builtins builtins;
+    private final Dialect dialect;
     private final Map<String, ProgramState> programs = new LinkedHashMap<>();
     private final List<String> copybooks = new ArrayList<>();
     private final Map<String, String> programDirectory = new HashMap<>();
@@ -83,8 +94,10 @@ public final class Session {
     private final Map<String, Decision> decisionsById = new HashMap<>();
     private State state = State.ACTIVE;
 
-    private Session(String id, Path sourceRoot, Path outputRoot, Layout layout, MappingRegistry registry, Builtins builtins) {
+    private Session(String id, Path sourceRoot, Path outputRoot, Layout layout, MappingRegistry registry, Builtins builtins,
+            Dialect dialect) {
         this.id = id;
+        this.dialect = dialect;
         this.sourceRoot = sourceRoot;
         this.outputRoot = outputRoot;
         this.layout = layout;
@@ -105,11 +118,13 @@ public final class Session {
         Layout layout = Layout.parse(params.get("layout"));
         MappingRegistry registry = MappingRegistry.parse(params.get("mappings"), builtins);
         JsonNode options = params.path("options");
+        Dialect dialect = Dialect.parse(options);
         CobolFrontend frontend;
         try {
             frontend = new CobolFrontend(new CobolFrontend.Options(
-                    CobolFrontend.Options.parseFormat(options.path("source_format").asText("fixed")),
-                    Charset.forName(options.path("source_encoding").asText("ISO-8859-1"))));
+                    CobolFrontend.Options.parseFormat(dialect.sourceFormat()),
+                    Charset.forName(options.path("source_encoding").asText("ISO-8859-1")),
+                    dialect.debuggingLines()));
         } catch (IllegalArgumentException e) {
             throw new ProtocolException(ErrorCode.INVALID_PARAMS, "invalid options: " + e.getMessage());
         }
@@ -122,7 +137,7 @@ public final class Session {
             extraCopybookPaths.add(absolute(p.asText(), "copybook_paths[]"));
         }
 
-        Session session = new Session(id, sourceRoot, outputRoot, layout, registry, builtins);
+        Session session = new Session(id, sourceRoot, outputRoot, layout, registry, builtins, dialect);
         ArrayNode files = Json.requireArray(params, "files");
         List<ProgramState> toParse = new ArrayList<>();
         for (JsonNode f : files) {
@@ -185,32 +200,131 @@ public final class Session {
         }
         List<ProgramUnit> units = new ArrayList<>();
         parsed.program().getCompilationUnits().forEach(cu -> units.addAll(cu.getProgramUnits()));
-        if (units.size() != 1) {
-            fail(ps, "unsupported_construct", "files with " + units.size() + " program units (nested or batched programs) are not supported");
+        // ProLeap lists nested programs beside their container; a unit's container is the closest unit around it.
+        Map<ProgramUnit, ProgramUnit> containers = new java.util.IdentityHashMap<>();
+        List<ProgramUnit> tops = new ArrayList<>();
+        for (ProgramUnit u : units) {
+            ProgramUnit container = null;
+            for (ProgramUnit o : units) {
+                if (o != u && contains(o, u) && (container == null || contains(container, o))) {
+                    container = o;
+                }
+            }
+            if (container == null) {
+                tops.add(u);
+            } else {
+                containers.put(u, container);
+            }
+        }
+        if (tops.size() != 1) {
+            fail(ps, "unsupported_construct", "files with " + tops.size() + " separate programs (batched programs) are not supported");
             return;
         }
-        ps.unit = units.getFirst();
+        ps.unit = tops.getFirst();
         var idDivision = ps.unit.getIdentificationDivision();
         if (idDivision == null || idDivision.getProgramIdParagraph() == null) {
             fail(ps, "syntax_error", "missing PROGRAM-ID");
             return;
         }
         var programId = idDivision.getProgramIdParagraph();
-        if (programId.getAttribute() != null) {
-            fail(ps, "unsupported_construct", "PROGRAM-ID attribute " + programId.getAttribute() + " is not supported");
-            return;
-        }
+        // IS INITIAL is translated; the program's other attributes are decisions in its translation.
         ps.programId = programId.getName().toUpperCase(Locale.ROOT);
+        var name = ((io.proleap.cobol.CobolParser.ProgramIdParagraphContext) programId.getCtx()).programName();
+        ps.entryName = name.NONNUMERICLITERAL() != null ? name.getText().substring(1, name.getText().length() - 1) : name.getText();
         ps.packageName = layout.packageFor(Path.of(ps.relativePath));
         ps.className = Names.className(ps.programId);
         ps.outputPath = outputRoot.resolve(layout.javaSourceDir())
                 .resolve(ps.packageName.replace('.', '/')).resolve(ps.className + ".java").normalize();
+        Set<String> classNames = new HashSet<>(Set.of(ps.className));
+        for (ProgramUnit u : units) {
+            if (u == ps.unit) {
+                continue;
+            }
+            var pid = u.getIdentificationDivision() == null ? null : u.getIdentificationDivision().getProgramIdParagraph();
+            if (pid == null) {
+                fail(ps, "syntax_error", "a nested program has no PROGRAM-ID");
+                return;
+            }
+            var n = ((io.proleap.cobol.CobolParser.ProgramIdParagraphContext) pid.getCtx()).programName();
+            String entry = n.NONNUMERICLITERAL() != null ? n.getText().substring(1, n.getText().length() - 1) : n.getText();
+            String cls = Names.className(pid.getName().toUpperCase(Locale.ROOT));
+            if (!classNames.add(cls) || RESERVED_CLASS_NAMES.contains(cls)) {
+                fail(ps, "class_collision", "nested program " + entry + " would be class " + cls + ", which another name of the file already uses");
+                return;
+            }
+            ps.nested.add(new Nested(u, containers.get(u) == ps.unit ? null : containers.get(u), pid.getName().toUpperCase(Locale.ROOT), entry, cls,
+                    pid.getAttribute() == io.proleap.cobol.asg.metamodel.identification.ProgramIdParagraph.Attribute.COMMON));
+        }
+    }
+
+    private static boolean contains(ProgramUnit outer, ProgramUnit inner) {
+        var o = outer.getCtx();
+        var i = inner.getCtx();
+        return i.getStart().getTokenIndex() >= o.getStart().getTokenIndex() && i.getStop().getTokenIndex() <= o.getStop().getTokenIndex()
+                && (i.getStart().getTokenIndex() != o.getStart().getTokenIndex() || i.getStop().getTokenIndex() != o.getStop().getTokenIndex());
+    }
+
+    /**
+     * The programs a program of {@code ps} can CALL: the project's top-level programs, then (taking
+     * precedence, as GnuCOBOL looks there first) the ones it contains directly and the COMMON
+     * programs contained by its containers. Values: [class, nested record or null].
+     */
+    private Map<String, Object[]> visible(ProgramState ps, ProgramUnit unit) {
+        Map<String, Object[]> out = new java.util.TreeMap<>();
+        programDirectory.forEach((k, v) -> out.put(k, new Object[] {v, null}));
+        // The chain of containers, innermost first (null stands for the top-level program).
+        List<ProgramUnit> chain = new ArrayList<>();
+        ProgramUnit at = unit == ps.unit ? null : unit;
+        while (at != null) {
+            ProgramUnit container = null;
+            for (Nested n : ps.nested) {
+                if (n.unit() == at) {
+                    container = n.container();
+                }
+            }
+            chain.add(container);
+            at = container;
+        }
+        for (int i = chain.size() - 1; i >= 0; i--) {
+            for (Nested n : ps.nested) {
+                if (n.container() == chain.get(i) && n.common() && n.unit() != unit) {
+                    out.put(n.entryName(), new Object[] {ps.fqcn() + "." + n.className(), n});
+                }
+            }
+        }
+        for (Nested n : ps.nested) {
+            if (n.container() == (unit == ps.unit ? null : unit)) {
+                out.put(n.entryName(), new Object[] {ps.fqcn() + "." + n.className(), n});
+            }
+        }
+        return out;
     }
 
     /** Simple names that generated programs import (see ProgramTranslator) or use unqualified. */
-    private static final java.util.Set<String> RESERVED_CLASS_NAMES = java.util.Set.of(
-            "AlphanumericField", "Arithmetic", "CobolProgram", "Compare", "Display", "NumericField",
-            "ProgramSupport", "BigDecimal", "Goback", "StopRun", "String", "Object", "Exception", "Override");
+    /** Every runtime class plus the java.lang / java.math types generated code names. */
+    private static final java.util.Set<String> RESERVED_CLASS_NAMES = java.util.stream.Stream.concat(
+            RuntimeSources.CLASSES.stream(),
+            java.util.stream.Stream.of("BigDecimal", "String", "Object", "Exception", "Override", "Math", "System"))
+            .collect(java.util.stream.Collectors.toUnmodifiableSet());
+
+    /** USING item sizes per PROGRAM-ID, computed on first use from the parsed programs. */
+    private final Map<String, Optional<java.util.List<Integer>>> parameterCache = new HashMap<>();
+
+    /** ENTRY names (as written) to the program declaring them and the entry's number (1 for the first). */
+    private final Map<String, String> entryPrograms = new HashMap<>();
+    private final Map<String, Integer> entryIndexes = new HashMap<>();
+
+    private Optional<java.util.List<Integer>> programParameters(String programId) {
+        return parameterCache.computeIfAbsent(programId, pid -> {
+            for (ProgramState ps : programs.values()) {
+                if (!ps.failed && (pid.equals(ps.entryName) || ps.fqcn().equals(entryPrograms.get(pid)))) {
+                    return ProgramTranslator.parameters(ps.unit, ps.sourceMap, ps.relativePath, ps.programId, dialect,
+                            entryIndexes.getOrDefault(pid, 0));
+                }
+            }
+            return Optional.empty();
+        });
+    }
 
     private void checkNameCollisions() {
         Map<String, List<ProgramState>> byClass = new LinkedHashMap<>();
@@ -236,7 +350,19 @@ public final class Session {
                 "PROGRAM-ID " + ps.programId + " is declared by " + l.stream().map(p -> p.relativePath).toList())));
         for (ProgramState ps : programs.values()) {
             if (!ps.failed) {
-                programDirectory.put(ps.programId, ps.fqcn());
+                programDirectory.put(ps.entryName, ps.fqcn());
+            }
+        }
+        for (ProgramState ps : programs.values()) {
+            if (!ps.failed) {
+                List<String> entries = ProgramTranslator.entryNames(ps.unit);
+                for (int i = 0; i < entries.size(); i++) {
+                    // An ENTRY name is called like a program; the first declaration of a name wins, as at link time.
+                    if (programDirectory.putIfAbsent(entries.get(i), ps.fqcn()) == null) {
+                        entryPrograms.put(entries.get(i), ps.fqcn());
+                        entryIndexes.put(entries.get(i), i + 1);
+                    }
+                }
             }
         }
     }
@@ -269,6 +395,7 @@ public final class Session {
         ArrayNode cbs = r.putArray("copybooks");
         copybooks.forEach(cbs::add);
         r.put("mapping_rules", registry.rules().size());
+        r.set("dialect", dialect.toJson());
         return r;
     }
 
@@ -332,14 +459,23 @@ public final class Session {
                 throw new ProtocolException(ErrorCode.INVALID_STATE, ps.relativePath + " has already been translated in this session");
             }
             if (!ps.failed) {
-                var out = new ProgramTranslator(new ProgramTranslator.Input(ps.unit, ps.sourceMap, ps.relativePath, ps.programId,
-                        ps.packageName, ps.className, layout.runtimePackage(), registry, builtins,
-                        pid -> Optional.ofNullable(programDirectory.get(pid)))).translate();
+                var out = translateUnit(ps, ps.unit, ps.programId, ps.className);
                 ps.java = out.compilationUnit();
                 ps.statements = out.statements();
                 ps.translatedStatements = out.translated();
-                ps.decisions = new ArrayList<>(out.decisions());
-                for (Decision d : out.decisions()) {
+                List<Decision> all = new ArrayList<>(out.decisions());
+                var top = ps.java.getType(0);
+                for (Nested n : ps.nested) {
+                    var inner = translateUnit(ps, n.unit(), n.programId(), n.className());
+                    var cls = inner.compilationUnit().getType(0);
+                    cls.setStatic(true);
+                    top.addMember(cls);
+                    ps.statements += inner.statements();
+                    ps.translatedStatements += inner.translated();
+                    all.addAll(inner.decisions());
+                }
+                ps.decisions = all;
+                for (Decision d : all) {
                     register(d);
                     raised.add(d.toJson(TARGET_LANGUAGE));
                 }
@@ -356,8 +492,39 @@ public final class Session {
         return new Outcome(complete ? Protocol.STATUS_OK : Protocol.STATUS_INCOMPLETE, result);
     }
 
+    /** Translates one program of a file (the top-level one or a nested one) with the names it can CALL. */
+    private ProgramTranslator.Result translateUnit(ProgramState ps, ProgramUnit unit, String programId, String className) {
+        Map<String, Object[]> scope = visible(ps, unit);
+        Map<String, String> classes = new java.util.TreeMap<>();
+        scope.forEach((k, v) -> classes.put(k, (String) v[0]));
+        Map<String, Integer> entries = new HashMap<>(entryIndexes);
+        scope.forEach((k, v) -> {
+            if (v[1] != null) {
+                entries.remove(k);
+            }
+        });
+        java.util.function.Function<String, Optional<List<Integer>>> parameters = pid -> scope.get(pid) != null && scope.get(pid)[1] instanceof Nested n
+                ? ProgramTranslator.parameters(n.unit(), ps.sourceMap, ps.relativePath, n.programId(), dialect, 0)
+                : programParameters(pid);
+        // The containing programs, innermost first, whose GLOBAL items this one sees.
+        List<Map.Entry<ProgramUnit, String>> containers = new ArrayList<>();
+        ProgramUnit at = unit;
+        while (at != ps.unit) {
+            ProgramUnit current = at;
+            Nested n = ps.nested.stream().filter(x -> x.unit() == current).findFirst().orElseThrow();
+            at = n.container() == null ? ps.unit : n.container();
+            ProgramUnit owner = at;
+            String ownerClass = owner == ps.unit ? ps.fqcn()
+                    : ps.fqcn() + "." + ps.nested.stream().filter(x -> x.unit() == owner).findFirst().orElseThrow().className();
+            containers.add(Map.entry(owner, ownerClass));
+        }
+        return new ProgramTranslator(new ProgramTranslator.Input(unit, ps.sourceMap, ps.relativePath, programId,
+                ps.packageName, className, layout.runtimePackage(), registry, builtins,
+                pid -> Optional.ofNullable(classes.get(pid)), dialect, parameters, classes, Map.copyOf(entries), containers)).translate();
+    }
+
     private void register(Decision d) {
-        d.register("decision-" + (decisions.size() + 1), TARGET_LANGUAGE);
+        d.register("decision-" + (decisions.size() + 1), TARGET_LANGUAGE, dialect.hash());
         decisions.add(d);
         decisionsById.put(d.id(), d);
     }
@@ -461,7 +628,7 @@ public final class Session {
         }
         try {
             for (ProgramState ps : programs.values()) {
-                ProgramTranslator.pruneImports(ps.java);
+                ProgramTranslator.finish(ps.java);
                 write(ps.outputPath, ps.java.toString());
                 ObjectNode w = written.addObject();
                 w.put("path", outputRoot.relativize(ps.outputPath).toString().replace('\\', '/'));

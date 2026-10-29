@@ -1,0 +1,8 @@
+{
+  "description": "INDEXED files with GnuCOBOL 3.2's statuses: ACCESS DYNAMIC / SEQUENTIAL / RANDOM, ALTERNATE KEY WITH DUPLICATES, READ [NEXT / PREVIOUS / KEY IS], START = > >= < <=, WRITE, REWRITE, DELETE, INVALID KEY, OPEN EXTEND, and an unhandled INVALID KEY ending the run unit",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native",
+              "file_assignments": {"keyed.dat": "keyed.dat", "seq.dat": "seq.dat", "nost.dat": "nost.dat"}},
+  "equivalence": {"programs": ["IDXFILES.cbl"], "main_class": "fixtures.indexed_files.Idxfiles"},
+  "layout": {"base_package": "fixtures.indexed_files"}
+}

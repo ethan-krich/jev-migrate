@@ -1,0 +1,8 @@
+{
+  "description": "EXTERNAL data items and an EXTERNAL file (connector, record area and EXTERNAL FILE STATUS) shared by two programs, and SAME RECORD AREA",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native",
+              "file_assignments": {"shared.txt": "shared.txt", "a.txt": "a.txt", "b.txt": "b.txt"}},
+  "equivalence": {"programs": ["EXTMAIN.cbl", "EXTSUB.cbl"], "main_class": "fixtures.external.Extmain"},
+  "layout": {"base_package": "fixtures.external"}
+}

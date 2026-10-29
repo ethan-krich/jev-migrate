@@ -1,0 +1,9 @@
+to console
+to my-term
+WS-LINE =       Ws-Num = -012.5
+lit Ws-Num = -012.5 12
+[hello]
+[ab   ]
+[     ]
+[     ]
+240305 20240305 24065 2024065 2 131415 20240305

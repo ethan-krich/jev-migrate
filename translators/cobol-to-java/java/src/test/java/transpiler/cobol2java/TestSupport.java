@@ -21,6 +21,7 @@ import transpiler.cobol2java.cobol.CobolFrontend;
 import transpiler.cobol2java.cobol.SourceMap;
 import transpiler.cobol2java.mapping.MappingRegistry;
 import transpiler.cobol2java.protocol.Json;
+import transpiler.cobol2java.session.Dialect;
 import transpiler.cobol2java.translate.Builtins;
 import transpiler.cobol2java.translate.ProgramTranslator;
 
@@ -53,7 +54,7 @@ public final class TestSupport {
     public static ProgramUnit parse(Path dir, String source) throws Exception {
         Path file = dir.resolve("T.cbl");
         Files.writeString(file, source, StandardCharsets.ISO_8859_1);
-        var frontend = new CobolFrontend(new CobolFrontend.Options(CobolSourceFormatEnum.FIXED, StandardCharsets.ISO_8859_1));
+        var frontend = new CobolFrontend(new CobolFrontend.Options(CobolSourceFormatEnum.FIXED, StandardCharsets.ISO_8859_1, false));
         return frontend.parse(file, List.of(dir), List.of(".cpy")).program().getCompilationUnits().getFirst().getProgramUnit();
     }
 
@@ -76,12 +77,42 @@ public final class TestSupport {
         rules.add(rule("cobol.move.to_alphanumeric", "MOVE", "move_to_alphanumeric", Map.of("target_category", "alphanumeric"), 100));
         rules.add(rule("cobol.move.to_numeric", "MOVE", "move_to_numeric", Map.of("target_category", "numeric"), 100));
         String[][] simple = {{"ADD", "add"}, {"SUBTRACT", "subtract"}, {"MULTIPLY", "multiply"}, {"DIVIDE", "divide"},
-            {"COMPUTE", "compute"}, {"DISPLAY", "display"}, {"IF", "if"}, {"PERFORM", "perform"}, {"GOBACK", "goback"},
+            {"DISPLAY", "display"}, {"IF", "if"}, {"PERFORM", "perform"}, {"GOBACK", "goback"},
             {"EXIT", "exit"}, {"CONTINUE", "continue"}, {"CALL", "call_program"}};
         for (String[] s : simple) {
             rules.add(rule("cobol." + s[1], s[0], s[1], Map.of(), 100));
         }
-        rules.add(rule("cobol.stop_run", "STOP", "stop_run", Map.of("kind", "run"), 100));
+        rules.add(rule("cobol.stop_run", "STOP", "stop_run", Map.of(), 100));
+        rules.add(rule("cobol.compute", "COMPUTE", "compute_gnucobol", Map.of(), 100));
+        rules.add(rule("cobol.set.condition", "SET", "set_condition", Map.of("form", List.of("true", "false")), 100));
+        rules.add(rule("cobol.evaluate", "EVALUATE", "evaluate", Map.of(), 100));
+        rules.add(rule("cobol.accept.stdin", "ACCEPT", "accept_stdin", Map.of("from", List.of("stdin", "device")), 100));
+        rules.add(rule("cobol.accept.datetime", "ACCEPT", "accept_datetime",
+                Map.of("from", List.of("date", "date_yyyymmdd", "day", "day_yyyyddd", "day_of_week", "time")), 100));
+        rules.add(rule("cobol.exhibit", "EXHIBIT", "exhibit", Map.of("changed", false), 100));
+        rules.add(rule("cobol.move.to_group", "MOVE", "move_group", Map.of("target_category", "group"), 100));
+        rules.add(rule("cobol.move.to_edited", "MOVE", "move_to_edited",
+                Map.of("target_category", List.of("numeric_edited", "alphanumeric_edited")), 100));
+        rules.add(rule("cobol.move.from_edited", "MOVE", "move_from_edited",
+                Map.of("source_category", "numeric_edited", "target_category", "numeric"), 100));
+        rules.add(rule("cobol.initialize", "INITIALIZE", "initialize", Map.of(), 100));
+        rules.add(rule("cobol.string", "STRING", "string", Map.of(), 100));
+        rules.add(rule("cobol.go_to", "GO_TO", "go_to", Map.of(), 100));
+        rules.add(rule("cobol.open", "OPEN", "open_file", Map.of(), 100));
+        rules.add(rule("cobol.close", "CLOSE", "close_file", Map.of(), 100));
+        rules.add(rule("cobol.read", "READ", "read_file", Map.of(), 100));
+        rules.add(rule("cobol.write", "WRITE", "write_file", Map.of("advancing", false), 100));
+        rules.add(rule("cobol.rewrite", "REWRITE", "rewrite_file", Map.of(), 100));
+        rules.add(rule("cobol.sort", "SORT", "sort", Map.of(), 100));
+        rules.add(rule("cobol.merge", "MERGE", "merge", Map.of(), 100));
+        rules.add(rule("cobol.release", "RELEASE", "release", Map.of(), 100));
+        rules.add(rule("cobol.return", "RETURN", "return_record", Map.of(), 100));
+        rules.add(rule("cobol.alter", "ALTER", "alter", Map.of(), 100));
+        rules.add(rule("cobol.unstring", "UNSTRING", "unstring", Map.of(), 100));
+        rules.add(rule("cobol.inspect", "INSPECT", "inspect", Map.of(), 100));
+        rules.add(rule("cobol.set.index", "SET", "set_index", Map.of("form", List.of("to", "up_by", "down_by")), 100));
+        rules.add(rule("cobol.search", "SEARCH", "search", Map.of("all", false), 100));
+        rules.add(rule("cobol.search_all", "SEARCH", "search_all", Map.of("all", true), 100));
         return rules;
     }
 
@@ -102,8 +133,18 @@ public final class TestSupport {
 
     public static ProgramTranslator.Result translate(Path dir, String source, ArrayNode rules, Map<String, String> programs)
             throws Exception {
+        return translate(dir, source, rules, programs, Dialect.defaults());
+    }
+
+    public static ProgramTranslator.Result translate(Path dir, String source, ArrayNode rules, Map<String, String> programs,
+            Dialect dialect) throws Exception {
         return new ProgramTranslator(new ProgramTranslator.Input(parse(dir, source), SourceMap.identity(), "T.cbl", "T", "test.gen", "T",
-                "transpiler.cobol.runtime", registry(rules), BUILTINS, id -> Optional.ofNullable(programs.get(id)))).translate();
+                "transpiler.cobol.runtime", registry(rules), BUILTINS, id -> Optional.ofNullable(programs.get(id)), dialect)).translate();
+    }
+
+    /** A dialect from JSON options, e.g. {@code dialect("{\"encoding\": \"ascii\"}")}. */
+    public static Dialect dialect(String json) throws Exception {
+        return Dialect.parse(Json.MAPPER.readTree(json));
     }
 
     /** Compiles generated Java against the runtime on the test classpath; returns diagnostics. */

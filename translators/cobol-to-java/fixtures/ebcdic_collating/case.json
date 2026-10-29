@@ -1,0 +1,8 @@
+{
+  "description": "Dialect.collating_sequence = ebcdic: ordered alphanumeric comparisons (items, literals, figuratives) and SORT keys in GnuCOBOL's EBCDIC collating sequence (cobc -fdefault-colseq=EBCDIC)",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "ebcdic",
+              "file_assignments": {"keys.txt": "keys.txt", "sorted.txt": "sorted.txt"}},
+  "equivalence": {"programs": ["EBCSEQ.cbl"], "main_class": "fixtures.ebcdic_collating.Ebcseq", "cobc_flags": ["-fdefault-colseq=EBCDIC"]},
+  "layout": {"base_package": "fixtures.ebcdic_collating"}
+}

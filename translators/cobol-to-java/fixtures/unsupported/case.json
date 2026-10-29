@@ -1,16 +1,94 @@
 {
-  "description": "Constructs outside the supported subset are reported, never approximated",
+  "description": "Constructs outside the supported subset are reported, never approximated (including the constructs saved for Jev)",
+  "dialect": {
+    "encoding": "ascii",
+    "collating_sequence": "native",
+    "out_of_range": "fail",
+    "file_assignments": {
+      "in.txt": "in.txt",
+      "out.txt": "out.txt"
+    }
+  },
   "expect": {
     "status": "incomplete",
     "decisions": [
-      {"reason": "unsupported_construct", "operation": "DATA", "line": 6},
-      {"reason": "unsupported_construct", "operation": "DATA", "line": 7},
-      {"reason": "unsupported_construct", "operation": "DATA", "line": 9},
-      {"reason": "unsupported_construct", "operation": "DATA", "line": 10},
-      {"reason": "missing_mapping", "operation": "EVALUATE", "line": 14, "candidates": []},
-      {"reason": "unsupported_construct", "operation": "COMPUTE", "line": 17},
-      {"reason": "missing_mapping", "operation": "GO_TO", "line": 18, "candidates": []}
+      {
+        "reason": "unsupported_construct",
+        "operation": "ENVIRONMENT",
+        "line": 6
+      },
+      {
+        "reason": "unsupported_construct",
+        "operation": "DATA",
+        "line": 31
+      },
+      {
+        "reason": "unsupported_construct",
+        "operation": "DATA",
+        "line": 34
+      },
+      {
+        "reason": "missing_mapping",
+        "operation": "dialect:file_assignments",
+        "line": 8,
+        "candidates": []
+      },
+      {
+        "reason": "unsupported_construct",
+        "operation": "COMPUTE",
+        "line": 43
+      },
+      {
+        "reason": "missing_target_api",
+        "operation": "DISPLAY",
+        "line": 44,
+        "candidates": []
+      },
+      {
+        "reason": "missing_target_api",
+        "operation": "STOP",
+        "line": 46,
+        "candidates": []
+      },
+      {
+        "reason": "unsupported_construct",
+        "operation": "SEARCH",
+        "line": 47,
+        "candidates": [
+          "builtin:search_all_binary",
+          "builtin:search_all_linear"
+        ]
+      },
+      {
+        "reason": "unsupported_construct",
+        "operation": "CALL",
+        "line": 49,
+        "candidates": []
+      },
+      {
+        "reason": "unsupported_construct",
+        "operation": "SORT",
+        "line": 50,
+        "candidates": [
+          "builtin:sort_stable"
+        ]
+      },
+      {
+        "reason": "unsupported_construct",
+        "operation": "COMPUTE",
+        "line": 52
+      },
+      {
+        "reason": "unsupported_construct",
+        "operation": "ALTER",
+        "line": 53,
+        "candidates": [
+          "builtin:alter_goto"
+        ]
+      }
     ]
   },
-  "layout": {"base_package": "fixtures.unsupported"}
+  "layout": {
+    "base_package": "fixtures.unsupported"
+  }
 }

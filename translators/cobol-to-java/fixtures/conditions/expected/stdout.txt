@@ -1,0 +1,33 @@
+flag on
+flag [N]
+flag off
+n low
+n +06
+code b
+n high again
+abbreviated
+between
+not seven
+combined
+digits numeric
+text alphabetic
+text lower
+not upper
+code not numeric
+ordered
+above spaces
+[xyxyx]
+all matches
+["""""]
+high
+high sorts last
+low sorts first
+1 one or two
+2 one or two
+3 three-four
+4 three-four
+5 not six
+6 other
+exact code
+big
+high

@@ -4,14 +4,18 @@ import java.util.Locale;
 import java.util.Optional;
 
 /**
- * The supported subset of PICTURE strings: {@code X(n)} alphanumeric and {@code [S]9(i)[V9(s)]}
- * zoned numeric. Edited, alphabetic, national and scaled ({@code P}) pictures are reported as
- * unsupported rather than approximated.
+ * The supported subset of PICTURE strings: {@code X(n)} / {@code A(n)} alphanumeric,
+ * {@code [S]9(i)[V9(s)]} numeric, numeric-edited ({@code Z * $ + - CR DB . , B 0 /} with
+ * {@code 9} and {@code V}) and alphanumeric-edited ({@code X A 9} with {@code B 0 /}). National
+ * and scaled ({@code P}) pictures are reported as unsupported rather than approximated.
  */
 public sealed interface Picture {
     record Alphanumeric(int length) implements Picture {}
 
     record Numeric(int digits, int scale, boolean signed) implements Picture {}
+
+    /** An edited picture with repetitions expanded; {@code length} is its size in bytes. */
+    record Edited(String picture, boolean numeric, int length) implements Picture {}
 
     /** Parses a picture string, or explains why it is outside the supported subset. */
     static Result parse(String raw) {
@@ -41,8 +45,14 @@ public sealed interface Picture {
             }
         }
         String s = expanded.toString();
-        if (s.chars().allMatch(c -> c == 'X')) {
+        if (s.chars().allMatch(c -> c == 'X' || c == 'A')) {
             return Result.of(new Alphanumeric(s.length()));
+        }
+        if (s.matches("S?P+V?9+|S?VP+9+|S?9+P+")) {
+            return scaled(raw, s);
+        }
+        if (!s.matches("S?[9V]*")) {
+            return edited(raw, s);
         }
         boolean signed = false;
         int start = 0;
@@ -75,6 +85,54 @@ public sealed interface Picture {
             return Result.unsupported("PICTURE " + raw + " exceeds 38 digits");
         }
         return Result.of(new Numeric(digits, scale, signed));
+    }
+
+    /**
+     * A numeric picture with P (scaling) positions: P on the left puts the point before them
+     * (PPP99 = .000nn, scale greater than the digits), P on the right multiplies (99PPP = nn000,
+     * negative scale).
+     */
+    private static Result scaled(String raw, String s) {
+        boolean signed = s.startsWith("S");
+        String body = signed ? s.substring(1) : s;
+        int digits = (int) body.chars().filter(c -> c == '9').count();
+        int ps = (int) body.chars().filter(c -> c == 'P').count();
+        if (digits > 38) {
+            return Result.unsupported("PICTURE " + raw + " exceeds 38 digits");
+        }
+        return Result.of(new Numeric(digits, body.endsWith("P") ? -ps : digits + ps, signed));
+    }
+
+    private static Result edited(String raw, String s) {
+        if (s.contains("P")) {
+            return Result.unsupported("PICTURE " + raw + " uses P (scaling), which is not supported");
+        }
+        if (s.contains("N") || s.contains("E") || s.contains("S")) {
+            return Result.unsupported("PICTURE " + raw + " is outside the supported subset");
+        }
+        boolean alpha = s.contains("X") || s.contains("A");
+        String allowed = alpha ? "XA9B0/" : "9VZ*$+-CRDB.,0/";
+        for (char c : s.toCharArray()) {
+            if (allowed.indexOf(c) < 0) {
+                return Result.unsupported("PICTURE " + raw + " uses '" + c + "', which is outside the supported subset");
+            }
+        }
+        String noCrDb = s.replace("CR", "").replace("DB", "");
+        if (!alpha && (noCrDb.contains("C") || noCrDb.contains("R") || noCrDb.contains("D"))) {
+            return Result.unsupported("PICTURE " + raw + " is not a valid edited picture");
+        }
+        if (!alpha && s.matches("[+-]\\$\\$.*")) {
+            // GnuCOBOL 3.2 shows such a fixed sign inconsistently with the value.
+            return Result.unsupported("PICTURE " + raw + ": a fixed sign before a floating currency string is not supported");
+        }
+        if (!alpha && s.chars().filter(c -> c == '9' || c == 'Z' || c == '*' || c == '$' || c == '+' || c == '-').count() > 38) {
+            return Result.unsupported("PICTURE " + raw + " exceeds 38 digits");
+        }
+        if (s.contains("V")) {
+            // The runtime EditedField lays out every picture character, so a non-stored V would misalign it.
+            return Result.unsupported("PICTURE " + raw + " uses V in an edited picture, which is not supported");
+        }
+        return Result.of(new Edited(s, !alpha, s.length()));
     }
 
     record Result(Optional<Picture> picture, String unsupportedReason) {
