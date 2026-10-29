@@ -19,7 +19,7 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any, Protocol
 
-from .protocol import JOB_VERSION, DecisionRequest, importance_table
+from .protocol import IMPORTANCE_TIERS, JOB_VERSION, DecisionRequest, ReviewPriority, importance_table
 from .providers import DecisionProvider, DeterministicProvider
 from .registry import HandlerCatalog, MappingRegistry
 
@@ -114,6 +114,87 @@ class ProgramResult:
         )
 
 
+@dataclass(frozen=True)
+class Resolution:
+    """What happened to one provider answer: applied by the worker, held by the gate (or the
+    context cap), or rejected (not an offered candidate, stale fingerprint, ...)."""
+
+    decision_id: str
+    outcome: str  # applied | held | rejected
+    candidate_id: str | None
+    provider: str | None
+    importance: str | None
+    gate: str | None
+    confidence: float | None
+    review_priority: ReviewPriority | None
+    rationale: str = ""
+    held_reason: str | None = None
+    stage: str | None = None  # rejected only: orchestrator | worker
+    message: str | None = None
+
+    @property
+    def applied(self) -> bool:
+        return self.outcome == "applied"
+
+    @classmethod
+    def from_json(cls, d: dict[str, Any], outcome: str) -> Resolution:
+        rp = d.get("review_priority")
+        return cls(
+            decision_id=d.get("decision_id", ""),
+            outcome=outcome,
+            candidate_id=d.get("selection", {}).get("candidate_id"),
+            provider=d.get("provider"),
+            importance=d.get("importance"),
+            gate=d.get("gate"),
+            confidence=d.get("confidence"),
+            review_priority=ReviewPriority.from_json(rp) if rp else None,
+            rationale=d.get("rationale", ""),
+            held_reason=d.get("held_reason"),
+            stage=d.get("stage"),
+            message=d.get("message"),
+        )
+
+
+@dataclass(frozen=True)
+class Resolutions:
+    provider: str | None
+    applied: tuple[Resolution, ...]
+    held: tuple[Resolution, ...]
+    rejected: tuple[Resolution, ...]
+
+    def __iter__(self):
+        return iter(self.applied + self.held + self.rejected)
+
+    def for_decision(self, decision_id: str) -> Resolution | None:
+        """The applied answer for a decision, else its held, else its rejected one."""
+        for group in (self.applied, self.held, self.rejected):
+            for r in reversed(group):
+                if r.decision_id == decision_id:
+                    return r
+        return None
+
+
+@dataclass(frozen=True)
+class ReviewItem:
+    """A row of ``review.md``: a decision, what happened to its answer, and the tier-mismatch flag."""
+
+    decision: DecisionRequest
+    resolution: Resolution | None
+
+    @property
+    def pending(self) -> bool:
+        return not self.decision.resolved
+
+    @property
+    def tier_mismatch(self) -> bool:
+        """review_priority business or higher on a low decision, or cosmetic on a critical one."""
+        rp = self.resolution.review_priority if self.resolution else None
+        if rp is None:
+            return False
+        return (rp.level >= 3 and self.decision.importance == "low") or (
+            rp.level == 0 and self.decision.importance == "critical")
+
+
 @dataclass
 class TranspileResult:
     status: str  # ok | incomplete | failed
@@ -139,6 +220,27 @@ class TranspileResult:
     @property
     def errors(self) -> list[dict[str, Any]]:
         return self.report.get("errors", [])
+
+    @property
+    def resolutions(self) -> Resolutions:
+        r = self.report.get("resolutions", {})
+        return Resolutions(
+            provider=r.get("provider"),
+            **{kind: tuple(Resolution.from_json(e, kind) for e in r.get(kind, [])) for kind in ("applied", "held", "rejected")},
+        )
+
+    def review_queue(self) -> list[ReviewItem]:
+        """Every decision with its answer, in ``review.md`` order: pending first, then review
+        priority level (highest first, none last), then importance (critical first)."""
+        resolutions = self.resolutions
+        items = [ReviewItem(d, resolutions.for_decision(d.id)) for d in self.decisions]
+
+        def key(item: ReviewItem) -> tuple[bool, int, int]:
+            rp = item.resolution.review_priority if item.resolution else None
+            tier = IMPORTANCE_TIERS.index(item.decision.importance) if item.decision.importance in IMPORTANCE_TIERS else -1
+            return (not item.pending, -(rp.level if rp else -1), -tier)
+
+        return sorted(items, key=key)
 
     def raise_for_status(self) -> TranspileResult:
         if not self.ok:
@@ -230,6 +332,8 @@ def transpile(
         "mappings": mappings.to_dict(),
         "provider": provider.to_config(),
     }
+    if (budget := provider.context_budget()) is not None:
+        job["translator_params"]["context"] = budget
     if importance is None and pair.default_importance is not None:
         importance = pair.default_importance()
     if importance is not None:
