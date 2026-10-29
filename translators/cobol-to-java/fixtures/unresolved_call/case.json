@@ -1,8 +1,8 @@
 {
-  "description": "CALL of a program outside the project is an unresolved cross-file dependency; nothing is written",
+  "description": "CALL of a program outside the project is an unresolved cross-file dependency (its call_external candidate asks for the target in a slot decision); nothing is written",
   "expect": {
     "status": "incomplete",
-    "decisions": [{"reason": "missing_target_api", "operation": "CALL", "line": 5, "candidates": []}]
+    "decisions": [{"reason": "missing_target_api", "operation": "CALL", "line": 5, "candidates": ["builtin:call_external"]}]
   },
   "layout": {"base_package": "fixtures.unresolved"}
 }

@@ -1,0 +1,97 @@
+{
+  "source": {
+    "file": "BASICS.cbl",
+    "line": 23,
+    "column": 12,
+    "text": "DISPLAY \"[\" WS-SMALL \"]\""
+  },
+  "context": {
+    "refs": [
+      {
+        "ref": "data:WS-SMALL@9:8",
+        "kind": "data",
+        "depth": 0,
+        "text": "01 WS-SMALL       PIC 99.",
+        "summary": "01 WS-SMALL PIC 99.",
+        "file": "BASICS.cbl",
+        "line": 9
+      },
+      {
+        "ref": "para:MAIN-PARA@16:8",
+        "kind": "paragraph",
+        "depth": 1,
+        "text": "MAIN-PARA.\n           DISPLAY \"Hello, \" WS-NAME \"!\".\n           MOVE \"ABCDEFG\" TO WS-SHORT.\n           DISPLAY \"[\" WS-SHORT \"]\".\n           MOVE WS-COUNT TO WS-SHORT.\n           DISPLAY \"[\" WS-SHORT \"]\".\n           MOVE 12345 TO WS-SMALL.\n           DISPLAY \"[\" WS-SMALL \"]\".\n           ADD 95 TO WS-SMALL.\n           DISPLAY \"[\" WS-SMALL \"]\".\n           MULTIPLY WS-AMOUNT BY WS-RATE GIVING WS-RESULT.\n           DISPLAY \"product \" WS-RESULT.\n           MULTIPLY WS-AMOUNT BY WS-RATE GIVING WS-RESULT ROUNDED.\n           DISPLAY \"rounded \" WS-RESULT.\n           DIVIDE 7 INTO 100 GIVING WS-QUOT.\n           DISPLAY \"quot \" WS-QUOT.\n           DIVIDE 7 INTO 100 GIVING WS-QUOT ROUNDED.\n           DISPLAY \"quot \" WS-QUOT.\n           SUBTRACT 200 FROM WS-AMOUNT.\n           DISPLAY \"amount \" WS-AMOUNT.\n           COMPUTE WS-RESULT = (WS-AMOUNT + 10) * -2.\n           DISPLAY \"computed \" WS-RESULT.\n           ADD 1 TO WS-COUNT ON SIZE ERROR DISPLAY \"overflow\"\n               NOT ON SIZE ERROR DISPLAY \"no overflow\".\n           ADD 999 TO WS-COUNT\n               ON SIZE ERROR DISPLAY \"overflow, kept \" WS-COUNT\n           END-ADD.\n           IF WS-AMOUNT < 0 AND WS-FLAG = \"N\"\n               DISPLAY \"negative\"\n           ELSE\n               DISPLAY \"positive\"\n           END-IF.\n           IF WS-NAME = \"COBOL\"\n               DISPLAY \"padded compare\"\n           END-IF.\n           PERFORM COUNT-PARA 3 TIMES.\n           PERFORM VARYING WS-SMALL FROM 1 BY 2 UNTIL WS-SMALL > 6\n               DISPLAY \"vary \" WS-SMALL\n           END-PERFORM.\n           DISPLAY \"done\" WITH NO ADVANCING.\n           DISPLAY \" -1.50 = \" -1.50.\n           MOVE 3 TO RETURN-CODE.\n           STOP RUN.",
+        "summary": "paragraph MAIN-PARA, lines 16-58",
+        "file": "BASICS.cbl",
+        "line": 16
+      },
+      {
+        "ref": "stmt:22:12",
+        "kind": "writes",
+        "depth": 1,
+        "text": "MOVE 12345 TO WS-SMALL",
+        "summary": "MOVE 12345 TO WS-SMALL",
+        "file": "BASICS.cbl",
+        "line": 22,
+        "parent": "data:WS-SMALL@9:8"
+      },
+      {
+        "ref": "stmt:23:12",
+        "kind": "usage",
+        "depth": 1,
+        "text": "DISPLAY \"[\" WS-SMALL \"]\"",
+        "summary": "DISPLAY \"[\" WS-SMALL \"]\"",
+        "file": "BASICS.cbl",
+        "line": 23,
+        "parent": "data:WS-SMALL@9:8"
+      },
+      {
+        "ref": "stmt:24:12",
+        "kind": "writes",
+        "depth": 1,
+        "text": "ADD 95 TO WS-SMALL",
+        "summary": "ADD 95 TO WS-SMALL",
+        "file": "BASICS.cbl",
+        "line": 24,
+        "parent": "data:WS-SMALL@9:8"
+      },
+      {
+        "ref": "stmt:25:12",
+        "kind": "usage",
+        "depth": 1,
+        "text": "DISPLAY \"[\" WS-SMALL \"]\"",
+        "summary": "DISPLAY \"[\" WS-SMALL \"]\"",
+        "file": "BASICS.cbl",
+        "line": 25,
+        "parent": "data:WS-SMALL@9:8"
+      },
+      {
+        "ref": "stmt:52:12",
+        "kind": "writes",
+        "depth": 1,
+        "text": "PERFORM VARYING WS-SMALL FROM 1 BY 2 UNTIL WS-SMALL > 6\n               DISPLAY \"vary \" WS-SMALL\n           END-PERFORM",
+        "summary": "PERFORM VARYING WS-SMALL FROM 1 BY 2 UNTIL WS-SMALL > 6 DISPLAY \"vary \" WS-SMALL END-PERFORM",
+        "file": "BASICS.cbl",
+        "line": 52,
+        "parent": "data:WS-SMALL@9:8"
+      },
+      {
+        "ref": "stmt:53:16",
+        "kind": "usage",
+        "depth": 1,
+        "text": "DISPLAY \"vary \" WS-SMALL",
+        "summary": "DISPLAY \"vary \" WS-SMALL",
+        "file": "BASICS.cbl",
+        "line": 53,
+        "parent": "data:WS-SMALL@9:8"
+      }
+    ],
+    "budget": {
+      "max_depth": 2,
+      "max_chars": 4000,
+      "used_chars": 1933,
+      "truncated": 0,
+      "omitted": 0
+    }
+  }
+}

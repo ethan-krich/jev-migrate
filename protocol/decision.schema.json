@@ -6,10 +6,10 @@
   "$defs": {
     "request": {
       "type": "object",
-      "required": ["id", "fingerprint", "reason", "operation", "message", "required", "state", "source", "context", "candidates"],
+      "required": ["id", "fingerprint", "reason", "operation", "message", "required", "state", "importance", "source", "context", "candidates"],
       "properties": {
         "id": {"type": "string", "pattern": "^decision-[0-9]+$", "description": "Unique within a session"},
-        "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "Content hash (reason, operation, location, text, facts, candidate ids); the cache key"},
+        "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "Content hash (reason, operation, location, text, facts, candidate ids, dialect, importance; never the context); the cache key"},
         "reason": {"enum": ["missing_mapping", "unsupported_construct", "ambiguous_mapping", "missing_target_api", "invalid_mapping", "callback_required"]},
         "operation": {"type": "string", "description": "Source operation, or DATA / ENVIRONMENT / PROCEDURE for declarations"},
         "message": {"type": "string"},

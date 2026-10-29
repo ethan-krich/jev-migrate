@@ -28,6 +28,7 @@ BUILTIN_HANDLERS = MappingProxyType({
     "exit": "EXIT",
     "continue": "CONTINUE",
     "call_program": "CALL",
+    "call_external": "CALL",
     "cancel_program": "CANCEL",
     "entry": "ENTRY",
     "set_condition": "SET",
@@ -68,7 +69,7 @@ BUILTIN_HANDLERS = MappingProxyType({
 # Handlers that no default rule selects: the worker offers them as candidates on a decision
 # (they are correct only under conditions it cannot prove, e.g. SEARCH ALL key order).
 CANDIDATE_HANDLERS = frozenset({"search_all_binary", "search_all_linear", "alter_goto", "sort_stable",
-                                "compute"})
+                                "compute", "call_external"})
 
 # Facts the worker computes per operation instance; usable as `when` condition keys.
 FACTS = MappingProxyType({
@@ -122,6 +123,41 @@ OPERATIONS = frozenset({
 })
 
 PRIORITY = 100
+
+# (decision reason, operation) -> importance tier, "*" matching anything. The worker puts the
+# tier of the most specific entry on every decision: (reason, operation), then (*, operation),
+# then (reason, *), then (*, *). The tier selects a provider's confidence floor and is part of
+# the fingerprint. Override it with transpile(importance=...).
+DEFAULT_IMPORTANCE = MappingProxyType({
+    ("*", "*"): "normal",
+    ("unsupported_construct", "*"): "high",
+    ("missing_target_api", "*"): "high",
+    ("callback_required", "*"): "high",
+    # Declarations shape every statement that uses the data.
+    ("*", "DATA"): "critical",
+    # Arithmetic and data conversion: wrong digits are wrong amounts.
+    ("*", "ADD"): "critical",
+    ("*", "SUBTRACT"): "critical",
+    ("*", "MULTIPLY"): "critical",
+    ("*", "DIVIDE"): "critical",
+    ("*", "COMPUTE"): "critical",
+    ("*", "MOVE"): "high",
+    ("*", "INITIALIZE"): "high",
+    # Records written, ordered or looked up.
+    ("*", "WRITE"): "high",
+    ("*", "REWRITE"): "high",
+    ("*", "DELETE"): "high",
+    ("*", "SORT"): "high",
+    ("*", "MERGE"): "high",
+    ("*", "SEARCH"): "high",
+    # Control flow and program linkage.
+    ("*", "CALL"): "high",
+    ("*", "GO_TO"): "high",
+    ("*", "ALTER"): "high",
+    # Console output.
+    ("*", "DISPLAY"): "low",
+    ("*", "EXHIBIT"): "low",
+})
 
 # (id, source, handler, when, description)
 DEFAULT_RULES: tuple[tuple[str, str, str, dict, str], ...] = (

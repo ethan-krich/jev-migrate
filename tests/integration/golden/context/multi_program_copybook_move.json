@@ -1,0 +1,58 @@
+{
+  "source": {
+    "file": "billing/PAY-MAIN.cbl",
+    "line": 9,
+    "column": 12,
+    "text": "MOVE \"ACME\" TO PAY-NAME"
+  },
+  "context": {
+    "refs": [
+      {
+        "ref": "data:PAY-NAME@6:8",
+        "kind": "data",
+        "depth": 0,
+        "text": "01 PAY-NAME   PIC X(8).",
+        "summary": "01 PAY-NAME PIC X(8). (from the COPY at line 6)",
+        "file": "billing/PAY-MAIN.cbl",
+        "line": 6
+      },
+      {
+        "ref": "stmt:11:12",
+        "kind": "writes",
+        "depth": 1,
+        "text": "MOVE \"ACME\" TO PAY-NAME",
+        "summary": "MOVE \"ACME\" TO PAY-NAME",
+        "file": "billing/PAY-MAIN.cbl",
+        "line": 9,
+        "parent": "data:PAY-NAME@6:8"
+      },
+      {
+        "ref": "stmt:13:12",
+        "kind": "usage",
+        "depth": 1,
+        "text": "DISPLAY \"main \" PAY-NAME \" \" PAY-AMOUNT",
+        "summary": "DISPLAY \"main \" PAY-NAME \" \" PAY-AMOUNT",
+        "file": "billing/PAY-MAIN.cbl",
+        "line": 11,
+        "parent": "data:PAY-NAME@6:8"
+      },
+      {
+        "ref": "data:PAY-AMOUNT@7:8",
+        "kind": "data",
+        "depth": 2,
+        "truncated": true,
+        "summary": "01 PAY-AMOUNT PIC 9(5)V99. (from the COPY at line 6)",
+        "file": "billing/PAY-MAIN.cbl",
+        "line": 6,
+        "parent": "stmt:13:12"
+      }
+    ],
+    "budget": {
+      "max_depth": 1,
+      "max_chars": 600,
+      "used_chars": 85,
+      "truncated": 1,
+      "omitted": 0
+    }
+  }
+}

@@ -14,7 +14,10 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import transpiler.cobol2java.TestSupport;
+import transpiler.cobol2java.context.ContextGraph;
+import transpiler.cobol2java.decision.Candidate;
 import transpiler.cobol2java.decision.Decision;
+import transpiler.cobol2java.decision.Importance;
 import transpiler.cobol2java.decision.Reason;
 
 class ProgramTranslatorTest {
@@ -129,12 +132,38 @@ class ProgramTranslatorTest {
     }
 
     @Test
+    void externalCallBindsThroughSlotDecisions() throws Exception {
+        String src = program("01 A PIC X(4).", "CALL 'EXTPROG' USING A ON EXCEPTION DISPLAY 'none' END-CALL.", "STOP RUN.");
+        var r = translate(dir, src, defaultRules(), Map.of("OTHER", "test.gen.Other"));
+        Decision d = r.decisions().getFirst();
+        assertEquals(Reason.MISSING_TARGET_API, d.reason());
+        Candidate external = d.candidates().getFirst();
+        assertEquals("builtin:call_external", external.id());
+        assertEquals(List.of("target", "args"), external.slots().stream().map(Candidate.Slot::name).toList());
+        List<Decision> slots = d.resolve(external.id());
+        assertFalse(d.statementTranslated(), "the statement waits for its slots");
+        assertEquals(List.of("target", "args"), slots.stream().map(Decision::slotName).toList());
+        // OTHER's USING items are unknown (it is not parsed here), so only "not found" is offered.
+        assertEquals(List.of("target:not_found"), slots.get(0).candidates().stream().map(Candidate::id).toList());
+        assertEquals(List.of("args:as_written", "args:by_content"), slots.get(1).candidates().stream().map(Candidate::id).toList());
+        assertTrue(r.compilationUnit().toString().contains("UNRESOLVED CALL"));
+        assertTrue(slots.get(0).resolve("target:not_found").isEmpty());
+        assertFalse(slots.get(0).statementTranslated());
+        assertTrue(slots.get(1).resolve("args:as_written").isEmpty());
+        assertTrue(slots.get(1).statementTranslated());
+        String out = java(r);
+        assertFalse(out.contains("UNRESOLVED"), out);
+        assertTrue(out.contains("ProgramSupport.callNamed(this, \"EXTPROG\", name -> null, true, a.view())"), out);
+        assertEquals("", compile("test.gen.T", out));
+    }
+
+    @Test
     void removedMappingOffersValidatedCandidatesAndApplies() throws Exception {
         var rules = defaultRules();
         rules.removeIf(n -> n.get("source").asText().equals("DISPLAY"));
         var r = translate(dir, program("01 A PIC 9 VALUE 1.", "IF A = 1 DISPLAY 'one' END-IF."), rules);
         Decision d = r.decisions().getFirst();
-        d.register("decision-1", "java", "sha256:0");
+        d.register("decision-1", "java", "sha256:0", Importance.empty(), ContextGraph.Budget.DEFAULT);
         assertEquals(Reason.MISSING_MAPPING, d.reason());
         assertEquals(List.of("builtin:display"), d.candidates().stream().map(c -> c.id()).toList());
         assertTrue(d.candidates().getFirst().preview().contains("Display.line(\"one\")"));

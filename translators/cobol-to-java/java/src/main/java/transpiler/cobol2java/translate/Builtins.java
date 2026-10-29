@@ -101,6 +101,11 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("call_program", "CALL",
                 "CALL 'literal' of a program in the project, or CALL identifier (Dialect.dynamic_calls), [USING] [ON EXCEPTION]",
                 Builtins::callProgram));
+        register(Handler.of("call_external", "CALL",
+                "candidate only: CALL of a program outside the project, bound through its target and args slots",
+                (u, c) -> {
+                    throw HandlerException.notApplicable("call_external is offered only for a CALL of a program outside the project");
+                }));
         register(Handler.of("entry", "ENTRY", "ENTRY reached in the flow of the program (no operation; CALL starts there)",
                 (u, c) -> List.of(noOp("ENTRY"))));
         register(Handler.of("cancel_program", "CANCEL", "CANCEL 'literal' / identifier: the program's next CALL starts it afresh",
@@ -1263,6 +1268,32 @@ public final class Builtins implements MappingRegistry.Catalog {
      * EXCEPTION after it returns.
      */
     private static List<Statement> callProgram(OpUnit u, TranslationContext c) throws HandlerException {
+        return callTo(u, c, null, false, false);
+    }
+
+    /**
+     * The {@code call_external} candidate of a CALL 'literal' whose program is not in the project,
+     * once its slots are chosen. {@code target} is the project program the name stands for, or
+     * null when the program is absent at run time: then the CALL behaves as GnuCOBOL's CALL of a
+     * module it cannot load (ON EXCEPTION runs; without it the run unit ends with "module not
+     * found"). {@code byContent} passes every argument as a copy (correct only if the target
+     * never changes its parameters).
+     */
+    static List<Statement> callExternal(OpUnit u, TranslationContext c, String target, boolean byContent) throws HandlerException {
+        CallStatement call = (CallStatement) u.statement();
+        if (!(call.getProgramValueStmt() instanceof LiteralValueStmt lit && lit.getLiteral().getLiteralType() == Literal.LiteralType.NON_NUMERIC)) {
+            throw HandlerException.notApplicable("call_external binds CALL 'literal' only");
+        }
+        return callTo(u, c, target, byContent, target == null);
+    }
+
+    /**
+     * CALL of the program the statement names, or of {@code target} (a project program) instead of
+     * a literal name; {@code absent}: the literal names no program at run time (the arguments are
+     * still evaluated, as GnuCOBOL does before it looks the module up).
+     */
+    private static List<Statement> callTo(OpUnit u, TranslationContext c, String target, boolean byContent, boolean absent)
+            throws HandlerException {
         CallStatement call = (CallStatement) u.statement();
         if (call.getGivingPhrase() != null) {
             throw HandlerException.unsupported("CALL ... RETURNING / GIVING is not supported");
@@ -1271,25 +1302,36 @@ public final class Builtins implements MappingRegistry.Catalog {
             throw HandlerException.unsupported("CALL with both ON OVERFLOW and ON EXCEPTION");
         }
         Scope onException = call.getOnExceptionClause() != null ? call.getOnExceptionClause() : call.getOnOverflowPhrase();
-        boolean dynamic = !(call.getProgramValueStmt() instanceof LiteralValueStmt lit
+        boolean dynamic = target == null && !(call.getProgramValueStmt() instanceof LiteralValueStmt lit
                 && lit.getLiteral().getLiteralType() == Literal.LiteralType.NON_NUMERIC);
         NodeList<Expression> args = NodeList.nodeList(self());
         List<Integer> expected = null;
         String program = null;
         if (dynamic) {
             c.require("dynamic_calls", c.dialect().dynamicCalls(), call.getCtx(), "CALL identifier");
-            Operand target = c.operand(call.getProgramValueStmt());
-            if (!(target instanceof Operand.Field f) || !f.alphanumeric() || f.edited()) {
-                throw HandlerException.unsupported("CALL through a " + target.category() + " item");
+            Operand named = c.operand(call.getProgramValueStmt());
+            if (!(named instanceof Operand.Field f) || !f.alphanumeric() || f.edited()) {
+                throw HandlerException.unsupported("CALL through a " + named.category() + " item");
             }
-            args.add(call(c.field(target), "get"));
+            args.add(call(c.field(named), "get"));
             args.add(new com.github.javaparser.ast.expr.MethodReferenceExpr(new com.github.javaparser.ast.expr.TypeExpr(type(c.className())),
                     new NodeList<>(), c.programResolver()));
         } else {
-            program = ((LiteralValueStmt) call.getProgramValueStmt()).getLiteral().getNonNumericLiteral();
+            program = target != null ? target : ((LiteralValueStmt) call.getProgramValueStmt()).getLiteral().getNonNumericLiteral();
             String name = program;
-            String cls = c.programClass(name).orElseThrow(() -> new HandlerException(HandlerException.Kind.MISSING_TARGET,
-                    "program '" + name + "' is not part of the translation project (unresolved cross-file dependency)"));
+            if (absent) {
+                args.add(str(name));
+                args.add(new com.github.javaparser.ast.expr.LambdaExpr(
+                        new com.github.javaparser.ast.body.Parameter(new com.github.javaparser.ast.type.UnknownType(), "name"),
+                        new com.github.javaparser.ast.expr.NullLiteralExpr()));
+            }
+        }
+        if (!dynamic && !absent) {
+            String name = program;
+            String cls = c.programClass(name).orElseThrow(() -> target != null
+                    ? HandlerException.notApplicable("program '" + name + "' is not part of the translation project")
+                    : HandlerException.missingProgram(name,
+                            "program '" + name + "' is not part of the translation project (unresolved cross-file dependency)"));
             args.add(call(name(cls), "instance"));
             if (c.entryIndex(name) > 0) {
                 args.add(integer(c.entryIndex(name)));
@@ -1310,7 +1352,8 @@ public final class Builtins implements MappingRegistry.Catalog {
                             throw HandlerException.unsupported("CALL USING BY REFERENCE " + ref.getByReferenceType() + " is not supported");
                         }
                         Operand o = c.operand(ref.getValueStmt());
-                        args.add(call(argumentField(o, c), "view"));
+                        Expression view = call(argumentField(o, c), "view");
+                        args.add(byContent ? call(view, "copy") : view);
                         sizes.add(argumentSize(o));
                     }
                 }
@@ -1336,7 +1379,7 @@ public final class Builtins implements MappingRegistry.Catalog {
             throw HandlerException.unsupported("CALL '" + program + "' USING passes items of " + sizes + " bytes but the program expects "
                     + expected + " (USING items must match in number and size)");
         }
-        String method = dynamic ? "callNamed" : c.entryIndex(program) > 0 ? "callEntry" : "call";
+        String method = dynamic || absent ? "callNamed" : c.entryIndex(program) > 0 ? "callEntry" : "call";
         Expression invoke = new com.github.javaparser.ast.expr.MethodCallExpr(name("ProgramSupport"), method, args);
         BlockStmt notOnException = call.getNotOnExceptionClause() == null ? new BlockStmt() : c.nested(call.getNotOnExceptionClause());
         if (onException == null) {

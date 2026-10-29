@@ -96,9 +96,11 @@ import org.antlr.v4.runtime.misc.Interval;
 import org.antlr.v4.runtime.tree.ParseTree;
 import transpiler.cobol2java.cobol.Picture;
 import transpiler.cobol2java.cobol.SourceMap;
+import transpiler.cobol2java.context.ContextGraph;
 import transpiler.cobol2java.decision.Candidate;
 import transpiler.cobol2java.decision.Decision;
 import transpiler.cobol2java.decision.Reason;
+import transpiler.cobol2java.decision.SlotGroup;
 import transpiler.cobol2java.decision.SourceLocation;
 import transpiler.cobol2java.mapping.MappingRegistry;
 import transpiler.cobol2java.mapping.MappingRule;
@@ -489,7 +491,8 @@ public final class ProgramTranslator implements TranslationContext {
                     };
                     root.add(new Decision(Reason.MISSING_MAPPING, "dialect:file_assignments", "ASSIGN TO '" + f.assigned + "' (file "
                             + f.cobolName + ") has no entry in Dialect.file_assignments", location(f.ctx), in.programId(),
-                            Map.of("field", "file_assignments", "name", f.assigned), null, List.of(), null, id -> none.apply(id)));
+                            Map.of("field", "file_assignments", "name", f.assigned), null, List.of(), null, id -> none.apply(id))
+                            .withContext(context(f.ctx)));
                     statements++;
                     files.remove(f.cobolName);
                     continue;
@@ -2822,7 +2825,13 @@ public final class ProgramTranslator implements TranslationContext {
                                 candidatesFor(unit, handler));
                         case UNSUPPORTED -> unresolved(unit, block, facts, Reason.UNSUPPORTED_CONSTRUCT, rule, e.getMessage(),
                                 e.offerCandidates() ? candidatesFor(unit, handler) : List.of());
-                        case MISSING_TARGET -> unresolved(unit, block, facts, Reason.MISSING_TARGET_API, rule, e.getMessage(), List.of());
+                        case MISSING_TARGET -> {
+                            if (e.missingProgram() != null) {
+                                externalCall(unit, block, facts, rule, e.missingProgram(), e.getMessage());
+                            } else {
+                                unresolved(unit, block, facts, Reason.MISSING_TARGET_API, rule, e.getMessage(), List.of());
+                            }
+                        }
                         // The dialect:<field> decision is already recorded once for the program.
                         case DIALECT -> block.addStatement(placeholder(unit, "needs Dialect." + e.getMessage()));
                     }
@@ -2909,7 +2918,144 @@ public final class ProgramTranslator implements TranslationContext {
             return g.nested();
         };
         return new Decision(reason, unit.operation(), message, unit.location(), in.programId(), facts,
-                rule == null ? null : rule.id(), candidates, rule == null ? null : rule.callback(), plan);
+                rule == null ? null : rule.id(), candidates, rule == null ? null : rule.callback(), plan)
+                .withContext(context(unit.statement().getCtx()));
+    }
+
+    /** The context graph a provider reads for a decision about the source at {@code ctx}. */
+    private ContextGraph context(ParserRuleContext ctx) {
+        return ContextGraph.of(ctx, in.unit().getProgram(), in.sourceMap(), in.sourceFile());
+    }
+
+    /**
+     * CALL 'name' of a program outside the project: a missing_target_api decision offering
+     * {@code builtin:call_external}, whose slots ask what the name reaches ({@code target}) and,
+     * with USING, how the arguments are passed ({@code args}). Every combination is generated
+     * here; a slot offers only the options that generate with all the other slot's options.
+     */
+    private void externalCall(OpUnit unit, BlockStmt block, Map<String, Object> facts, MappingRule rule, String program,
+            String message) {
+        var call = (io.proleap.cobol.asg.metamodel.procedure.call.CallStatement) unit.statement();
+        Map<String, String> targets = new LinkedHashMap<>();
+        if (absentAllowed(program)) {
+            targets.put("target:not_found", null);
+        }
+        // Not the program itself: GnuCOBOL makes a program that CALLs itself recursive, which is settled before this choice.
+        String self = (in.containers().isEmpty() ? in.packageName() : in.containers().getLast().getValue()) + "." + in.className();
+        in.programs().forEach((name, cls) -> {
+            if (!cls.equals(self)) {
+                targets.put("target:program:" + name, name);
+            }
+        });
+        List<String> modes = call.getUsingPhrase() == null ? List.of(ARGS_AS_WRITTEN) : List.of(ARGS_AS_WRITTEN, ARGS_BY_CONTENT);
+        Map<String, Generated> combos = new LinkedHashMap<>();
+        for (var t : targets.entrySet()) {
+            for (String mode : modes) {
+                Generated g = generateExternal(unit, t.getValue(), mode.equals(ARGS_BY_CONTENT));
+                if (g != null) {
+                    combos.put(t.getKey() + "|" + mode, g);
+                }
+            }
+        }
+        List<String> offeredTargets = targets.keySet().stream().filter(k -> combos.containsKey(k + "|" + ARGS_AS_WRITTEN)).toList();
+        List<String> offeredModes = modes.stream()
+                .filter(m -> offeredTargets.stream().allMatch(k -> combos.containsKey(k + "|" + m))).toList();
+        if (offeredTargets.isEmpty()) {
+            unresolved(unit, block, facts, Reason.MISSING_TARGET_API, rule, message, List.of());
+            return;
+        }
+        List<Candidate.Slot> slots = new ArrayList<>(List.of(new Candidate.Slot("target",
+                "what CALL '" + program + "' reaches: a program of the project, or no program at run time")));
+        if (call.getUsingPhrase() != null) {
+            slots.add(new Candidate.Slot("args", "how the USING arguments are passed to the target"));
+        }
+        Candidate external = new Candidate("builtin:call_external", "call_external",
+                "bind CALL '" + program + "' to its target; the slots are separate decisions", null, slots);
+        EmptyStmt placeholder = placeholder(unit, null);
+        block.addStatement(placeholder);
+        ContextGraph graph = context(call.getCtx());
+        String ruleId = rule == null ? null : rule.id();
+        Decision.Plan plan = candidateId -> {
+            if (!candidateId.equals(external.id())) {
+                throw new IllegalArgumentException("no plan for candidate " + candidateId);
+            }
+            SlotGroup group = new SlotGroup(slots.stream().map(Candidate.Slot::name).toList(), chosen -> {
+                Generated g = combos.get(chosen.get("target") + "|" + chosen.getOrDefault("args", ARGS_AS_WRITTEN));
+                int index = block.getStatements().indexOf(placeholder);
+                if (g == null || index < 0) {
+                    throw new IllegalStateException("CALL '" + program + "' cannot be generated for " + chosen);
+                }
+                block.getStatements().remove(index);
+                block.getStatements().addAll(index, g.statements());
+                return g.nested();
+            });
+            List<Decision> raised = new ArrayList<>();
+            List<Candidate> targetCandidates = new ArrayList<>();
+            for (String k : offeredTargets) {
+                String name = targets.get(k);
+                targetCandidates.add(new Candidate(k, "call_external", name == null
+                        ? "no program '" + program + "' at run time: ON EXCEPTION runs, or the run unit ends with \"module not found\" (GnuCOBOL)"
+                        : "'" + program + "' is the project's program " + name + " under another name",
+                        preview(combos.get(k + "|" + ARGS_AS_WRITTEN))));
+            }
+            raised.add(slotDecision(unit, facts, ruleId, "target", "CALL '" + program + "': choose the program it reaches",
+                    targetCandidates, group, graph));
+            if (slots.size() > 1) {
+                List<Candidate> modeCandidates = new ArrayList<>();
+                for (String m : offeredModes) {
+                    modeCandidates.add(new Candidate(m, "call_external", m.equals(ARGS_AS_WRITTEN)
+                            ? "pass the USING items as written (BY REFERENCE shares the item, BY CONTENT passes a copy)"
+                            : "pass every USING item as a copy; correct only if the target never changes its parameters",
+                            preview(combos.get(offeredTargets.getFirst() + "|" + m))));
+                }
+                raised.add(slotDecision(unit, facts, ruleId, "args", "CALL '" + program + "': choose how the arguments are passed",
+                        modeCandidates, group, graph));
+            }
+            return raised;
+        };
+        sink.add(new Decision(Reason.MISSING_TARGET_API, unit.operation(), message, unit.location(), in.programId(), facts,
+                ruleId, List.of(external), null, plan).withContext(graph));
+    }
+
+    static final String ARGS_AS_WRITTEN = "args:as_written";
+    static final String ARGS_BY_CONTENT = "args:by_content";
+
+    private Decision slotDecision(OpUnit unit, Map<String, Object> facts, String ruleId, String slot, String message,
+            List<Candidate> candidates, SlotGroup group, ContextGraph graph) {
+        Map<String, Object> slotFacts = new LinkedHashMap<>(facts);
+        slotFacts.put("slot", slot);
+        return Decision.slot(Reason.MISSING_TARGET_API, unit.operation(), message, unit.location(), in.programId(), slotFacts, ruleId,
+                candidates, group, slot).withContext(graph);
+    }
+
+    /** A literal GnuCOBOL resolves as a module (not a path or one of its system routines), so "not found" is its behaviour. */
+    private static boolean absentAllowed(String program) {
+        String upper = program.toUpperCase(java.util.Locale.ROOT);
+        return !program.isBlank() && program.equals(program.strip()) && program.indexOf('/') < 0 && program.indexOf('\\') < 0
+                && !upper.startsWith("CBL_") && !upper.startsWith("C$") && !upper.equals("SYSTEM");
+    }
+
+    /** The call_external statements for one combination of slot choices, or null when they cannot be generated. */
+    private Generated generateExternal(OpUnit unit, String target, boolean byContent) {
+        List<Decision> nested = new ArrayList<>();
+        List<Decision> saved = sink;
+        int savedStatements = statements;
+        int savedTranslated = translated;
+        sink = nested;
+        try {
+            List<Statement> stmts = Builtins.callExternal(unit, this, target, byContent);
+            return new Generated(null, stmts, nested);
+        } catch (HandlerException e) {
+            return null;
+        } finally {
+            sink = saved;
+            statements = savedStatements;
+            translated = savedTranslated;
+        }
+    }
+
+    private static String preview(Generated g) {
+        return String.join("\n", g.statements().stream().map(Statement::toString).toList());
     }
 
     /** Records a declaration-level construct that blocks translation (no candidates). */
@@ -2923,14 +3069,15 @@ public final class ProgramTranslator implements TranslationContext {
             throw new IllegalArgumentException("decision has no candidates");
         };
         sink.add(new Decision(reason, operation, message, location(ctx), in.programId(),
-                Map.of(), null, List.of(), null, none));
+                Map.of(), null, List.of(), null, none).withContext(context(ctx)));
     }
 
     /**
      * Records the program's single decision for an unset dialect setting. It has no candidates:
      * the project must set the field and translate again.
      */
-    private void dialectDecision(String field, SourceLocation where, String usage) {
+    private void dialectDecision(String field, ParserRuleContext ctx, String usage) {
+        SourceLocation where = location(ctx);
         if (!dialectDecisions.add(field)) {
             return;
         }
@@ -2938,7 +3085,8 @@ public final class ProgramTranslator implements TranslationContext {
             throw new IllegalArgumentException("decision has no candidates");
         };
         root.add(new Decision(Reason.MISSING_MAPPING, "dialect:" + field, usage + " depends on Dialect." + field
-                + ", which the project leaves unset", where, in.programId(), Map.of("field", field), null, List.of(), null, none));
+                + ", which the project leaves unset", where, in.programId(), Map.of("field", field), null, List.of(), null, none)
+                .withContext(context(ctx)));
     }
 
     @Override
@@ -2952,7 +3100,7 @@ public final class ProgramTranslator implements TranslationContext {
             return value.get();
         }
         dialectHits++;
-        dialectDecision(field, location(where), usage);
+        dialectDecision(field, where, usage);
         throw new HandlerException(HandlerException.Kind.DIALECT, field);
     }
 

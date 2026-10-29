@@ -1,0 +1,97 @@
+{
+  "source": {
+    "file": "BASICS.cbl",
+    "line": 23,
+    "column": 12,
+    "text": "DISPLAY \"[\" WS-SMALL \"]\""
+  },
+  "context": {
+    "refs": [
+      {
+        "ref": "data:WS-SMALL@9:8",
+        "kind": "data",
+        "depth": 0,
+        "text": "01 WS-SMALL       PIC 99.",
+        "summary": "01 WS-SMALL PIC 99.",
+        "file": "BASICS.cbl",
+        "line": 9
+      },
+      {
+        "ref": "para:MAIN-PARA@16:8",
+        "kind": "paragraph",
+        "depth": 1,
+        "truncated": true,
+        "summary": "paragraph MAIN-PARA, lines 16-58",
+        "file": "BASICS.cbl",
+        "line": 16
+      },
+      {
+        "ref": "stmt:22:12",
+        "kind": "writes",
+        "depth": 1,
+        "text": "MOVE 12345 TO WS-SMALL",
+        "summary": "MOVE 12345 TO WS-SMALL",
+        "file": "BASICS.cbl",
+        "line": 22,
+        "parent": "data:WS-SMALL@9:8"
+      },
+      {
+        "ref": "stmt:23:12",
+        "kind": "usage",
+        "depth": 1,
+        "text": "DISPLAY \"[\" WS-SMALL \"]\"",
+        "summary": "DISPLAY \"[\" WS-SMALL \"]\"",
+        "file": "BASICS.cbl",
+        "line": 23,
+        "parent": "data:WS-SMALL@9:8"
+      },
+      {
+        "ref": "stmt:24:12",
+        "kind": "writes",
+        "depth": 1,
+        "text": "ADD 95 TO WS-SMALL",
+        "summary": "ADD 95 TO WS-SMALL",
+        "file": "BASICS.cbl",
+        "line": 24,
+        "parent": "data:WS-SMALL@9:8"
+      },
+      {
+        "ref": "stmt:25:12",
+        "kind": "usage",
+        "depth": 1,
+        "text": "DISPLAY \"[\" WS-SMALL \"]\"",
+        "summary": "DISPLAY \"[\" WS-SMALL \"]\"",
+        "file": "BASICS.cbl",
+        "line": 25,
+        "parent": "data:WS-SMALL@9:8"
+      },
+      {
+        "ref": "stmt:52:12",
+        "kind": "writes",
+        "depth": 1,
+        "truncated": true,
+        "summary": "PERFORM VARYING WS-SMALL FROM 1 BY 2 UNTIL WS-SMALL > 6 DISPLAY \"vary \" WS-SMALL END-PERFORM",
+        "file": "BASICS.cbl",
+        "line": 52,
+        "parent": "data:WS-SMALL@9:8"
+      },
+      {
+        "ref": "stmt:53:16",
+        "kind": "usage",
+        "depth": 1,
+        "truncated": true,
+        "summary": "DISPLAY \"vary \" WS-SMALL",
+        "file": "BASICS.cbl",
+        "line": 53,
+        "parent": "data:WS-SMALL@9:8"
+      }
+    ],
+    "budget": {
+      "max_depth": 1,
+      "max_chars": 120,
+      "used_chars": 113,
+      "truncated": 3,
+      "omitted": 0
+    }
+  }
+}

@@ -6,6 +6,7 @@ inspected and synthetic decisions constructed without touching raw dictionaries.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -13,6 +14,9 @@ from typing import Any
 WORKER_PROTOCOL = "transpiler-worker/1"
 JOB_VERSION = 1
 REPORT_VERSION = 1
+
+# Importance tiers of a decision, lowest first (the worker assigns one from an importance table).
+IMPORTANCE_TIERS = ("low", "normal", "high", "critical")
 
 
 class Reason(StrEnum):
@@ -101,3 +105,18 @@ class DecisionResponse:
         if self.rationale:
             d["rationale"] = self.rationale
         return d
+
+
+def importance_table(table: Mapping[tuple[str, str], str]) -> list[dict[str, str]]:
+    """``{(reason, operation): tier}`` as ``initialize.importance``; ``*`` matches anything."""
+    out = []
+    for key, tier in table.items():
+        if not (isinstance(key, tuple) and len(key) == 2 and all(isinstance(k, str) and k for k in key)):
+            raise ValueError(f"importance key must be (reason, operation), not {key!r}")
+        if key[0] != "*" and key[0] not in {r.value for r in Reason}:
+            raise ValueError(f"unknown decision reason {key[0]!r} in importance table")
+        if tier not in IMPORTANCE_TIERS:
+            raise ValueError(f"importance of {key} must be one of {IMPORTANCE_TIERS}, not {tier!r}")
+        out.append({"reason": key[0], "operation": key[1], "importance": tier})
+    return out
+

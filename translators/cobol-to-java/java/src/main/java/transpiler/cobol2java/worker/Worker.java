@@ -18,7 +18,7 @@ import transpiler.cobol2java.translate.Handler;
 public final class Worker {
     public static final String NAME = "cobol-to-java";
     public static final String VERSION = "0.1.0";
-    static final List<String> METHODS = List.of("initialize", "translate", "resolve", "finalize", "shutdown");
+    static final List<String> METHODS = List.of("initialize", "translate", "resolve", "expand_context", "finalize", "shutdown");
 
     private final MessageChannel channel;
     private final SessionManager sessions = new SessionManager();
@@ -108,6 +108,7 @@ public final class Worker {
                 case "initialize" -> sessions.initialize(sid, params, p -> channel.send(event("progress", sid, id, p)));
                 case "translate" -> sessions.translate(sid, params, p -> channel.send(event("progress", sid, id, p)));
                 case "resolve" -> sessions.resolve(sid, params);
+                case "expand_context" -> sessions.expandContext(sid, params);
                 case "finalize" -> sessions.finish(sid, params);
                 default -> throw new IllegalStateException(method);
             };

@@ -8,6 +8,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import transpiler.cobol2java.context.ContextGraph;
 import transpiler.cobol2java.mapping.MappingRule;
 import transpiler.cobol2java.protocol.Json;
 
@@ -38,6 +39,12 @@ public final class Decision {
     private final Plan plan;
     private String id;
     private String fingerprint;
+    private String importance;
+    private ContextGraph context;
+    private ObjectNode renderedContext;
+    /** The group of a slot decision (raised by a candidate with slots), with the slot it fills. */
+    private SlotGroup slotGroup;
+    private String slotName;
     private State state = State.PENDING;
     private String selectedCandidate;
 
@@ -56,10 +63,48 @@ public final class Decision {
         this.plan = plan;
     }
 
-    /** Assigns the session-unique id and the content fingerprint used for caching. */
-    public void register(String assignedId, String targetLanguage, String dialectHash) {
+    /**
+     * A decision filling slot {@code name} of a candidate: its plan records the choice in
+     * {@code group}, and the last slot resolved generates the statement.
+     */
+    public static Decision slot(Reason reason, String operation, String message, SourceLocation location, String programId,
+            Map<String, Object> facts, String ruleId, List<Candidate> candidates, SlotGroup group, String name) {
+        Decision d = new Decision(reason, operation, message, location, programId, facts, ruleId, candidates, null,
+                candidateId -> group.fill(name, candidateId));
+        d.slotGroup = group;
+        d.slotName = name;
+        return d;
+    }
+
+    /** Attaches the source graph that {@code context.refs} is rendered from. */
+    public Decision withContext(ContextGraph graph) {
+        this.context = graph;
+        return this;
+    }
+
+    public ContextGraph context() {
+        return context;
+    }
+
+    /**
+     * Assigns the session-unique id, the importance tier and the content fingerprint used for
+     * caching (which includes the tier), and renders the context within {@code budget}.
+     */
+    public void register(String assignedId, String targetLanguage, String dialectHash, Importance table,
+            ContextGraph.Budget budget) {
         this.id = assignedId;
+        this.importance = table.of(reason, operation);
         this.fingerprint = computeFingerprint(targetLanguage, dialectHash);
+        this.renderedContext = context == null ? null : context.render(budget);
+    }
+
+    public String importance() {
+        return importance;
+    }
+
+    /** The slot this decision fills, or null. */
+    public String slotName() {
+        return slotName;
     }
 
     public String id() {
@@ -110,6 +155,15 @@ public final class Decision {
         return nested;
     }
 
+    /**
+     * Whether resolving this decision completed its statement: false for a candidate with slots
+     * and for a slot decision whose group still has open slots.
+     */
+    public boolean statementTranslated() {
+        boolean slotted = candidates.stream().anyMatch(c -> c.id().equals(selectedCandidate) && !c.slots().isEmpty());
+        return !slotted && (slotGroup == null || slotGroup.complete());
+    }
+
     public ObjectNode toJson(String targetLanguage) {
         ObjectNode n = Json.object();
         n.put("id", id);
@@ -119,6 +173,7 @@ public final class Decision {
         n.put("message", message);
         n.put("required", true);
         n.put("state", state.name().toLowerCase(java.util.Locale.ROOT));
+        n.put("importance", importance);
         if (selectedCandidate != null) {
             n.put("selected_candidate", selectedCandidate);
         }
@@ -135,13 +190,25 @@ public final class Decision {
             ctx.put("rule_id", ruleId);
         }
         ctx.set("facts", Json.MAPPER.valueToTree(facts));
+        if (renderedContext != null) {
+            ctx.set("refs", renderedContext.get("refs"));
+            ctx.set("budget", renderedContext.get("budget"));
+        }
         var cands = n.putArray("candidates");
         for (Candidate c : candidates) {
             ObjectNode cn = cands.addObject();
             cn.put("id", c.id());
             cn.put("handler", c.handler());
             cn.put("description", c.description());
-            cn.put("preview", c.preview());
+            if (c.preview() != null) {
+                cn.put("preview", c.preview());
+            }
+            if (!c.slots().isEmpty()) {
+                var slots = cn.putArray("slots");
+                for (Candidate.Slot s : c.slots()) {
+                    slots.addObject().put("name", s.name()).put("description", s.description());
+                }
+            }
         }
         if (callback != null) {
             ObjectNode cb = n.putObject("callback");
@@ -163,6 +230,8 @@ public final class Decision {
         basis.put("target_language", targetLanguage);
         // The same source means something else under other project settings.
         basis.put("dialect", dialectHash);
+        // The tier selects the provider's confidence floor, so an answer cached under one tier is not reused under another.
+        basis.put("importance", importance);
         basis.set("facts", Json.MAPPER.valueToTree(facts));
         var ids = basis.putArray("candidates");
         candidates.forEach(c -> ids.add(c.id()));

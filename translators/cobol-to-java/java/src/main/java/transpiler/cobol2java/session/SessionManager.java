@@ -41,6 +41,11 @@ public final class SessionManager {
         return new Reply(o.status(), o.result());
     }
 
+    public Reply expandContext(String sessionId, JsonNode params) throws ProtocolException {
+        var o = session(sessionId).expandContext(params);
+        return new Reply(o.status(), o.result());
+    }
+
     public Reply finish(String sessionId, JsonNode params) throws ProtocolException {
         var o = session(sessionId).finish(params);
         return new Reply(o.status(), o.result());

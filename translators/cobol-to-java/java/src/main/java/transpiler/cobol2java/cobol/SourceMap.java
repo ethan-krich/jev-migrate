@@ -66,6 +66,26 @@ public final class SourceMap {
         return preprocessedLine - shift;
     }
 
+    /** The line of the COPY statement whose expansion holds a preprocessed line, if any. */
+    public java.util.OptionalInt copyLine(int preprocessedLine) {
+        if (!exact) {
+            return java.util.OptionalInt.empty();
+        }
+        int shift = 0;
+        for (Expansion e : expansions) {
+            int regionStart = e.start() + shift;
+            int regionEnd = regionStart + e.added();
+            if (preprocessedLine < regionStart) {
+                break;
+            }
+            if (preprocessedLine <= regionEnd) {
+                return java.util.OptionalInt.of(e.start());
+            }
+            shift += e.added() - (e.end() - e.start());
+        }
+        return java.util.OptionalInt.empty();
+    }
+
     static SourceMap build(String source, CobolParserParams params, int preprocessedLineCount) {
         String normalized = new Normalizer().normalize(source, params);
         var parser = new CobolPreprocessorParser(new CommonTokenStream(new CobolPreprocessorLexer(CharStreams.fromString(normalized))));
