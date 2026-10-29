@@ -128,8 +128,11 @@ public sealed interface Picture {
         if (!alpha && s.chars().filter(c -> c == '9' || c == 'Z' || c == '*' || c == '$' || c == '+' || c == '-').count() > 38) {
             return Result.unsupported("PICTURE " + raw + " exceeds 38 digits");
         }
-        int length = s.length() - (int) s.chars().filter(c -> c == 'V').count();
-        return Result.of(new Edited(s, !alpha, length));
+        if (s.contains("V")) {
+            // The runtime EditedField lays out every picture character, so a non-stored V would misalign it.
+            return Result.unsupported("PICTURE " + raw + " uses V in an edited picture, which is not supported");
+        }
+        return Result.of(new Edited(s, !alpha, s.length()));
     }
 
     record Result(Optional<Picture> picture, String unsupportedReason) {

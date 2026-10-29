@@ -2420,6 +2420,7 @@ public final class ProgramTranslator implements TranslationContext {
         perform.addParameter(PrimitiveType.intType(), "thru");
         perform.setBody(new BlockStmt(NodeList.nodeList(stmt(call(name("performs"), "push", name("thru"))),
                 stmt(thisCall("run", name("from"))))));
+        main.addStatement(stmt(call(name("performs"), "reset")));
         main.addStatement(stmt(thisCall("run", integer(0))));
     }
 

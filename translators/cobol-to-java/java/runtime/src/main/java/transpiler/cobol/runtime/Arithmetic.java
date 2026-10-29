@@ -82,6 +82,8 @@ public final class Arithmetic {
         return new BigDecimal(q, scale + shift);
     }
 
+    private static final int MAX_EXPONENT = 999_999_999;
+
     /**
      * cob_decimal_pow with an integer exponent: exact for {@code n >= 0}; for {@code n < 0},
      * 1 / a^|n| by {@link #over}. 0 ** n is 0 for n != 0, and a ** 0 is 1.
@@ -96,8 +98,16 @@ public final class Arithmetic {
         if (a.signum() == 0) {
             return BigDecimal.ZERO;
         }
-        int e = n.intValueExact();
         BigDecimal base = trim(a);
+        if (base.abs().compareTo(BigDecimal.ONE) == 0) {
+            // 1 ** n is 1 and (-1) ** n is +-1 whatever n is, so huge exponents need no computing.
+            boolean odd = n.setScale(0, java.math.RoundingMode.DOWN).toBigInteger().testBit(0);
+            return base.signum() < 0 && odd ? base : BigDecimal.ONE;
+        }
+        if (n.setScale(0, java.math.RoundingMode.DOWN).abs().compareTo(BigDecimal.valueOf(MAX_EXPONENT)) > 0) {
+            return null; // beyond what BigDecimal.pow can compute: a size error
+        }
+        int e = n.intValueExact();
         if (e == 1) {
             return base;
         }

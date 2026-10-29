@@ -27,6 +27,11 @@ public final class PerformStack {
         return false;
     }
 
+    /** Discards every pending PERFORM; called when a program invocation starts, as a GOBACK from inside a PERFORM leaves its marker. */
+    public void reset() {
+        depth = 0;
+    }
+
     public int depth() {
         return depth;
     }

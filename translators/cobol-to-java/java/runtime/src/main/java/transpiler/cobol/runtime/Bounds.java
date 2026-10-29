@@ -13,7 +13,7 @@ public final class Bounds {
         if (start < 1 || start > size) {
             fail("offset of '" + name + "' out of bounds: " + start + ", maximum: " + size);
         }
-        if (length < 1 || start + length - 1 > size) {
+        if (length < 1 || length > size - start + 1) {
             fail("length of '" + name + "' out of bounds: " + length + ", maximum: " + (size - start + 1));
         }
         return new AlphanumericField(storage, offset + start - 1, length);
