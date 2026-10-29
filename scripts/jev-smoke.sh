@@ -1,19 +1,29 @@
 #!/usr/bin/env bash
 # Opt-in live run of examples/cobol-to-java with Jev as the decision provider. The DISPLAY rule
 # is removed (as in the README) so the example has decisions for Jev to answer. It calls the
-# TypeSafe API, so it is never part of test.sh or docker.sh test.
-#   TYPESAFE_API_KEY=... ./scripts/jev-smoke.sh
-# JEV_MODEL (default jev-preview) picks the model; JEV_API_KEY_ENV names another key variable.
+# API, so it is never part of test.sh or docker.sh test.
+#   OPENROUTER_API_KEY=... ./scripts/jev-smoke.sh     # through OpenRouter (model jev-latest)
+#   TYPESAFE_API_KEY=... ./scripts/jev-smoke.sh       # TypeSafe's own API (model jev-preview)
+# JEV_ENDPOINT=openrouter|typesafe chooses when both keys are set (default: openrouter if its key is
+# set). JEV_MODEL overrides the model, JEV_API_KEY_ENV the key variable, JEV_TIMEOUT_SECONDS
+# (default 120) the timeout of each API call.
 # Exit status: 0 when the run finished (ok or incomplete), 1 when it failed.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-key_env="${JEV_API_KEY_ENV:-TYPESAFE_API_KEY}"
-[[ -n "${!key_env:-}" ]] || die "set $key_env to a TypeSafe API key (this script calls the live API)"
+endpoint="${JEV_ENDPOINT:-$([[ -n "${OPENROUTER_API_KEY:-}" ]] && echo openrouter || echo typesafe)}"
+case "$endpoint" in
+  openrouter) key_env="${JEV_API_KEY_ENV:-OPENROUTER_API_KEY}" model="${JEV_MODEL:-jev-latest}"
+              base_url="https://openrouter.ai/api" ;;
+  typesafe)   key_env="${JEV_API_KEY_ENV:-TYPESAFE_API_KEY}" model="${JEV_MODEL:-jev-preview}"
+              base_url="${TYPESAFE_BASE_URL:-}" ;;
+  *) die "JEV_ENDPOINT must be openrouter or typesafe, not '$endpoint'" ;;
+esac
+[[ -n "${!key_env:-}" ]] || die "set OPENROUTER_API_KEY or TYPESAFE_API_KEY (this script calls the live API; $key_env is empty)"
 [[ -x "$TRANSPILER_CORE" ]] || "$ROOT/scripts/build.sh"
 
-info "examples/cobol-to-java with JevProvider (model ${JEV_MODEL:-jev-preview})"
+info "examples/cobol-to-java with JevProvider via $endpoint (model $model, key from \$$key_env)"
 # --all-packages --extra jev installs the optional typesafe_sdk dependency from uv.lock.
-ROOT="$ROOT" JEV_API_KEY_ENV="$key_env" \
+ROOT="$ROOT" JEV_API_KEY_ENV="$key_env" JEV_MODEL="$model" JEV_BASE_URL="$base_url" \
   uv run --project "$ROOT" --frozen --all-packages --extra jev python - <<'PY'
 import os
 import sys
@@ -29,8 +39,9 @@ from mappings import configure  # noqa: E402
 
 mappings = configure(default_mappings())
 mappings.remove("DISPLAY")
-jev = JevProvider(os.environ.get("JEV_MODEL", "jev-preview"), Gate(), ContextBudget(),
-                  api_key_env=os.environ["JEV_API_KEY_ENV"])
+jev = JevProvider(os.environ["JEV_MODEL"], Gate(), ContextBudget(), api_key_env=os.environ["JEV_API_KEY_ENV"],
+                  base_url=os.environ["JEV_BASE_URL"] or None,
+                  timeout_seconds=float(os.environ.get("JEV_TIMEOUT_SECONDS", "120")))
 result = transpile(example / "input", output=root / "build/examples/cobol-to-java-jev",
                    mappings=mappings, layout=Layout(base_package="com.example.legacy"),
                    provider=jev)

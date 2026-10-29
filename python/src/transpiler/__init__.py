@@ -23,7 +23,15 @@ from .api import (
 )
 from .callbacks import CallbackRef, CallbackRequest, CallbackResponse
 from .protocol import Candidate, DecisionRequest, DecisionResponse, Reason, ReviewPriority, SourceLocation
-from .providers import ContextBudget, DecisionProvider, DeterministicProvider, Gate, JevProvider, StaticProvider
+from .providers import (
+    OPENROUTER_BASE_URL,
+    ContextBudget,
+    DecisionProvider,
+    DeterministicProvider,
+    Gate,
+    JevProvider,
+    StaticProvider,
+)
 from .registry import HandlerCatalog, Mapping, MappingError, MappingRegistry, Strategy
 
 __all__ = [
@@ -43,6 +51,7 @@ __all__ = [
     "Mapping",
     "MappingError",
     "MappingRegistry",
+    "OPENROUTER_BASE_URL",
     "ProgramResult",
     "Reason",
     "Resolution",

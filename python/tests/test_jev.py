@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import types
 
 import pytest
 from transpiler import ContextBudget, DecisionRequest, DecisionResponse, Gate, JevProvider, TranspileResult
 from transpiler.protocol import ExtraContext, ReviewPriority
-from transpiler.providers.jev import RecordedJevClient, _Choice, merge_refs
+from transpiler.providers.jev import OPENROUTER_BASE_URL, RecordedJevClient, _Choice, merge_refs
 from transpiler.providers.serve import handle
 
 
@@ -154,6 +155,20 @@ def test_to_config_runs_this_interpreter_and_never_carries_the_key(tmp_path, mon
     assert p.context_budget() == {"max_depth": 1, "max_chars": 1000}
     with pytest.raises(ValueError):
         JevProvider("m", client=RecordedJevClient({})).to_config()
+
+
+def test_real_client_gets_endpoint_and_timeout(monkeypatch):
+    seen = {}
+    sdk = types.ModuleType("typesafe_sdk")
+    sdk.TypeSafeClient = lambda **kwargs: seen.update(kwargs) or object()
+    monkeypatch.setitem(sys.modules, "typesafe_sdk", sdk)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
+    p = JevProvider("jev-latest", base_url=OPENROUTER_BASE_URL, api_key_env="OPENROUTER_API_KEY", timeout_seconds=30)
+    again = JevProvider.from_config(json.loads(p.to_config()["command"][4]))
+    assert (again.base_url, again.timeout_seconds) == (OPENROUTER_BASE_URL, 30)
+    again.client
+    assert seen == {"api_key": "or-key", "model": "jev-latest", "base_url": OPENROUTER_BASE_URL, "timeout": 30}
+    assert "base_url" not in JevProvider("m").config()
 
 
 def test_real_client_needs_the_key_variable(monkeypatch):

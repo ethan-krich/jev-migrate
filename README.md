@@ -96,6 +96,11 @@ uv sync --all-packages --extra jev     # the optional transpiler[jev] extra (typ
 export TYPESAFE_API_KEY=...            # read by the provider process only; never written to the job
 ```
 
+Jev is also served through [OpenRouter](https://openrouter.ai/docs/guides/community/typesafe-sdk)
+with an OpenRouter key: `JevProvider("jev-latest", base_url=OPENROUTER_BASE_URL,
+api_key_env="OPENROUTER_API_KEY")` (bare ids map to OpenRouter's `typesafe/` models; pin one with
+`jev-1.13`). `timeout_seconds` (default 120) bounds each API call.
+
 ```python
 from transpiler import ContextBudget, Gate, JevProvider, transpile
 
@@ -115,7 +120,8 @@ A pick is applied only if its confidence reaches the floor of the decision's imp
 (`None`: never automatically) and beats the runner-up by `min_margin`. Anything else stays
 pending, so the run is `incomplete` and nothing is written. Tiers come from
 [`DEFAULT_IMPORTANCE`](docs/mapping-api.md#importance) (`transpile(importance=...)` overrides
-it). `./scripts/jev-smoke.sh` runs the bundled example against the live API. It is not part of
+it). `./scripts/jev-smoke.sh` runs the bundled example against the live API
+(`OPENROUTER_API_KEY=... ./scripts/jev-smoke.sh`, or `TYPESAFE_API_KEY=...`). It is not part of
 any test suite.
 
 Settings the source does not determine (character set, out-of-range policy, file paths, …) go

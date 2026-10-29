@@ -17,6 +17,10 @@ incomplete and nothing is written. The C++ orchestrator re-validates every passe
 The network client (``typesafe_sdk``, the ``transpiler[jev]`` extra) is imported only when a
 real client is needed; tests use :class:`RecordedJevClient`. The API key is read from the
 environment variable named by ``api_key_env`` and never logged or written to the job.
+
+``base_url`` picks the System One endpoint: TypeSafe's own API by default (or ``TYPESAFE_BASE_URL``),
+or :data:`OPENROUTER_BASE_URL` with an OpenRouter key, where bare model ids such as ``jev-latest``
+are mapped onto OpenRouter's ``typesafe/`` models.
 """
 
 from __future__ import annotations
@@ -35,6 +39,7 @@ from .base import DecisionProvider
 
 ABSTAIN = "__abstain__"
 NEED_CONTEXT = "__need_context__"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api"
 DEFAULT_FLOORS: Mapping[str, float | None] = {"low": 0.70, "normal": 0.85, "high": 0.95, "critical": 0.99}
 
 
@@ -168,6 +173,9 @@ class JevProvider(DecisionProvider):
         JevProvider(model="jev-preview",
                     gate=Gate({"low": 0.70, "normal": 0.85, "high": 0.95, "critical": 0.99}, min_margin=0.15),
                     context=ContextBudget(max_chars=4000, max_depth=2, max_expansions=2))
+
+    Through OpenRouter: ``JevProvider("jev-latest", base_url=OPENROUTER_BASE_URL,
+    api_key_env="OPENROUTER_API_KEY")``. ``timeout_seconds`` bounds each HTTP call to the API.
     """
 
     name = "jev"
@@ -180,12 +188,16 @@ class JevProvider(DecisionProvider):
         api_key_env: str = "TYPESAFE_API_KEY",
         client: SystemOneClient | None = None,
         request_timeout_seconds: int = 900,
+        base_url: str | None = None,
+        timeout_seconds: float = 120.0,
     ):
         self.model = model
         self.gate = gate or Gate()
         self.context = context or ContextBudget()
         self.api_key_env = api_key_env
         self.request_timeout_seconds = request_timeout_seconds
+        self.base_url = base_url
+        self.timeout_seconds = timeout_seconds
         self._client = client
 
     # ---------------------------------------------------------------- config
@@ -193,7 +205,9 @@ class JevProvider(DecisionProvider):
     def config(self) -> dict[str, Any]:
         """What :meth:`from_config` needs in the provider process (never the API key itself)."""
         d: dict[str, Any] = {"model": self.model, "gate": self.gate.to_json(), "context": self.context.to_json(),
-                             "api_key_env": self.api_key_env}
+                             "api_key_env": self.api_key_env, "timeout_seconds": self.timeout_seconds}
+        if self.base_url:
+            d["base_url"] = self.base_url
         if isinstance(self._client, RecordedJevClient):
             if self._client.path is None:
                 raise ValueError("a RecordedJevClient used out of process must be loaded from a file")
@@ -211,6 +225,8 @@ class JevProvider(DecisionProvider):
             context=ContextBudget(**config.get("context", {})),
             api_key_env=config.get("api_key_env", "TYPESAFE_API_KEY"),
             client=RecordedJevClient(recordings) if recordings else None,
+            base_url=config.get("base_url"),
+            timeout_seconds=config.get("timeout_seconds", 120.0),
         )
 
     def to_config(self) -> dict[str, Any]:
@@ -236,7 +252,8 @@ class JevProvider(DecisionProvider):
             key = os.environ.get(self.api_key_env, "").strip()
             if not key:
                 raise RuntimeError(f"JevProvider: environment variable {self.api_key_env} is not set")
-            self._client = TypeSafeClient(api_key=key, model=self.model)
+            self._client = TypeSafeClient(api_key=key, model=self.model, base_url=self.base_url,
+                                          timeout=self.timeout_seconds)
         return self._client
 
     # ---------------------------------------------------------------- decide
