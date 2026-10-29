@@ -6,9 +6,22 @@
 #   TYPESAFE_API_KEY=... ./scripts/jev-smoke.sh       # TypeSafe's own API (model jev-preview)
 # JEV_ENDPOINT=openrouter|typesafe chooses when both keys are set (default: openrouter if its key is
 # set). JEV_MODEL overrides the model, JEV_API_KEY_ENV the key variable, JEV_TIMEOUT_SECONDS
-# (default 120) the timeout of each API call.
+# (default 120) the timeout of each API call. Any of these may also be set in $ROOT/.env (see
+# .env.example); variables already in the environment take precedence.
 # Exit status: 0 when the run finished (ok or incomplete), 1 when it failed.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+# KEY=value lines of .env, read as data (never executed); quotes and a leading `export` are allowed.
+if [[ -f "$ROOT/.env" ]]; then
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line#export }"
+    [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+    name="${BASH_REMATCH[1]}" value="${BASH_REMATCH[2]%$'\r'}"
+    if [[ "$value" =~ ^\"(.*)\"$ || "$value" =~ ^\'(.*)\'$ ]]; then value="${BASH_REMATCH[1]}"; fi
+    [[ -n "${!name+set}" ]] || export "$name=$value"
+  done < "$ROOT/.env"
+fi
 
 endpoint="${JEV_ENDPOINT:-$([[ -n "${OPENROUTER_API_KEY:-}" ]] && echo openrouter || echo typesafe)}"
 case "$endpoint" in

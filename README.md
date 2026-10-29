@@ -121,8 +121,8 @@ A pick is applied only if its confidence reaches the floor of the decision's imp
 pending, so the run is `incomplete` and nothing is written. Tiers come from
 [`DEFAULT_IMPORTANCE`](docs/mapping-api.md#importance) (`transpile(importance=...)` overrides
 it). `./scripts/jev-smoke.sh` runs the bundled example against the live API
-(`OPENROUTER_API_KEY=... ./scripts/jev-smoke.sh`, or `TYPESAFE_API_KEY=...`). It is not part of
-any test suite.
+(`OPENROUTER_API_KEY=... ./scripts/jev-smoke.sh`, or `TYPESAFE_API_KEY=...`; it also reads them
+from a git-ignored `.env`, see `.env.example`). It is not part of any test suite.
 
 Settings the source does not determine (character set, out-of-range policy, file paths, …) go
 in a [`Dialect`](docs/mapping-api.md#dialect-project-settings):
