@@ -126,6 +126,39 @@ to `cobol_to_java.BUILTIN_HANDLERS` / `FACTS`.
 | RETURN | `into` |
 | ALTER | (none) |
 
+## Importance
+
+Every decision carries a deterministic `importance` tier: `low`, `normal`, `high` or
+`critical`. A provider's gate uses it to select the minimum confidence for applying an answer
+automatically ([Phase 2](architecture.md#importance-and-the-gate)). The table is ordinary Python
+data keyed by `(reason, operation)`, where `*` matches anything:
+
+```python
+from cobol_to_java import DEFAULT_IMPORTANCE, default_importance
+
+DEFAULT_IMPORTANCE[("*", "COMPUTE")]          # 'critical'
+table = default_importance()                  # a fresh, mutable dict
+table[("*", "DISPLAY")] = "normal"
+table[("missing_target_api", "CALL")] = "critical"
+transpile(..., importance=table)
+```
+
+The worker uses the most specific entry: `(reason, operation)`, then `(*, operation)`, then
+`(reason, *)`, then `(*, *)`. A decision that no entry matches is `critical`. An unknown reason
+or tier raises `TranspilerError`, and the worker rejects the table with `invalid_params`. The
+tier is part of the decision fingerprint, so cached answers are never reused across tiers.
+
+| Entry | Tier | Why |
+|---|---|---|
+| `(*, *)` | normal | default |
+| `(unsupported_construct, *)`, `(missing_target_api, *)`, `(callback_required, *)` | high | no builtin translation, or a target the project must name |
+| `(*, DATA)` | critical | a declaration shapes every statement that uses the data |
+| `(*, ADD / SUBTRACT / MULTIPLY / DIVIDE / COMPUTE)` | critical | wrong digits are wrong amounts |
+| `(*, MOVE / INITIALIZE)` | high | data conversion |
+| `(*, WRITE / REWRITE / DELETE / SORT / MERGE / SEARCH)` | high | records written, ordered or looked up |
+| `(*, CALL / GO_TO / ALTER)` | high | control flow and program linkage |
+| `(*, DISPLAY / EXHIBIT)` | low | console output |
+
 ## Declaratives
 
 `DECLARATIVES` sections with `USE AFTER ERROR / EXCEPTION PROCEDURE ON file / INPUT / OUTPUT /
@@ -160,10 +193,11 @@ statements keep the simpler form (one method per paragraph, fall-through calls).
 
 ## Callbacks
 
-`strategy="callback"` stores `{script, function}`. In Phase 1 such operations surface as
+`strategy="callback"` stores `{script, function}`. Such operations surface as
 `callback_required` decisions carrying the reference. `transpiler.callbacks.dispatch()` already
 loads the script, calls `function(CallbackRequest)`, and validates that the answer is one of the
-offered candidates. Wiring it through the orchestrator is Phase 2.
+offered candidates. Wiring it through the orchestrator is not done yet; the Jev provider does
+not answer these decisions, because they have no candidates.
 
 ## Dialect (project settings)
 

@@ -59,6 +59,8 @@ class WorkerClient {
 
   const protocol::json& ready_info() const { return ready_; }
   bool alive();
+  // An error of `kind` carrying the process's last stderr lines (for failures found by callers).
+  WorkerError error(WorkerError::Kind kind, std::string message) { return make_error(kind, std::move(message)); }
 
  private:
   struct StderrTail {

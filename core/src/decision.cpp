@@ -154,20 +154,20 @@ std::vector<DecisionResponse> PythonProvider::call(const json& params) {
     return {};
   }
   if (r->status == protocol::Status::error) {
-    failure_ = WorkerError{WorkerError::Kind::error_response,
-                           std::format("provider error {}: {}", r->error->code, r->error->message), {}};
+    failure_ = client_.error(WorkerError::Kind::error_response,
+                             std::format("provider error {}: {}", r->error->code, r->error->message));
     return {};
   }
   const json& list = r->result.value("answers", json{});
   if (!list.is_array()) {
-    failure_ = WorkerError{WorkerError::Kind::malformed, "decide result without an 'answers' array", {}};
+    failure_ = client_.error(WorkerError::Kind::malformed, "decide result without an 'answers' array");
     return {};
   }
   std::vector<DecisionResponse> out;
   for (const auto& a : list) {
     auto parsed = parse_decision_response(a);
     if (!parsed) {
-      failure_ = WorkerError{WorkerError::Kind::malformed, std::format("malformed answer: {}", parsed.error()), {}};
+      failure_ = client_.error(WorkerError::Kind::malformed, std::format("malformed answer: {}", parsed.error()));
       return {};
     }
     if (parsed->provider.empty()) parsed->provider = name_;

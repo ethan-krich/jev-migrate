@@ -2,8 +2,10 @@
 
 A modular transpiler for researching hybrid deterministic + probabilistic code translation.
 **Phase 1** is a working, tested, *deterministic* COBOL-to-Java translator. Operations that cannot
-be translated reliably come back as structured **decisions**, which Phase 2 will route to
-[Jev](docs/architecture.md#phase-2-jev). Phase 1 makes no AI or network calls at runtime.
+be translated reliably come back as structured **decisions**. **Phase 2** can route them to
+[Jev](docs/architecture.md#phase-2-jev), which only chooses among candidates the worker has already
+generated and validated, gated by each decision's importance. Phase 2 is opt-in: by default
+nothing makes AI or network calls at runtime.
 
 ```
 Python API (transpiler, cobol_to_java)  ──job──▶  C++ orchestrator (transpiler-core)
@@ -86,6 +88,35 @@ result = transpile("examples/cobol-to-java/input", output="generated", mappings=
                    layout=Layout(base_package="com.example.legacy"), provider=StaticProvider(answers))
 assert result.ok   # generated/src/main/java/com/example/legacy/... compiles with plain javac
 ```
+
+### Asking Jev (Phase 2, opt-in)
+
+```bash
+uv sync --all-packages --extra jev     # the optional transpiler[jev] extra (typesafe_sdk)
+export TYPESAFE_API_KEY=...            # read by the provider process only; never written to the job
+```
+
+```python
+from transpiler import ContextBudget, Gate, JevProvider, transpile
+
+jev = JevProvider(
+    model="jev-preview",
+    gate=Gate(floors={"low": 0.70, "normal": 0.85, "high": 0.95, "critical": None}, min_margin=0.15),
+    context=ContextBudget(max_chars=4000, max_depth=2, max_expansions=2),
+    api_key_env="TYPESAFE_API_KEY",
+)
+result = transpile("examples/cobol-to-java/input", output="generated", mappings=mappings, provider=jev)
+for r in result.resolutions.held:         # below its floor, abstained, or out of context expansions
+    print(r.decision_id, r.importance, r.gate, r.confidence)
+print((result.output / "review.md").read_text())   # the review queue, also result.review_queue()
+```
+
+A pick is applied only if its confidence reaches the floor of the decision's importance tier
+(`None`: never automatically) and beats the runner-up by `min_margin`. Anything else stays
+pending, so the run is `incomplete` and nothing is written. Tiers come from
+[`DEFAULT_IMPORTANCE`](docs/mapping-api.md#importance) (`transpile(importance=...)` overrides
+it). `./scripts/jev-smoke.sh` runs the bundled example against the live API. It is not part of
+any test suite.
 
 Settings the source does not determine (character set, out-of-range policy, file paths, …) go
 in a [`Dialect`](docs/mapping-api.md#dialect-project-settings):
@@ -175,7 +206,7 @@ The fixtures avoid that pattern.
 | `translators/cobol-to-java/java/` | Gradle build: worker, `runtime/` support library, `proleap/` parser build |
 | `translators/cobol-to-java/python/` | `cobol_to_java`: default mappings, `Layout`, language-pair registration |
 | `translators/cobol-to-java/fixtures/` | COBOL fixtures + recorded GnuCOBOL output |
-| `python/` | `transpiler`: public API, registry, providers, callbacks, protocol types |
+| `python/` | `transpiler`: public API, registry, providers (deterministic, static, Jev) and the provider process, callbacks, protocol types |
 | `protocol/` | JSON schemas: worker messages, mappings, decisions |
 | `tests/` | integration, equivalence, benchmarks (pytest) |
 | `third_party/proleap-cobol-parser` | ProLeap 4.0.0 submodule (MIT), pinned commit |

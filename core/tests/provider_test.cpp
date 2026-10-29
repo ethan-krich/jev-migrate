@@ -153,6 +153,7 @@ TEST_F(ProviderTest, MalformedOutputFailsTheRun) {
   auto bad = run("bad_answer");
   EXPECT_EQ(bad.status, RunResult::Status::failed);
   EXPECT_EQ(bad.report["errors"][0]["kind"], "malformed");
+  EXPECT_NE(bad.report["errors"][0]["stderr_tail"].get<std::string>().find("fake provider starting"), std::string::npos);
 }
 
 TEST(PythonProvider, StartupFailures) {
