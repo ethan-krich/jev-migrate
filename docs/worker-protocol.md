@@ -106,7 +106,9 @@ request timeouts, crashes and malformed output are handled as for workers.
   the run report with the worker's last 40 stderr lines.
 - The process is killed if it does not exit after `shutdown`.
 - These paths are covered by GoogleTest against a scriptable fake worker
-  (`core/tests/fake_worker.cpp`).
+  (`core/tests/fake_worker.cpp`) and, for providers (reported with `stage: provider`), a fake
+  provider (`core/tests/fake_provider.cpp`): crashes, timeouts, malformed answers, gated
+  answers, the `need_context` round trip, the expansion cap and fabricated candidates.
 
 ## translator.json
 

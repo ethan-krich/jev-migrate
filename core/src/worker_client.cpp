@@ -16,6 +16,7 @@ std::string_view to_string(WorkerError::Kind kind) {
     case malformed: return "malformed";
     case id_mismatch: return "id_mismatch";
     case protocol_mismatch: return "protocol_mismatch";
+    case error_response: return "error_response";
     case io: return "io";
   }
   return "unknown";
@@ -31,7 +32,7 @@ std::expected<WorkerClient, WorkerError> WorkerClient::start(const WorkerSpec& s
   });
   if (!process) return std::unexpected(WorkerError{WorkerError::Kind::spawn_failed, process.error(), {}});
 
-  WorkerClient client(std::move(*process), tail);
+  WorkerClient client(std::move(*process), tail, spec.protocol);
   auto first = client.next_message(spec.startup_timeout);
   if (!first) {
     auto e = first.error();
@@ -69,7 +70,7 @@ std::expected<protocol::Message, WorkerError> WorkerClient::next_message(std::ch
         return std::unexpected(make_error(WorkerError::Kind::io, "error reading worker stdout"));
     }
   }
-  auto message = protocol::decode(*line);
+  auto message = protocol::decode(*line, protocol_);
   if (!message) {
     auto kind = message.error().starts_with("unexpected protocol") ? WorkerError::Kind::protocol_mismatch
                                                                     : WorkerError::Kind::malformed;
@@ -85,7 +86,7 @@ std::expected<protocol::Response, WorkerError> WorkerClient::call(const std::str
                                                                   std::chrono::milliseconds timeout,
                                                                   const EventHandler& on_event) {
   protocol::Request request{std::format("c-{}", next_id_++), method, session, params};
-  if (auto w = process_.write_line(protocol::encode(request)); !w)
+  if (auto w = process_.write_line(protocol::encode(request, protocol_)); !w)
     return std::unexpected(make_error(WorkerError::Kind::crashed, w.error()));
 
   auto deadline = std::chrono::steady_clock::now() + timeout;

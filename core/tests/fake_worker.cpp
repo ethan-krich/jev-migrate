@@ -6,6 +6,7 @@
 //   malformed   answers translate with a non-JSON line
 //   wrong_id    answers translate with a different correlation id
 //   slow        sleeps 3 s before answering translate
+// expand_context answers decision-1 with "text of <ref>" per ref (refs starting "unknown" are rejected).
 #include <chrono>
 #include <cstdio>
 #include <iostream>
@@ -30,6 +31,8 @@ json decision() {
           {"reason", "missing_mapping"},
           {"operation", "DISPLAY"},
           {"message", "no rule"},
+          {"state", "pending"},
+          {"importance", "high"},
           {"source", {{"file", "A.cbl"}, {"line", 3}, {"column", 8}, {"text", "DISPLAY X"}}},
           {"context", {{"source_operation", "DISPLAY"}, {"target_language", "java"}}},
           {"candidates", {{{"id", "builtin:display"}, {"description", "print"}}}}};
@@ -93,6 +96,20 @@ int main(int argc, char** argv) {
       send(response(req, resolved ? "ok" : "incomplete",
                     {{"applied", applied}, {"rejected", rejected}, {"new_decisions", json::array()},
                      {"pending", resolved ? json::array() : json::array({"decision-1"})}}));
+    } else if (method == "expand_context") {
+      if (req["params"].value("decision_id", "") != "decision-1") {
+        send({{"protocol", kProtocol}, {"type", "response"}, {"id", req["id"]}, {"status", "error"},
+              {"error", {{"code", "invalid_params"}, {"message", "no such decision"}}}});
+        continue;
+      }
+      json refs = json::array(), rejected = json::array();
+      for (const auto& r : req["params"]["refs"]) {
+        if (r.get<std::string>().starts_with("unknown"))
+          rejected.push_back({{"ref", r}, {"code", "unknown_ref"}, {"message", "no"}});
+        else
+          refs.push_back({{"ref", r}, {"kind", "data"}, {"depth", 1}, {"text", "text of " + r.get<std::string>()}});
+      }
+      send(response(req, "ok", {{"decision_id", "decision-1"}, {"refs", refs}, {"rejected", rejected}}));
     } else if (method == "finalize") {
       if (resolved)
         send(response(req, "ok", {{"files_written", {{{"path", "src/main/java/A.java"}}}}, {"pending", json::array()}}));

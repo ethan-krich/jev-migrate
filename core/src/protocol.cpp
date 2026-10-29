@@ -20,8 +20,8 @@ std::optional<Status> parse_status(std::string_view text) {
   return std::nullopt;
 }
 
-std::string encode(const Request& request) {
-  json j = {{"protocol", kVersion}, {"id", request.id}, {"method", request.method}, {"params", request.params}};
+std::string encode(const Request& request, std::string_view version) {
+  json j = {{"protocol", version}, {"id", request.id}, {"method", request.method}, {"params", request.params}};
   if (request.session) j["session"] = *request.session;
   // dump() never emits raw newlines: control characters in strings are escaped.
   return j.dump(-1, ' ', false, json::error_handler_t::replace);
@@ -37,12 +37,12 @@ std::optional<std::string> optional_string(const json& j, const char* key) {
 
 }  // namespace
 
-std::expected<Message, std::string> decode(std::string_view line) {
+std::expected<Message, std::string> decode(std::string_view line, std::string_view version) {
   json j = json::parse(line, nullptr, false);
   if (j.is_discarded()) return std::unexpected("worker output is not valid JSON");
   if (!j.is_object()) return std::unexpected("worker message is not a JSON object");
   const auto protocol = optional_string(j, "protocol");
-  if (protocol != kVersion)
+  if (protocol != version)
     return std::unexpected(std::format("unexpected protocol '{}'", protocol.value_or("<missing or not a string>")));
 
   const std::string type = optional_string(j, "type").value_or("");

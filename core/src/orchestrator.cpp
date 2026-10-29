@@ -6,6 +6,7 @@
 #include <set>
 
 #include "transpiler/log.hpp"
+#include "transpiler/review.hpp"
 #include "transpiler/worker_client.hpp"
 
 namespace transpiler {
@@ -61,7 +62,11 @@ class Run {
                {"output", job.output.string()},
                {"programs", json::array()},
                {"decisions", json::array()},
-               {"resolutions", {{"provider", provider.name()}, {"applied", json::array()}, {"rejected", json::array()}}},
+               {"resolutions",
+                {{"provider", provider.name()},
+                 {"applied", json::array()},
+                 {"rejected", json::array()},
+                 {"held", json::array()}}},
                {"files_written", json::array()},
                {"errors", json::array()}};
   }
@@ -87,13 +92,14 @@ class Run {
     return finish(RunResult::Status::failed);
   }
 
- private:
-  RunResult fail_worker(const WorkerError& e) {
+  RunResult fail_worker(const WorkerError& e, std::string_view stage = "worker") {
     report_["errors"].push_back(
-        {{"stage", "worker"}, {"kind", to_string(e.kind)}, {"message", e.message}, {"stderr_tail", e.stderr_tail}});
-    log(LogLevel::error, "worker {}: {}", to_string(e.kind), e.message);
+        {{"stage", stage}, {"kind", to_string(e.kind)}, {"message", e.message}, {"stderr_tail", e.stderr_tail}});
+    log(LogLevel::error, "{} {}: {}", stage, to_string(e.kind), e.message);
     return finish(RunResult::Status::failed);
   }
+
+ private:
 
   void record_discovery(const Discovery& d) {
     json programs = json::array(), copybooks = json::array();
@@ -180,6 +186,8 @@ class Run {
     return std::nullopt;
   }
 
+  // Asks the provider, opens context it asks for, and sends only gated, validated answers to the
+  // worker. Gated-out answers are held (never cached); invalid ones are rejected.
   std::optional<RunResult::Status> resolve_rounds(WorkerClient& worker, const std::string& session) {
     std::set<std::string> asked;
     for (int round = 0; round < job_.max_decision_rounds; ++round) {
@@ -198,18 +206,34 @@ class Run {
       if (!batch.empty()) {
         log(LogLevel::info, "asking provider '{}' about {} decision(s)", provider_.name(), batch.size());
         for (auto& a : provider_.decide(batch)) answers.push_back(std::move(a));
+        if (auto f = provider_.failure()) return fail_provider(*f);
       }
       json resolutions = json::array();
-      for (const auto& a : answers) {
+      std::vector<DecisionResponse> sent;
+      for (auto& a : answers) {
         auto it = decisions_.find(a.decision_id);
-        auto ok = it == decisions_.end() ? std::expected<void, std::string>(std::unexpected("unknown decision"))
-                                         : validate(it->second, a);
-        if (!ok) {
-          report_["resolutions"]["rejected"].push_back(
-              {{"decision_id", a.decision_id}, {"stage", "orchestrator"}, {"message", ok.error()}});
+        if (it == decisions_.end()) {
+          reject(a, "", "unknown decision");
+          continue;
+        }
+        const DecisionRequest& d = it->second;
+        std::string held_reason;
+        if (a.gate == kGateNeedContext) {
+          auto s = expand(worker, session, d, a, held_reason);
+          if (s) return s;
+        }
+        if (!a.candidate_id.empty()) {
+          if (auto ok = validate(d, a); !ok) {
+            reject(a, d.importance, ok.error());
+            continue;
+          }
+        }
+        if (!a.passed()) {
+          hold(a, d.importance, held_reason);
           continue;
         }
         resolutions.push_back(a.to_resolution());
+        sent.push_back(a);
       }
       if (resolutions.empty()) continue;
       auto r = worker.call("resolve", session, {{"resolutions", resolutions}}, job_.request_timeout);
@@ -217,10 +241,11 @@ class Run {
       for (const auto& id : r->result.value("applied", json::array())) {
         std::string decision_id = id.get<std::string>();
         resolved_.insert(decision_id);
-        for (const auto& a : answers)
+        for (const auto& a : sent)
           if (a.decision_id == decision_id) {
-            cache_.store(decisions_.at(decision_id), a);
-            report_["resolutions"]["applied"].push_back(a.to_resolution());
+            const DecisionRequest& d = decisions_.at(decision_id);
+            cache_.store(d, a);
+            report_["resolutions"]["applied"].push_back(a.to_report(d.importance));
           }
       }
       for (const auto& rej : r->result.value("rejected", json::array())) {
@@ -233,6 +258,64 @@ class Run {
     }
     log(LogLevel::warn, "stopped after {} decision rounds", job_.max_decision_rounds);
     return std::nullopt;
+  }
+
+  // Answers a need_context answer: expand_context, then ask again, up to the provider's cap.
+  // `answer` becomes the last answer; `held_reason` says why it is still not a selection.
+  std::optional<RunResult::Status> expand(WorkerClient& worker, const std::string& session, const DecisionRequest& d,
+                                          DecisionResponse& answer, std::string& held_reason) {
+    json refs = json::array();
+    for (int n = 1; answer.gate == kGateNeedContext; ++n) {
+      if (n > provider_.max_expansions()) {
+        held_reason = "context_cap";
+        return std::nullopt;
+      }
+      json params = {{"decision_id", d.id}, {"refs", answer.need_context}};
+      if (auto chars = provider_.expansion_chars()) params["max_chars"] = *chars;
+      auto r = worker.call("expand_context", session, params, job_.request_timeout);
+      if (!r) {
+        fail_worker(r.error());
+        return RunResult::Status::failed;
+      }
+      if (r->status == protocol::Status::error) {
+        held_reason = std::format("expand_context: {}", r->error->message);
+        return std::nullopt;
+      }
+      for (const auto& node : r->result.value("refs", json::array())) refs.push_back(node);
+      json extra = {{"decision_id", d.id},
+                    {"expansions", n},
+                    {"expansions_left", provider_.max_expansions() - n},
+                    {"refs", refs}};
+      log(LogLevel::info, "asking provider '{}' again about {} with {} context node(s)", provider_.name(), d.id,
+          refs.size());
+      auto again = provider_.decide_again(d, extra);
+      if (auto f = provider_.failure()) return fail_provider(*f);
+      if (!again) {
+        held_reason = "no_answer";
+        return std::nullopt;
+      }
+      answer = std::move(*again);
+      answer.decision_id = d.id;
+    }
+    return std::nullopt;
+  }
+
+  std::optional<RunResult::Status> fail_provider(const WorkerError& e) {
+    fail_worker(e, "provider");
+    return RunResult::Status::failed;
+  }
+
+  void reject(const DecisionResponse& a, const std::string& importance, const std::string& message) {
+    json entry = a.to_report(importance);
+    entry["stage"] = "orchestrator";
+    entry["message"] = message;
+    report_["resolutions"]["rejected"].push_back(entry);
+  }
+
+  void hold(const DecisionResponse& a, const std::string& importance, const std::string& reason) {
+    json entry = a.to_report(importance);
+    if (!reason.empty()) entry["held_reason"] = reason;
+    report_["resolutions"]["held"].push_back(entry);
   }
 
   RunResult finish(RunResult::Status status) {
@@ -249,6 +332,9 @@ class Run {
       std::ofstream out(job_.output / "transpile-report.json");
       if (out) out << report_.dump(2) << '\n';
       else log(LogLevel::warn, "could not write {}", (job_.output / "transpile-report.json").string());
+      std::ofstream review(job_.output / "review.md");
+      if (review) review << review_table(report_);
+      else log(LogLevel::warn, "could not write {}", (job_.output / "review.md").string());
     }
     return {status, report_};
   }
@@ -272,7 +358,10 @@ RunResult run_job(const Job& job, const WorkerSpec& worker, DecisionProvider& pr
 RunResult run_job(const Job& job) {
   auto provider = make_provider(job.provider);
   DeterministicProvider fallback;
-  if (!provider) return Run(job, fallback).fail("provider", provider.error());
+  if (!provider) {
+    if (provider.error().process) return Run(job, fallback).fail_worker(*provider.error().process, "provider");
+    return Run(job, fallback).fail("provider", provider.error().message);
+  }
   auto registry = TranslatorRegistry::scan(job.translators_dir);
   if (!registry) return Run(job, **provider).fail("translator", registry.error());
   auto manifest = registry->find(job.translator, job.source_language, job.target_language);
