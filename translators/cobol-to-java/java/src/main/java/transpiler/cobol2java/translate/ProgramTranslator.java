@@ -2297,6 +2297,21 @@ public final class ProgramTranslator implements TranslationContext {
         sizeOf.setBody(new BlockStmt(NodeList.nodeList(sizes)));
     }
 
+    /** Whether any program of the source file has SOURCE-COMPUTER ... WITH DEBUGGING MODE. */
+    private boolean debuggingMode() {
+        for (var cu : in.unit().getProgram().getCompilationUnits()) {
+            for (var unit : cu.getProgramUnits()) {
+                var env = unit.getEnvironmentDivision();
+                var config = env == null ? null : env.getConfigurationSection();
+                var sc = config == null ? null : config.getSourceComputerParagraph();
+                if (sc != null && sc.isDebuggingMode()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private static boolean within(ParserRuleContext ctx, ParserRuleContext outer) {
         int i = ctx.getStart().getTokenIndex();
         return i >= outer.getStart().getTokenIndex() && i <= outer.getStop().getTokenIndex();
@@ -2315,8 +2330,15 @@ public final class ProgramTranslator implements TranslationContext {
             var dctx = (CobolParser.ProcedureDeclarativeContext) d.getCtx();
             String method = unique(methodNames, Names.methodName("use", dctx.procedureSectionHeader().sectionName().getText()));
             var use = d.getUseStament();
+            if (use != null && use.getUseType() == io.proleap.cobol.asg.metamodel.procedure.use.UseStatement.UseType.DEBUG
+                    && !debuggingMode()) {
+                // Without WITH DEBUGGING MODE GnuCOBOL never runs a debugging section (not even with COB_SET_DEBUG).
+                continue;
+            }
+            // GLOBAL makes a USE procedure apply to nested programs too; a program without any is unaffected.
+            boolean nested = !((CobolParser.ProgramUnitContext) in.unit().getCtx()).programUnit().isEmpty();
             if (use == null || use.getUseType() != io.proleap.cobol.asg.metamodel.procedure.use.UseStatement.UseType.AFTER
-                    || use.getUseAfterStatement().isGlobal()) {
+                    || (use.getUseAfterStatement().isGlobal() && nested)) {
                 dataDecision(dctx.useStatement(), "PROCEDURE", words(dctx.useStatement()) + " is not supported (only USE AFTER ERROR procedures)");
                 continue;
             }

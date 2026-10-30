@@ -1,0 +1,8 @@
+{
+  "description": "USE FOR DEBUGGING without WITH DEBUGGING MODE (never runs, even with COB_SET_DEBUG) and USE GLOBAL AFTER ERROR in a program without nested programs (an ordinary USE procedure)",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "file_assignments": {"missing.dat": "missing.dat"}},
+  "equivalence": {"programs": ["DECLDBG.cbl"], "main_class": "fixtures.declaratives_debug_global.Decldbg",
+                  "env": {"COB_SET_DEBUG": "Y"}},
+  "layout": {"base_package": "fixtures.declaratives_debug_global"}
+}

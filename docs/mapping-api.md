@@ -251,7 +251,7 @@ proven in range (with `out_of_range` set to `decision`) make the statement
 | An unset `dynamic_calls` or `when_compiled` | `dialect:<field>` | set the field |
 | `ASSIGN TO` name missing from `file_assignments` | `dialect:file_assignments` | add the path (it is never guessed) |
 | Declarations the subset does not cover (COMP-1 / COMP-2, POINTER, `N` pictures, ON / OFF STATUS of names other than SWITCH-0 .. SWITCH-36, SCREEN / REPORT sections, …) | DATA, ENVIRONMENT, IDENTIFICATION, PROCEDURE (`unsupported_construct`) | change the source |
-| `USE FOR DEBUGGING`, `GLOBAL` declaratives, declaratives in dispatcher-form programs | PROCEDURE | change the source |
+| `USE FOR DEBUGGING` in a source with `WITH DEBUGGING MODE`, `GLOBAL` declaratives of a program that contains nested programs (GnuCOBOL needs GLOBAL files for them), declaratives in dispatcher-form programs | PROCEDURE | change the source |
 | A rule with `strategy="callback"` | the verb (`callback_required`) | answer it, until callbacks are routed (see [Callbacks](#callbacks)) |
 
 ## Configuring mappings
