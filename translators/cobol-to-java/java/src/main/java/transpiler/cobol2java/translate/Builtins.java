@@ -1556,6 +1556,10 @@ public final class Builtins implements MappingRegistry.Catalog {
         Scope onException = call.getOnExceptionClause() != null ? call.getOnExceptionClause() : call.getOnOverflowPhrase();
         boolean dynamic = target == null && !(call.getProgramValueStmt() instanceof LiteralValueStmt lit
                 && lit.getLiteral().getLiteralType() == Literal.LiteralType.NON_NUMERIC);
+        if (!dynamic && target == null && returning == null
+                && SYSTEM_ROUTINES.containsKey(((LiteralValueStmt) call.getProgramValueStmt()).getLiteral().getNonNumericLiteral())) {
+            return systemRoutine(call, c);
+        }
         NodeList<Expression> args = NodeList.nodeList(self());
         List<Integer> expected = null;
         String program = null;
@@ -1653,6 +1657,90 @@ public final class Builtins implements MappingRegistry.Catalog {
             return notOnException.isEmpty() ? List.of(stmt(invoke)) : List.of(stmt(invoke), notOnException);
         }
         return List.of(new IfStmt(invoke, c.nested(onException), notOnException.isEmpty() ? null : notOnException));
+    }
+
+    /** GnuCOBOL system routines translated through SystemRoutines, with the number of items they take before the length. */
+    private static final Map<String, Integer> SYSTEM_ROUTINES = Map.of("CBL_TOUPPER", 1, "CBL_TOLOWER", 1, "CBL_NOT", 1,
+            "CBL_AND", 2, "CBL_OR", 2, "CBL_XOR", 2, "CBL_EQ", 2, "CBL_IMP", 2, "CBL_NIMP", 2);
+
+    /**
+     * CALL "CBL_..." USING items BY VALUE length: libcob's routine on the items' bytes; its result
+     * (0) becomes RETURN-CODE. The routine always exists, so ON EXCEPTION never runs and NOT ON
+     * EXCEPTION always does. Items are passed BY REFERENCE (BY CONTENT: a copy); the length BY
+     * VALUE, an integer literal or numeric item (cob_get_int).
+     */
+    private static List<Statement> systemRoutine(CallStatement call, TranslationContext c) throws HandlerException {
+        String name = ((LiteralValueStmt) call.getProgramValueStmt()).getLiteral().getNonNumericLiteral();
+        int items = SYSTEM_ROUTINES.get(name);
+        NodeList<Expression> args = new NodeList<>();
+        Expression length = null;
+        var using = call.getUsingPhrase();
+        for (var parameter : using == null ? List.<io.proleap.cobol.asg.metamodel.procedure.call.UsingParameter>of() : using.getUsingParameters()) {
+            switch (parameter.getParameterType()) {
+                case REFERENCE -> {
+                    for (var ref : parameter.getByReferencePhrase().getByReferences()) {
+                        if (ref.getByReferenceType() != null || length != null) {
+                            throw HandlerException.unsupported("CALL '" + name + "' USING: items, then the length BY VALUE");
+                        }
+                        args.add(call(argumentField(c.operand(ref.getValueStmt()), c), "view"));
+                    }
+                }
+                case CONTENT -> {
+                    for (var content : parameter.getByContentPhrase().getByContents()) {
+                        if (content.getByContentType() != null || length != null) {
+                            throw HandlerException.unsupported("CALL '" + name + "' USING: items, then the length BY VALUE");
+                        }
+                        args.add(call(call(argumentField(c.operand(content.getValueStmt()), c), "view"), "copy"));
+                    }
+                }
+                case VALUE -> {
+                    for (var value : parameter.getByValuePhrase().getByValues()) {
+                        if (length != null) {
+                            throw HandlerException.unsupported("CALL '" + name + "' takes one length BY VALUE");
+                        }
+                        var byValue = (io.proleap.cobol.CobolParser.CallByValueContext) value.getCtx();
+                        Operand o = c.operand(value.getValueStmt());
+                        if (byValue.ADDRESS() != null) {
+                            throw HandlerException.unsupported("CALL '" + name + "' USING BY VALUE ADDRESS OF");
+                        }
+                        if (byValue.LENGTH() != null) {
+                            // BY VALUE LENGTH OF item: the item's size.
+                            o = o instanceof Operand.Field f && c.fixedSize(f).isPresent()
+                                    ? new Operand.NumericLiteral(BigDecimal.valueOf(c.fixedSize(f).getAsInt()), Integer.toString(c.fixedSize(f).getAsInt()))
+                                    : null;
+                            if (o == null) {
+                                throw HandlerException.unsupported("CALL '" + name + "' USING BY VALUE LENGTH OF an item of variable size");
+                            }
+                        }
+                        length = switch (o) {
+                            case Operand.NumericLiteral n when n.isInteger() -> integer(n.value().intValueExact());
+                            case Operand.Field f when f.numeric() -> call(c.field(o), "intValue");
+                            case Operand o2 when o2.isNumericValued() && !(o2 instanceof Operand.Arithmetic) -> call(c.numeric(o2), "intValue");
+                            default -> throw HandlerException.unsupported("CALL '" + name + "': the length BY VALUE is an integer literal or numeric item");
+                        };
+                    }
+                }
+            }
+        }
+        if (args.size() != items || length == null) {
+            throw HandlerException.unsupported("CALL '" + name + "' takes " + items + " item(s) and a length BY VALUE");
+        }
+        args.add(length);
+        Expression invoke = switch (name) {
+            case "CBL_TOUPPER" -> new com.github.javaparser.ast.expr.MethodCallExpr(name("SystemRoutines"), "toUpper", args);
+            case "CBL_TOLOWER" -> new com.github.javaparser.ast.expr.MethodCallExpr(name("SystemRoutines"), "toLower", args);
+            case "CBL_NOT" -> new com.github.javaparser.ast.expr.MethodCallExpr(name("SystemRoutines"), "not", args);
+            default -> {
+                args.addFirst(str(name));
+                yield new com.github.javaparser.ast.expr.MethodCallExpr(name("SystemRoutines"), "bits", args);
+            }
+        };
+        List<Statement> out = new ArrayList<>();
+        out.add(stmt(call(c.field(new Operand.ReturnCode()), "move", staticCall("BigDecimal", "valueOf", invoke))));
+        if (call.getNotOnExceptionClause() != null) {
+            out.add(c.nested(call.getNotOnExceptionClause()));
+        }
+        return out;
     }
 
     /** CANCEL: a program of the project starts afresh at its next CALL; any other name is ignored, as in GnuCOBOL. */

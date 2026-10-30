@@ -355,6 +355,7 @@ public final class ProgramTranslator implements TranslationContext {
         cu.addImport(in.runtimePackage() + ".Storage");
         cu.addImport(in.runtimePackage() + ".StringOps");
         cu.addImport(in.runtimePackage() + ".Switches");
+        cu.addImport(in.runtimePackage() + ".SystemRoutines");
         cu.addImport(BigDecimal.class);
 
         ClassOrInterfaceDeclaration cls = cu.addClass(in.className(), Modifier.Keyword.PUBLIC, Modifier.Keyword.FINAL);

@@ -1,0 +1,12 @@
+upper 5  [HELLO, World] rc +000000000
+lower ok
+lower    [hello, world]
+accent   [ÈAA ]
+and      [ABCD]
+or       [abCD]
+xor      [ABcd]
+not      [ABcõ]
+eq       [ABCD]
+imp      [abcd]
+nimp     [ûùúõ]
+rc after +000000000

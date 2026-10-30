@@ -53,6 +53,7 @@ exists because the plain Java result would differ from GnuCOBOL 3.2's:
 | `Compare` | IF, EVALUATE, PERFORM UNTIL, SEARCH | `alphanumeric` pads the shorter operand with spaces (`"AB" = "AB  "` is true, `String.equals` says false); `ebcdic` orders by EBCDIC code; `figurative` compares with `SPACES`, `ALL "AB"`, …; class tests (`NUMERIC`, `ALPHABETIC`, …). `numeric` is only `BigDecimal.compareTo` |
 | `Display` | DISPLAY, EXHIBIT | GnuCOBOL's output format, byte for byte with a single LF |
 | `Accept`, `Environment`, `Clock` | ACCEPT, DISPLAY UPON ENVIRONMENT-* | one stdin line per ACCEPT; environment and arguments as GnuCOBOL gives them; `COB_CURRENT_DATE` fixes the clock |
+| `SystemRoutines` | CALL "CBL_TOUPPER" / "CBL_TOLOWER" / "CBL_AND" / … USING items BY VALUE length | libcob's byte routines: case changes in the "C" locale (ASCII letters only), the bitwise combinations byte by byte; RETURN-CODE 0; a length past the item ends the run unit |
 | `Switches` | SET switch TO ON / OFF, switch ON / OFF STATUS conditions | GnuCOBOL's run-unit switches SWITCH-0 .. SWITCH-36, started from `COB_SWITCH_n` as libcob does |
 | `StringOps` | STRING, UNSTRING, INSPECT | COBOL's delimiter, pointer, tally and BEFORE / AFTER INITIAL rules |
 | `Functions` | intrinsic functions | GnuCOBOL's results, including zero for invalid arguments instead of an exception |
@@ -231,7 +232,7 @@ the supported subset in the README and
 | PERFORM | overlapping or recursive ranges, a PERFORM inside its own range, TIMES of a non-integer (invalid COBOL: cobc rejects it) |
 | GO TO, ALTER | `GO TO.` with no target, ALTER of a paragraph that holds more than a GO TO |
 | STOP, GOBACK, EXIT, CONTINUE | `STOP RUN GIVING` of a non-numeric item |
-| CALL | `RETURNING` / `GIVING` into a non-numeric item or together with ON EXCEPTION, `BY VALUE` (cobc 3.2 warns that its handling is unfinished and may change, so there is no stable reference), USING items whose number or sizes differ from the callee's, a CALL of the program itself, both ON OVERFLOW and ON EXCEPTION, a path or system routine with no matching program |
+| CALL | `RETURNING` / `GIVING` into a non-numeric item or together with ON EXCEPTION, `BY VALUE` (cobc 3.2 warns that its handling is unfinished and may change, so there is no stable reference), USING items whose number or sizes differ from the callee's, a CALL of the program itself, both ON OVERFLOW and ON EXCEPTION, a path or a system routine other than `CBL_TOUPPER`, `CBL_TOLOWER`, `CBL_AND`, `CBL_OR`, `CBL_XOR`, `CBL_NOT`, `CBL_EQ`, `CBL_IMP`, `CBL_NIMP` |
 | CANCEL, ENTRY | CANCEL of a library name; ENTRY that is not the first statement of a paragraph, or in a program with sections or GO TO |
 | SET | `SET` of a mnemonic name that is not SWITCH-0 .. SWITCH-36, several values, `TO FALSE` without `WHEN SET TO FALSE`, pointers |
 | ACCEPT | `FROM ESCAPE KEY`, message count, other date forms (`missing_mapping`); other devices (`missing_target_api`); non-alphanumeric receivers; exception phrases |

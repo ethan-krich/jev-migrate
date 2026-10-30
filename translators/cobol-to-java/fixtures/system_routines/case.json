@@ -1,0 +1,7 @@
+{
+  "description": "GnuCOBOL system routines CBL_TOUPPER / CBL_TOLOWER (ASCII letters only: libcob's \"C\" LC_CTYPE) and CBL_AND / OR / XOR / NOT / EQ / IMP / NIMP, with the length BY VALUE as a literal, an item or LENGTH OF; RETURN-CODE and NOT ON EXCEPTION",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native"},
+  "equivalence": {"programs": ["SYSRTN.cbl"], "main_class": "fixtures.system_routines.Sysrtn"},
+  "layout": {"base_package": "fixtures.system_routines"}
+}
