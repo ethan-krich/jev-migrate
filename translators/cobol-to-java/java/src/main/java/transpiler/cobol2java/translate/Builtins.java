@@ -162,6 +162,9 @@ public final class Builtins implements MappingRegistry.Catalog {
                 "READ [NEXT / PREVIOUS] [INTO] [AT END], or READ by key [KEY IS] [INVALID KEY] of RELATIVE and INDEXED files", Builtins::readFile));
         register(Handler.of("write_file", "WRITE",
                 "WRITE record [FROM] [BEFORE / AFTER ADVANCING n LINES / PAGE] [AT END-OF-PAGE] [INVALID KEY]", Builtins::writeFile));
+        register(Handler.of("read_file_unlocked", "READ",
+                "READ ... WITH LOCK / NO LOCK / WAIT as a READ without the lock phrase (correct when no other process uses the file "
+                        + "at the same time: within one run unit record locks have no effect)", Builtins::readFileUnlocked));
         register(Handler.of("rewrite_file", "REWRITE", "REWRITE record [FROM] [INVALID KEY] of a file opened I-O", Builtins::rewriteFile));
         register(Handler.of("delete_file", "DELETE", "DELETE file RECORD [INVALID KEY] of RELATIVE and INDEXED files", Builtins::deleteFile));
         register(Handler.of("start_file", "START", "START file [KEY IS =, >, >=, <, <= item] [INVALID KEY] of RELATIVE and INDEXED files",
@@ -2380,10 +2383,18 @@ public final class Builtins implements MappingRegistry.Catalog {
         var close = (io.proleap.cobol.asg.metamodel.procedure.close.CloseStatement) u.statement();
         List<Statement> out = new ArrayList<>();
         for (var f : close.getCloseFiles()) {
-            if (f.getCloseFileType() != null) {
-                throw HandlerException.unsupported("CLOSE ... " + f.getCloseFileType() + " is not supported");
+            var file = c.file(f.getFileCall());
+            String method = "close";
+            var relative = ((io.proleap.cobol.CobolParser.CloseFileContext) f.getCtx()).closeRelativeStatement();
+            if (relative != null && relative.LOCK() != null) {
+                method = "closeWithLock";
+            } else if (relative != null && relative.REWIND() != null && !file.keyed() && !file.sort()) {
+                method = "closeNoRewind";
+            } else if (f.getCloseFileType() != null) {
+                throw HandlerException.unsupported("CLOSE ... " + f.getCtx().getText() + " is not supported"
+                        + (relative != null ? " (NO REWIND of a RELATIVE or INDEXED file)" : ""));
             }
-            out.add(stmt(call(name(c.file(f.getFileCall()).javaName()), "close")));
+            out.add(stmt(call(name(file.javaName()), method)));
         }
         return out;
     }
@@ -2412,8 +2423,23 @@ public final class Builtins implements MappingRegistry.Catalog {
     private static List<Statement> readFile(OpUnit u, TranslationContext c) throws HandlerException {
         var r = (io.proleap.cobol.asg.metamodel.procedure.read.ReadStatement) u.statement();
         if (r.getWith() != null) {
-            throw HandlerException.unsupported("READ ... WITH LOCK / NO LOCK / WAIT is not supported");
+            throw HandlerException.unprovable("READ ... " + r.getWith().getCtx().getText()
+                    + ": record locks matter only when another process uses the file at the same time");
         }
+        return read(u, c);
+    }
+
+    /** Candidate for READ ... WITH LOCK / NO LOCK / WAIT: the READ without its lock phrase. */
+    private static List<Statement> readFileUnlocked(OpUnit u, TranslationContext c) throws HandlerException {
+        var r = (io.proleap.cobol.asg.metamodel.procedure.read.ReadStatement) u.statement();
+        if (r.getWith() == null) {
+            throw HandlerException.notApplicable("READ without a lock phrase");
+        }
+        return read(u, c);
+    }
+
+    private static List<Statement> read(OpUnit u, TranslationContext c) throws HandlerException {
+        var r = (io.proleap.cobol.asg.metamodel.procedure.read.ReadStatement) u.statement();
         var file = c.file(r.getFileCall());
         if (file.sort()) {
             throw HandlerException.unsupported("READ of a sort file (use RETURN)");

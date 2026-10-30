@@ -38,6 +38,9 @@ public final class RelativeFile extends FileBase {
     }
 
     public void open(int openMode) {
+        if (lockedOut()) {
+            return;
+        }
         if (mode != CLOSED) {
             finish("41", false);
             return;
@@ -71,6 +74,9 @@ public final class RelativeFile extends FileBase {
     }
 
     public void close() {
+        if (closeLocked()) {
+            return;
+        }
         readDone = false;
         if (mode == CLOSED) {
             finish("42", false);

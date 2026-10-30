@@ -19,6 +19,8 @@ public abstract class FileBase {
     /** The mode of the last OPEN attempted (GnuCOBOL's last_open_mode), which selects a USE procedure. */
     int lastOpenMode = CLOSED;
     private java.util.function.IntPredicate errorProcedure;
+    /** Closed WITH LOCK: it cannot be opened again in this run unit (status 38). */
+    private boolean closedWithLock;
 
     FileBase(String name, String path, AlphanumericField status) {
         this.name = name;
@@ -60,6 +62,35 @@ public abstract class FileBase {
      * an unsuccessful status is recorded without running USE procedures or ending the run unit.
      */
     abstract void sortWrite(String data);
+
+    /** CLOSE ... WITH LOCK: a successful CLOSE after which every OPEN in this run unit gets status 38, as in libcob. */
+    public void closeWithLock() {
+        close();
+        if (succeeded()) {
+            closedWithLock = true;
+        }
+    }
+
+    /** At the start of OPEN: status 38 for a file closed WITH LOCK (checked before any other condition, as libcob). */
+    final boolean lockedOut() {
+        if (closedWithLock) {
+            finish("38", false);
+        }
+        return closedWithLock;
+    }
+
+    /**
+     * At the start of CLOSE: a file closed WITH LOCK is not "not open" to libcob (status 42 is only
+     * for a closed file), so CLOSE succeeds (00) and lifts the lock.
+     */
+    final boolean closeLocked() {
+        if (!closedWithLock) {
+            return false;
+        }
+        closedWithLock = false;
+        finish("00", false);
+        return true;
+    }
 
     /** The implicit CLOSE of every file still open when the run unit ends (no FILE STATUS is set). */
     static void closeAll() {

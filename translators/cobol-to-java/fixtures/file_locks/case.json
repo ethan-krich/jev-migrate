@@ -1,0 +1,10 @@
+{
+  "description": "CLOSE WITH LOCK (a later OPEN in the run unit gets status 38), CLOSE NO REWIND of a sequential file (status 07), READ WITH KEPT LOCK / NO LOCK answered with the READ that ignores record locks (one process)",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native",
+              "file_assignments": {"locks.txt": "locks.txt", "seq.dat": "seq.dat"}},
+  "answers": [{"decision": "decision-1", "candidate": "builtin:read_file_unlocked"},
+              {"decision": "decision-2", "candidate": "builtin:read_file_unlocked"}],
+  "equivalence": {"programs": ["LOCKS.cbl"], "main_class": "fixtures.file_locks.Locks"},
+  "layout": {"base_package": "fixtures.file_locks"}
+}

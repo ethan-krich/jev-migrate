@@ -51,6 +51,7 @@ BUILTIN_HANDLERS = MappingProxyType({
     "open_file": "OPEN",
     "close_file": "CLOSE",
     "read_file": "READ",
+    "read_file_unlocked": "READ",
     "write_file": "WRITE",
     "rewrite_file": "REWRITE",
     "delete_file": "DELETE",
@@ -73,7 +74,7 @@ BUILTIN_HANDLERS = MappingProxyType({
 # and DISPLAY UPON PRINTER / SYSPCH ones for a console or device the target system decides).
 CANDIDATE_HANDLERS = frozenset({
     "compute", "call_external", "stop_literal_accept", "stop_literal_continue",
-    "display_printer", "display_device_stdout", "display_device_stderr",
+    "display_printer", "display_device_stdout", "display_device_stderr", "read_file_unlocked",
 })
 
 # Facts the worker computes per operation instance; usable as `when` condition keys.

@@ -91,6 +91,9 @@ public final class CobolFile extends FileBase {
     }
 
     public void open(int openMode) {
+        if (lockedOut()) {
+            return;
+        }
         if (mode != CLOSED) {
             finish("41", false);
             return;
@@ -130,6 +133,9 @@ public final class CobolFile extends FileBase {
     }
 
     public void close() {
+        if (closeLocked()) {
+            return;
+        }
         if (mode == CLOSED) {
             finish("42", false);
             return;
@@ -364,6 +370,14 @@ public final class CobolFile extends FileBase {
             // the run unit is ending
         }
         mode = CLOSED;
+    }
+
+    /** CLOSE ... NO REWIND (SEQUENTIAL and LINE SEQUENTIAL files): a CLOSE whose status is 07 (no reel/unit), as libcob. */
+    public void closeNoRewind() {
+        close();
+        if (succeeded()) {
+            finish("07", false);
+        }
     }
 
     /** WRITE of {@code data} moved (as alphanumeric data) into the record area: SORT ... GIVING. */
