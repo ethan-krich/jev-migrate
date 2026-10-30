@@ -77,7 +77,7 @@ a handler does not cover is listed under [Unsupported](#unsupported).
 | `move_group` | MOVE, `target_category` group | `AlphanumericField.set` on the group's bytes | receiver a group: the sending bytes unconverted (a numeric item's digits and sign as stored), space-padded / cut; a variable-length group with its DEPENDING ON item inside receives at its maximum length |
 | `move_to_edited` | MOVE, `target_category` numeric- or alphanumeric-edited | `EditedField.move` | receiver numeric-edited (GnuCOBOL editing: `Z * $ + - CR DB . , B 0 /`, fixed and floating insertion, BLANK WHEN ZERO) or alphanumeric-edited (insertion) |
 | `move_from_edited` | MOVE, numeric-edited → numeric (wins over `move_to_numeric`: more conditions) | `NumericField.move(edited.value())` | de-editing |
-| `initialize` | INITIALIZE | a `move` / `set` per elementary item | item by item: `WITH FILLER`, `ALL TO VALUE`, `REPLACING category BY`, `THEN TO DEFAULT`; REDEFINES and FILLER skipped; every occurrence of tables |
+| `initialize` | INITIALIZE | a `move` / `set` per elementary item | item by item: `WITH FILLER`, `ALL TO VALUE`, `REPLACING category BY`, `THEN TO DEFAULT`; REDEFINES and FILLER skipped; every occurrence of tables, the occurrences in use of an OCCURS DEPENDING ON table |
 | `set_condition` | SET, `form` true / false | a `move` / `set` of the condition's value | `SET cond TO TRUE` moves the first value; `TO FALSE` needs `WHEN SET TO FALSE` |
 | `set_index` | SET, `form` to / up_by / down_by | `int` assignment, `+=`, `-=` | `SET index TO n / index / item`, `SET item TO index`, `UP / DOWN BY` (indexes and USAGE INDEX items) |
 
@@ -227,7 +227,7 @@ the supported subset in the README and
 | CANCEL, ENTRY | CANCEL of a library name; ENTRY that is not the first statement of a paragraph, or in a program with sections or GO TO |
 | SET | `SET switch TO ON / OFF` (`missing_mapping`), several values, `TO FALSE` without `WHEN SET TO FALSE`, pointers |
 | ACCEPT | `FROM ESCAPE KEY`, message count, other date forms (`missing_mapping`); other devices (`missing_target_api`); non-alphanumeric receivers; exception phrases |
-| INITIALIZE, STRING, UNSTRING, INSPECT | INITIALIZE of RENAMES or OCCURS DEPENDING ON groups; `STRING … FOR`; UNSTRING into edited items; INSPECT REPLACING with lengths that differ |
+| INITIALIZE, STRING, UNSTRING, INSPECT | INITIALIZE of RENAMES groups, `TO VALUE` of OCCURS DEPENDING ON groups (GnuCOBOL 3.2 sets occurrences beyond the count unevenly) and groups with `OCCURS 0 TO`; `STRING … FOR`; UNSTRING into edited items; INSPECT REPLACING with lengths that differ |
 | SEARCH | a table without INDEXED BY; SEARCH ALL without KEY, or WHEN other than `key = value` on the first key |
 | OPEN, CLOSE, READ, WRITE, REWRITE, DELETE, START | LOCK phrases, `NO REWIND`, I-O of LINE SEQUENTIAL, READ PREVIOUS of a sequential file, REWRITE of an INDEXED file with alternate keys in ACCESS SEQUENTIAL (GnuCOBOL's result depends on its internal state) |
 | SORT, MERGE, RELEASE, RETURN | `COLLATING SEQUENCE` phrase, GIVING several files, USING / GIVING of RELATIVE or INDEXED files |

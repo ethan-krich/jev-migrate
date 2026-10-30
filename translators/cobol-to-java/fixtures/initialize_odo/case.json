@@ -1,0 +1,8 @@
+{
+  "description": "INITIALIZE of groups with OCCURS DEPENDING ON: only the occurrences in use are initialized (default, REPLACING, WITH FILLER, a subscripted occurrence); occurrences beyond the count keep their bytes",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "out_of_range": "fail"},
+  "equivalence": {"programs": ["INITODO.cbl"], "main_class": "fixtures.initialize_odo.Initodo",
+                  "cobc_flags": ["-fec=EC-BOUND-SUBSCRIPT"]},
+  "layout": {"base_package": "fixtures.initialize_odo"}
+}

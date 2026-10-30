@@ -1584,8 +1584,14 @@ public final class Builtins implements MappingRegistry.Catalog {
             if (target.item().isGroup() && target.item().isRenames()) {
                 throw HandlerException.unsupported("INITIALIZE of a RENAMES group");
             }
-            if (target.item().isGroup() && target.item().variableTable() != null) {
-                throw HandlerException.unsupported("INITIALIZE of a group with OCCURS DEPENDING ON is not supported");
+            DataItem variable = target.item().isGroup() ? target.item().variableTable() : null;
+            if (variable != null && toValue) {
+                throw HandlerException.unsupported("INITIALIZE ... TO VALUE of a group with OCCURS DEPENDING ON: GnuCOBOL 3.2 "
+                        + "sets occurrences beyond the current count unevenly");
+            }
+            if (variable != null && variable.occursMin() < 1) {
+                throw HandlerException.unsupported("INITIALIZE of a group with OCCURS 0 TO ... DEPENDING ON: GnuCOBOL 3.2 "
+                        + "initializes the first occurrence even when none is in use");
             }
             for (DataItem e : target.item().elementaryItems()) {
                 if (e != target.item() && (skippedByInitialize(e, target.item(), withFiller))) {
@@ -1640,8 +1646,9 @@ public final class Builtins implements MappingRegistry.Catalog {
         }
         for (int i = extra.size() - 1; i >= 0; i--) {
             String v = vars.get(i);
+            // A table with OCCURS DEPENDING ON is initialized up to its current count, as GnuCOBOL does.
             store = new ForStmt(NodeList.nodeList(new VariableDeclarationExpr(new VariableDeclarator(Ast.intType(), v, integer(1)))),
-                    new BinaryExpr(name(v), integer(extra.get(i).occurs()), BinaryExpr.Operator.LESS_EQUALS),
+                    new BinaryExpr(name(v), occurrences(extra.get(i), c), BinaryExpr.Operator.LESS_EQUALS),
                     NodeList.nodeList(new UnaryExpr(name(v), UnaryExpr.Operator.POSTFIX_INCREMENT)),
                     new BlockStmt(NodeList.nodeList(store)));
         }
