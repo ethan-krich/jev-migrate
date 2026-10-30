@@ -150,8 +150,15 @@ Function results are operands, not handlers. Exact functions are translated thro
 `Functions`: `UPPER-CASE`, `LOWER-CASE`, `REVERSE`, `TRIM`, `LENGTH`, `MOD`, `REM`, `INTEGER`,
 `INTEGER-PART`, `ABS`, `MAX`, `MIN`, `SUM`, `ORD-MAX`, `ORD-MIN`, `NUMVAL`, `NUMVAL-C`, `ORD`,
 `CHAR`, `CURRENT-DATE` (through `Clock`), `INTEGER-OF-DATE`, `INTEGER-OF-DAY`,
-`DATE-OF-INTEGER`, `DAY-OF-INTEGER`. DISPLAY reproduces GnuCOBOL's form for text and integer
-results.
+`DATE-OF-INTEGER`, `DAY-OF-INTEGER`. DISPLAY reproduces GnuCOBOL's form of every result:
+`ABS`, `MAX` and `MIN` show the winning argument's own picture and usage (a literal as an item of
+its own digits, scale and sign); `SUM`, `NUMVAL`, `NUMVAL-C`, `MOD`, `REM`, `INTEGER` and
+`INTEGER-PART` show the field libcob sizes from the value (`Functions.decimalDisplay`: trailing
+fractional zeros dropped, nine digits up to 32 bits, twenty up to 64, a minus sign only when
+negative, higher digits cut as GnuCOBOL cuts them).
+
+Literals: `"text"`, `X"hex"` (the bytes written in hexadecimal) and `Z"text"` (the text and a NUL
+byte); national (`N"…"`) and DBCS literals are decisions.
 
 ### Procedure dispatcher
 
@@ -227,11 +234,11 @@ the supported subset in the README and
 | ENABLE, DISABLE, SEND, RECEIVE, PURGE, GENERATE, INITIATE, TERMINATE, EXEC SQL / CICS / SQLIMS | everything: no handler (`missing_mapping`) |
 
 Operands are checked the same way in every statement: floating-point literals and functions
-(`SQRT`, `LOG`, trigonometry, `RANDOM`, statistics, `PRESENT-VALUE`, `ANNUITY`), national and hex
+(`SQRT`, `LOG`, trigonometry, `RANDOM`, statistics, `PRESENT-VALUE`, `ANNUITY`), national
 literals, unsupported special registers, and subscripts or reference modification that cannot be
 proven in range (with `out_of_range` set to `decision`) make the statement
-`unsupported_construct`. DISPLAY of `ABS`, `MAX`, `MIN`, `SUM`, `NUMVAL[-C]` and non-integer
-`REM` is refused (MOVE them first).
+`unsupported_construct`. DISPLAY of `ABS`, `MAX` or `MIN` of an arithmetic expression is refused
+(MOVE it first): GnuCOBOL shows it in the picture of a temporary it does not document.
 
 ### Settings and declarations
 

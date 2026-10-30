@@ -691,7 +691,10 @@ public final class Builtins implements MappingRegistry.Catalog {
             case Operand.AlphanumericLiteral a -> str(a.value());
             case Operand.NumericLiteral n -> str(n.displayText());
             case Operand.Figurative f when !f.name().equals("ALL") -> str(f.pattern());
+            case Operand.Computed v when v.shown() != null -> v.shown();
             case Operand.Computed v when "text".equals(v.display()) -> v.value();
+            case Operand.Computed v when "decimal".equals(v.display()) ->
+                    staticCall("Functions", "decimalDisplay", v.value(), chr(c.decimalPointComma() ? ',' : '.'));
             case Operand.Computed v when "integer".equals(v.display()) -> staticCall("Functions", "integerDisplay", v.value());
             case Operand.Computed v when v.display() != null && v.display().startsWith("digits") ->
                     staticCall("Functions", "digits", v.value(), integer(Integer.parseInt(v.display().substring(6))));

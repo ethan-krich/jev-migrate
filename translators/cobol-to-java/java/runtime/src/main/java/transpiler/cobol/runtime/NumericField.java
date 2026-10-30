@@ -141,6 +141,14 @@ public final class NumericField {
         move(new BigDecimal(initial));
     }
 
+    /** A standalone item with this item's picture, usage and sign clause, holding a copy of its bytes. */
+    public NumericField like() {
+        NumericField copy = new NumericField(codec, pictureMove, pictureStore, bigEndian, displayDigits, size, new Storage(size), 0, digits,
+                scale, signed, signLeading, signSeparate);
+        System.arraycopy(storage.bytes, offset, copy.storage.bytes, 0, size);
+        return copy;
+    }
+
     /** Initialises the item to zero (WORKING-STORAGE without VALUE); returns this view. */
     public NumericField initial() {
         move(BigDecimal.ZERO);

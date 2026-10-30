@@ -3217,6 +3217,28 @@ public final class ProgramTranslator implements TranslationContext {
     }
 
     /**
+     * A function argument as GnuCOBOL passes it to ABS / MAX / MIN: a numeric item, or a numeric
+     * literal as a standalone item of its own digits, scale and sign. Null for other operands.
+     */
+    private Expression pictured(Operand o) throws HandlerException {
+        return switch (o) {
+            case Operand.Field f when f.numeric() && !f.edited() && f.refmod() == null -> field(f);
+            case Operand.NumericLiteral n -> {
+                String digits = n.unsignedText().replace(".", "").replace(",", "");
+                yield new com.github.javaparser.ast.expr.ObjectCreationExpr(null, Ast.type("NumericField"), NodeList.nodeList(
+                        integer(digits.length()), integer(Math.max(0, n.value().scale())), new com.github.javaparser.ast.expr.BooleanLiteralExpr(n.isSigned()),
+                        str(n.value().toPlainString())));
+            }
+            default -> null;
+        };
+    }
+
+    /** DISPLAY text of a numeric item expression, with the program's decimal point. */
+    private Expression shown(Expression numericField) {
+        return decimalComma ? call(numericField, "display", Ast.chr(',')) : call(numericField, "display");
+    }
+
+    /**
      * Numeric literal text; ProLeap gives no value for a decimal comma, so the text is read
      * here. With DECIMAL-POINT IS COMMA the comma is the decimal point and a period is invalid.
      */
@@ -3235,10 +3257,30 @@ public final class ProgramTranslator implements TranslationContext {
         }
     }
 
+    /**
+     * {@code "text"}, {@code X"hex"} (the bytes written in hexadecimal) and {@code Z"text"} (the
+     * text followed by a NUL byte, a GnuCOBOL extension). Values are byte strings: one char per byte.
+     */
     private static Operand nonNumericLiteral(String text) throws HandlerException {
+        char prefix = Character.toUpperCase(text.charAt(0));
+        if (prefix == 'X' || prefix == 'Z') {
+            String body = text.substring(2, text.length() - 1);
+            if (prefix == 'Z') {
+                char q = text.charAt(1);
+                return new Operand.AlphanumericLiteral(body.replace("" + q + q, "" + q) + '\0');
+            }
+            if (body.length() % 2 != 0) {
+                throw HandlerException.unsupported("hexadecimal literal " + text + " has an odd number of digits");
+            }
+            StringBuilder bytes = new StringBuilder();
+            for (int i = 0; i < body.length(); i += 2) {
+                bytes.append((char) Integer.parseInt(body.substring(i, i + 2), 16));
+            }
+            return new Operand.AlphanumericLiteral(bytes.toString());
+        }
         char q = text.charAt(0);
         if (q != '"' && q != '\'') {
-            throw HandlerException.unsupported("literal " + text + " (hex/national/other prefix) is not supported");
+            throw HandlerException.unsupported("literal " + text + " (national/DBCS prefix) is not supported");
         }
         return new Operand.AlphanumericLiteral(text.substring(1, text.length() - 1).replace("" + q + q, "" + q));
     }
@@ -3387,7 +3429,7 @@ public final class ProgramTranslator implements TranslationContext {
                     throw HandlerException.unsupported("FUNCTION MOD needs integer arguments");
                 }
                 yield new Operand.Computed(staticCall("Functions", fn.equals("MOD") ? "mod" : "rem", numberOf(args.get(0), fn),
-                        numberOf(args.get(1), fn)), true, integral ? "integer" : null);
+                        numberOf(args.get(1), fn)), true, integral ? "integer" : "decimal");
             }
             case "INTEGER", "INTEGER-PART" -> {
                 arity(fn, args, 1);
@@ -3396,7 +3438,9 @@ public final class ProgramTranslator implements TranslationContext {
             }
             case "ABS" -> {
                 arity(fn, args, 1);
-                yield new Operand.Computed(staticCall("Functions", "abs", numberOf(args.getFirst(), fn)), true, null);
+                Expression arg = pictured(args.getFirst());
+                yield new Operand.Computed(staticCall("Functions", "abs", numberOf(args.getFirst(), fn)), true, null,
+                        arg == null ? null : shown(staticCall("Functions", "abs", arg)));
             }
             case "MAX", "MIN", "SUM", "ORD-MAX", "ORD-MIN" -> {
                 if (args.isEmpty()) {
@@ -3414,13 +3458,29 @@ public final class ProgramTranslator implements TranslationContext {
                     default -> "ordMin";
                 };
                 Expression e = new com.github.javaparser.ast.expr.MethodCallExpr(name("Functions"), method, values);
-                yield fn.startsWith("ORD") ? new Operand.Computed(staticCall("BigDecimal", "valueOf", e), true, "integer")
-                        : new Operand.Computed(e, true, null);
+                if (fn.startsWith("ORD")) {
+                    yield new Operand.Computed(staticCall("BigDecimal", "valueOf", e), true, "integer");
+                }
+                if (fn.equals("SUM")) {
+                    yield new Operand.Computed(e, true, "decimal");
+                }
+                // MAX / MIN return the winning argument itself, so DISPLAY shows it in its own picture.
+                NodeList<Expression> fields = new NodeList<>();
+                for (Operand a : args) {
+                    Expression pictured = pictured(a);
+                    if (pictured == null) {
+                        fields = null;
+                        break;
+                    }
+                    fields.add(pictured);
+                }
+                yield new Operand.Computed(e, true, null, fields == null ? null
+                        : shown(new com.github.javaparser.ast.expr.MethodCallExpr(name("Functions"), method + "Field", fields)));
             }
             case "NUMVAL", "NUMVAL-C" -> {
                 arity(fn, args, 1);
                 yield new Operand.Computed(staticCall("Functions", fn.equals("NUMVAL") ? "numval" : "numvalC", textOf(args.getFirst(), fn)),
-                        true, null);
+                        true, "decimal");
             }
             case "ORD" -> {
                 arity(fn, args, 1);
