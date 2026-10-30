@@ -104,6 +104,12 @@ public interface TranslationContext {
      */
     java.util.Optional<String> alphabet(String name);
 
+    /** Whether the receiver of a MOVE may start inside its sender (after the sender's first byte). */
+    boolean receiverInsideSender(Operand src, Operand dst);
+
+    /** The size of a reference known at translation time (no variable length or reference modification). */
+    java.util.OptionalInt fixedSize(Operand.Field f);
+
     /** The switch number (0 .. 36) of a SPECIAL-NAMES mnemonic name for SWITCH-n. */
     java.util.OptionalInt switchNumberOf(String mnemonic);
 

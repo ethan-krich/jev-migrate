@@ -248,7 +248,33 @@ public final class Builtins implements MappingRegistry.Catalog {
         if (!(target instanceof Operand.Field t) || !t.alphanumeric() || (t.refmod() == null && (t.item().isGroup() || t.item().isEdited()))) {
             throw HandlerException.notApplicable("receiver " + receiverName(u, target) + " is not alphanumeric");
         }
-        return List.of(storeAlphanumeric(c.field(target), moveSource(u, c), c));
+        Operand src = moveSource(u, c);
+        Statement forward = overlappingCopy(c.field(target), t, src, u, c);
+        return List.of(forward != null ? forward : storeAlphanumeric(c.field(target), src, c));
+    }
+
+    /**
+     * A MOVE whose receiver may start inside its sender depends on the copy direction, which
+     * Dialect.move_overlap settles. With "ibm" the bytes are copied left to right where cobc's
+     * -fmove-ibm does it (cob_move_ibm: alphanumeric sender and receiver of fixed sizes, the sender
+     * at least as long, the receiver not JUSTIFIED); anything else, and "temporary", is the
+     * ordinary store, which reads the sender before it writes (GnuCOBOL's memmove). Null for the
+     * ordinary store.
+     */
+    private static Statement overlappingCopy(Expression field, Operand.Field target, Operand src, OpUnit u, TranslationContext c)
+            throws HandlerException {
+        if (!(src instanceof Operand.Field sf) || !sf.alphanumeric() || sf.edited() || !c.receiverInsideSender(src, target)) {
+            return null;
+        }
+        String mode = c.require("move_overlap", c.dialect().moveOverlap(), u.statement().getCtx(),
+                "a MOVE whose receiver may start inside its sender");
+        var srcSize = c.fixedSize(sf);
+        var dstSize = c.fixedSize(target);
+        if (!mode.equals("ibm") || srcSize.isEmpty() || dstSize.isEmpty() || srcSize.getAsInt() < dstSize.getAsInt()
+                || target.item().justified()) {
+            return null;
+        }
+        return stmt(call(field, "copyForward", c.field(src)));
     }
 
     private static List<Statement> moveToEdited(OpUnit u, TranslationContext c) throws HandlerException {
@@ -300,6 +326,10 @@ public final class Builtins implements MappingRegistry.Catalog {
         }
         Operand src = moveSource(u, c);
         Expression field = c.receiving(target);
+        Statement forward = overlappingCopy(field, (Operand.Field) target, src, u, c);
+        if (forward != null) {
+            return List.of(forward);
+        }
         Expression value = switch (src) {
             case Operand.Field f when f.numeric() -> {
                 c.requireBytes(f.item(), "MOVE of " + f.item().cobolName() + " to a group");

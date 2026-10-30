@@ -1,0 +1,7 @@
+shift right [AAAAAAAAAA]
+propagate   [**********]
+shift left  [CDEFGFGHIJ]
+group       [abcdebcdeb]
+elementary  [abababahij]
+shorter     [AABCD    J]
+variable    [ABABABAHIJ]

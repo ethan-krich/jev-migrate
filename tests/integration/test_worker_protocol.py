@@ -186,7 +186,7 @@ def test_setting_decisions_offer_values_and_are_applied_by_initialize_settings(w
     init = worker.call("initialize", params, session="session-2")
     assert init["result"]["dialect"]["encoding"] == "ascii"
     again = worker.call("translate", session="session-2")["result"]["decisions"]
-    assert [d["operation"] for d in again] == ["dialect:collating_sequence"]
+    assert [d["operation"] for d in again] == ["dialect:collating_sequence", "dialect:move_overlap"]
 
 
 def test_external_call_is_bound_through_slot_decisions(worker, tmp_path):

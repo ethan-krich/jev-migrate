@@ -20,6 +20,7 @@ from typing import Any
 ENCODINGS = ("ascii", "ebcdic")
 COLLATING_SEQUENCES = ("native", "ascii", "ebcdic")
 OUT_OF_RANGE = ("fail", "decision")
+MOVE_OVERLAP = ("temporary", "ibm")
 SOURCE_FORMATS = ("fixed", "variable", "tandem", "free")
 DYNAMIC_CALLS = ("project",)
 _WHEN_COMPILED = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")
@@ -45,6 +46,9 @@ class Dialect:
     * ``when_compiled``: fixed value of the WHEN-COMPILED register, ``YYYY-MM-DDTHH:MM:SS``.
     * ``dynamic_calls``: what ``CALL identifier`` can reach. ``project``: the programs of this
       translation project and nothing else (any other name is a program that is not found).
+    * ``move_overlap``: how a MOVE between alphanumeric items that may share bytes copies them.
+      ``temporary``: as if through a temporary item (GnuCOBOL's default); ``ibm``: byte by byte
+      from left to right (IBM mainframe MVC, GnuCOBOL ``-fmove-ibm``).
     """
 
     encoding: str | None = None
@@ -57,6 +61,7 @@ class Dialect:
     file_assignments: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}), hash=False)
     when_compiled: str | None = None
     dynamic_calls: str | None = None
+    move_overlap: str | None = None
 
     def __post_init__(self) -> None:
         problems = []
@@ -65,6 +70,7 @@ class Dialect:
         _choice(problems, "out_of_range", self.out_of_range, OUT_OF_RANGE, optional=True)
         _choice(problems, "source_format", self.source_format, SOURCE_FORMATS, optional=False)
         _choice(problems, "dynamic_calls", self.dynamic_calls, DYNAMIC_CALLS, optional=True)
+        _choice(problems, "move_overlap", self.move_overlap, MOVE_OVERLAP, optional=True)
         for name in ("binary_truncate", "debugging_lines"):
             if not isinstance(getattr(self, name), bool):
                 problems.append(f"{name} must be a bool")
@@ -94,6 +100,7 @@ class Dialect:
             "file_assignments": dict(self.file_assignments),
             "when_compiled": self.when_compiled,
             "dynamic_calls": self.dynamic_calls,
+            "move_overlap": self.move_overlap,
         }
 
 

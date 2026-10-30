@@ -1,0 +1,7 @@
+{
+  "description": "Dialect.move_overlap = temporary: MOVEs whose receiver starts inside the sender copy as through a temporary item, as GnuCOBOL's default (memmove) does",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "out_of_range": "fail", "move_overlap": "temporary"},
+  "equivalence": {"programs": ["OVERLAP.cbl"], "main_class": "fixtures.move_overlap_temporary.Overlap"},
+  "layout": {"base_package": "fixtures.move_overlap_temporary"}
+}

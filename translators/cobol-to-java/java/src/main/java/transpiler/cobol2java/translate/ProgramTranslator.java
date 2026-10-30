@@ -4492,6 +4492,57 @@ public final class ProgramTranslator implements TranslationContext {
     }
 
     @Override
+    public boolean receiverInsideSender(Operand src, Operand dst) {
+        if (!overlaps(src, dst)) {
+            return false;
+        }
+        int[] a = staticRange((Operand.Field) src);
+        int[] b = staticRange((Operand.Field) dst);
+        // A left-to-right copy differs from a copy through a temporary only when the receiver starts inside the sender.
+        return a == null || b == null || (b[0] > a[0] && b[0] < a[0] + a[1]);
+    }
+
+    @Override
+    public java.util.OptionalInt fixedSize(Operand.Field f) {
+        if (f.item().isGroup() && f.item().variableTable() != null) {
+            return java.util.OptionalInt.empty();
+        }
+        if (f.refmod() == null) {
+            return java.util.OptionalInt.of(f.item().size());
+        }
+        Operand.Subscript start = f.refmod().start();
+        Operand.Subscript length = f.refmod().length();
+        if (length != null) {
+            return length.value() == null ? java.util.OptionalInt.of(length.offset()) : java.util.OptionalInt.empty();
+        }
+        return start.value() == null ? java.util.OptionalInt.of(f.item().size() - start.offset() + 1) : java.util.OptionalInt.empty();
+    }
+
+    /** The record offset and length of a reference whose subscripts and reference modification are literals, else null. */
+    private int[] staticRange(Operand.Field f) {
+        if (f.item().linkage() || (f.item().isGroup() && f.item().variableTable() != null)) {
+            return null;
+        }
+        int offset = f.item().offset();
+        List<DataItem> dims = f.item().dimensions();
+        for (int i = 0; i < f.subscripts().size(); i++) {
+            Operand.Subscript sub = f.subscripts().get(i);
+            if (sub.value() != null) {
+                return null;
+            }
+            offset += (sub.offset() - 1) * dims.get(i).size();
+        }
+        var size = fixedSize(f);
+        if (f.refmod() != null) {
+            if (f.refmod().start().value() != null) {
+                return null;
+            }
+            offset += f.refmod().start().offset() - 1;
+        }
+        return size.isPresent() ? new int[] {offset, size.getAsInt()} : null;
+    }
+
+    @Override
     public void requireBytes(DataItem item, String usage) throws HandlerException {
         if (item.elementaryItems().stream().anyMatch(DataItem::encodingSensitive)) {
             requireAsciiBytes(currentCtx, usage);

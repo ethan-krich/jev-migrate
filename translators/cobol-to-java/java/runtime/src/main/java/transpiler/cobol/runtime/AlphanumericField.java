@@ -82,6 +82,17 @@ public final class AlphanumericField {
     }
 
     /** Reference modification {@code (start : length)}, checked as GnuCOBOL checks it at run time. */
+    /**
+     * MOVE that copies {@code source}'s bytes one at a time from left to right (IBM's MVC,
+     * GnuCOBOL's cob_move_ibm): a receiver that starts inside the sender repeats the sender's first
+     * bytes. The sender is at least as long as this item.
+     */
+    public void copyForward(AlphanumericField source) {
+        for (int i = 0; i < length; i++) {
+            storage.bytes[offset + i] = source.storage.bytes[source.offset + i];
+        }
+    }
+
     public AlphanumericField ref(int start, int length, String name) {
         return Bounds.ref(storage, offset, this.length, start, length, name);
     }

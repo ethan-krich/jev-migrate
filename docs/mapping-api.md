@@ -193,7 +193,7 @@ these stay pending. With `default_mappings()` there are three kinds:
 | Decision | When | Candidates |
 |---|---|---|
 | CALL of a program outside the project | `CALL 'X'` and `X` is not in the project (`missing_target_api`) | `builtin:call_external`, whose slots are separate decisions, and nothing is generated until every slot is chosen: `target` (`target:not_found`, GnuCOBOL's behaviour when the module is absent at run time: `ON EXCEPTION`, or the run unit ends with "module not found"; or `target:program:<name>`, a project program whose USING items match, under another name; never the calling program itself) and, with `USING`, `args` (`args:as_written`, or `args:by_content`, correct only if the target never changes its parameters) |
-| An unset `encoding`, `collating_sequence`, `out_of_range` or `sync_alignment` | a statement depends on the setting (`dialect:<field>`, `missing_mapping`) | the field's values (`setting:ascii`, `setting:ebcdic`, …), with every statement that depends on it as evidence; the program is translated again with the chosen value. See [Dialect](#dialect-project-settings) |
+| An unset `encoding`, `collating_sequence`, `out_of_range`, `sync_alignment` or `move_overlap` | a statement depends on the setting (`dialect:<field>`, `missing_mapping`) | the field's values (`setting:ascii`, `setting:ebcdic`, …), with every statement that depends on it as evidence; the program is translated again with the chosen value. See [Dialect](#dialect-project-settings) |
 | A handler choice | only after the project changes the rules: a removed rule or `strategy="unresolved"` (`missing_mapping`), rules that tie (`ambiguous_mapping`), or a rule whose handler does not apply (`invalid_mapping`) | the verb's handlers that generate for that statement, e.g. the other MOVE handlers, or `compute` (`+ - *` only) for COMPUTE |
 
 Every default rule covers every fact value of its verb, except ACCEPT
@@ -391,12 +391,13 @@ A key set both by `dialect=` and `options=` raises `TranspilerError`.
 | `file_assignments` | `{}` | `ASSIGN TO` name (literal text or word) → run-time path; an unmapped name is a `dialect:file_assignments` decision |
 | `when_compiled` | `None` | value of WHEN-COMPILED, `YYYY-MM-DDTHH:MM:SS` |
 | `dynamic_calls` | `None` | what `CALL identifier` can reach: `project` (the programs of this translation project; any other name is a program that is not found) |
+| `move_overlap` | `None` | how a MOVE whose receiver starts inside its alphanumeric sender copies: `temporary` (as through a temporary item: GnuCOBOL's default memmove) or `ibm` (left to right, so the first bytes repeat: IBM's MVC, GnuCOBOL `-fmove-ibm`; only where cobc copies that way, with fixed sizes and a sender at least as long). The COBOL standard leaves this undefined, so the program's original compiler decides |
 
 A program that needs an unset setting gets exactly one `missing_mapping` decision whose
 operation is `dialect:<field>` (facts `{"field": ..., "usages": [...]}`, every statement that
 depends on the setting), and those statements stay placeholders. Set the field and translate
-again, or let a provider choose: `encoding`, `collating_sequence`, `out_of_range` and
-`sync_alignment` decisions are [setting decisions](worker-protocol.md#setting-decisions) whose
+again, or let a provider choose: `encoding`, `collating_sequence`, `out_of_range`,
+`sync_alignment` and `move_overlap` decisions are [setting decisions](worker-protocol.md#setting-decisions) whose
 candidates are the field's values (`setting:ascii`, `setting:ebcdic`, ...); the other fields have
 no candidates. The dialect is
 part of every decision fingerprint and is recorded as `dialect` in `transpile-report.json`.

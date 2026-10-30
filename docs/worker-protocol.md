@@ -85,7 +85,7 @@ resolved.
 
 A decision with `setting: {field, values: {candidate_id: value}}` asks for a project setting the
 source does not state (cobol-to-java: `dialect:encoding`, `dialect:collating_sequence`,
-`dialect:out_of_range`, `dialect:sync_alignment`). Each candidate is one value with what it means;
+`dialect:out_of_range`, `dialect:sync_alignment`, `dialect:move_overlap`). Each candidate is one value with what it means;
 `context.facts.usages` lists every statement of the program that depends on it, as evidence.
 The orchestrator asks the provider about setting decisions before any other decision of the
 pass. A passed, valid answer is not sent to `resolve`: the orchestrator starts a new session
