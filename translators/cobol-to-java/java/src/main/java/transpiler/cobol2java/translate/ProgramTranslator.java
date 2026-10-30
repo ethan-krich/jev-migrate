@@ -2619,6 +2619,11 @@ public final class ProgramTranslator implements TranslationContext {
                 walk(p.getCtx(), tree -> {
                     if (tree instanceof CobolParser.ExitStatementContext exit && exit.SECTION() != null) {
                         exitSections.add(s);
+                        // Leaving a paragraph that is PERFORMed on its own for its section's end leaves
+                        // that PERFORM waiting, which only the procedure dispatcher reproduces.
+                        if (performedParagraphs.contains(p)) {
+                            dispatcher = true;
+                        }
                     }
                 });
             }
@@ -4594,7 +4599,6 @@ public final class ProgramTranslator implements TranslationContext {
             throw HandlerException.unsupported("GO TO outside the dispatcher form");
         }
         int t = procedureIndex(target, false);
-        checkGoTo(t);
         if (currentParagraph != null && alterable.containsKey(currentParagraph)) {
             return new ReturnStmt(name(alterable.get(currentParagraph)));
         }
@@ -4604,7 +4608,6 @@ public final class ProgramTranslator implements TranslationContext {
     @Override
     public int procedureNumber(Call target) throws HandlerException {
         int t = procedureIndex(target, false);
-        checkGoTo(t);
         return t;
     }
 
@@ -4616,15 +4619,6 @@ public final class ProgramTranslator implements TranslationContext {
         throw HandlerException.unsupported("ALTER " + paragraph.getName() + ": the paragraph must hold only a GO TO");
     }
 
-    /** A GO TO from inside a PERFORMed range to outside it never returns to the PERFORM. */
-    private void checkGoTo(int target) throws HandlerException {
-        for (int[] r : performRanges) {
-            if (currentNode >= r[0] && currentNode <= r[1] && (target < r[0] || target > r[1])) {
-                throw HandlerException.unsupported("GO TO out of a PERFORMed range (procedures " + r[0] + ".." + r[1]
-                        + "): the PERFORM would not return");
-            }
-        }
-    }
 
     @Override
     public String procedureMethod(Call call) throws HandlerException {

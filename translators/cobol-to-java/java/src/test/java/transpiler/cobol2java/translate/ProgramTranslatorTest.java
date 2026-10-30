@@ -253,14 +253,15 @@ class ProgramTranslatorTest {
     }
 
     @Test
-    void exitsThatLeaveAPerformedRangeAreDecisions() throws Exception {
+    void exitPerformOutsideAnInlinePerformIsADecisionAndExitSectionUsesTheDispatcher() throws Exception {
         String src = program("01 N PIC 9.",
                 "MAIN SECTION.", "P1.", "    PERFORM P2.", "    EXIT PERFORM.", "    STOP RUN.",
                 "P2.", "    EXIT SECTION.");
         var r = translate(dir, src, defaultRules());
-        assertEquals(List.of("EXIT", "EXIT"), operations(r));
+        assertEquals(List.of("EXIT"), operations(r));
         assertTrue(r.decisions().get(0).toJson("java").get("message").asText().contains("outside an inline PERFORM"));
-        assertTrue(r.decisions().get(1).toJson("java").get("message").asText().contains("PERFORMed on its own"));
+        // P2 is PERFORMed on its own and left by EXIT SECTION: the procedure dispatcher keeps the PERFORM waiting.
+        assertTrue(java(r).contains("PerformStack"));
     }
 
     @Test
@@ -283,11 +284,11 @@ class ProgramTranslatorTest {
                 "A.", "    DISPLAY 'a'.", "B.", "    DISPLAY 'b'.", "C.", "    PERFORM E.",
                 "D.", "    GO TO A.", "E.", "    PERFORM E."), defaultRules());
         List<String> got = r.decisions().stream().map(d -> d.operation() + ":" + d.message()).toList();
-        assertEquals(4, got.size(), got.toString());
+        // GO TO A out of PERFORM D's range is translated: the PERFORM waits for D's end, as in GnuCOBOL.
+        assertEquals(3, got.size(), got.toString());
         assertTrue(got.get(0).startsWith("PERFORM:PERFORM range overlaps"), got.toString());
         assertTrue(got.get(1).startsWith("PERFORM:PERFORM range overlaps"), got.toString());
-        assertTrue(got.get(2).startsWith("GO_TO:GO TO out of a PERFORMed range"), got.toString());
-        assertTrue(got.get(3).startsWith("PERFORM:recursive PERFORM"), got.toString());
+        assertTrue(got.get(2).startsWith("PERFORM:recursive PERFORM"), got.toString());
     }
 
     @Test

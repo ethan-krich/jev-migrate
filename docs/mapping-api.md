@@ -170,7 +170,9 @@ method returning the number of the procedure a `GO TO` goes to, or `-1` when it 
 `run(n)` executes procedures in order from `n`; `perform(from, thru)` pushes `thru` on a runtime
 `PerformStack` and runs from `from`. When a procedure ends normally and it is the end of the
 innermost PERFORM, that PERFORM returns, which is GnuCOBOL's return-point rule (so a `GO TO` out
-of a range leaves the PERFORM waiting). Programs without these statements keep the simpler form
+of a range leaves the PERFORM waiting, and so does an EXIT SECTION from a paragraph that is also
+PERFORMed on its own; GnuCOBOL's frame stack holds 255 PERFORMs, beyond which the run unit ends with
+"stack overflow"). Programs without these statements keep the simpler form
 (one method per paragraph, fall-through calls).
 
 ### Declaratives
@@ -223,8 +225,8 @@ the supported subset in the README and
 | EXHIBIT | `CHANGED` (`missing_mapping`; GnuCOBOL 3.2 does not implement it) |
 | IF, EVALUATE | nested parenthesised abbreviations, WHEN objects that do not match the subjects |
 | PERFORM | overlapping or recursive ranges, a PERFORM inside its own range, TIMES of a non-integer (invalid COBOL: cobc rejects it) |
-| GO TO, ALTER | GO TO out of a PERFORMed range, `GO TO.` with no target, ALTER of a paragraph that holds more than a GO TO |
-| STOP, GOBACK, EXIT, CONTINUE | `STOP literal` (`missing_target_api`), `STOP RUN GIVING` of a non-numeric item, exits that leave a PERFORMed range |
+| GO TO, ALTER | `GO TO.` with no target, ALTER of a paragraph that holds more than a GO TO |
+| STOP, GOBACK, EXIT, CONTINUE | `STOP literal` (`missing_target_api`), `STOP RUN GIVING` of a non-numeric item |
 | CALL | `RETURNING` / `GIVING` into a non-numeric item or together with ON EXCEPTION, `BY VALUE` (cobc 3.2 warns that its handling is unfinished and may change, so there is no stable reference), USING items whose number or sizes differ from the callee's, a CALL of the program itself, both ON OVERFLOW and ON EXCEPTION, a path or system routine with no matching program |
 | CANCEL, ENTRY | CANCEL of a library name; ENTRY that is not the first statement of a paragraph, or in a program with sections or GO TO |
 | SET | `SET` of a mnemonic name that is not SWITCH-0 .. SWITCH-36, several values, `TO FALSE` without `WHEN SET TO FALSE`, pointers |
