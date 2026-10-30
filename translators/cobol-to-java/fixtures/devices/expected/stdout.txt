@@ -1,0 +1,5 @@
+to syslist
+OPERATOR: MOUNT TAPE
+next input [second line         ]
+print file: printed line 1                
+print file: printed                       

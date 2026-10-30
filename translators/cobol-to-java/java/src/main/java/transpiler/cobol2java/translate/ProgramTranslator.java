@@ -2915,7 +2915,8 @@ public final class ProgramTranslator implements TranslationContext {
                             if (e.missingProgram() != null) {
                                 externalCall(unit, block, facts, rule, e.missingProgram(), e.getMessage());
                             } else {
-                                unresolved(unit, block, facts, Reason.MISSING_TARGET_API, rule, e.getMessage(), List.of());
+                                unresolved(unit, block, facts, Reason.MISSING_TARGET_API, rule, e.getMessage(),
+                                        e.offerCandidates() ? candidatesFor(unit, handler) : List.of());
                             }
                         }
                         // The dialect:<field> decision is already recorded once for the program.

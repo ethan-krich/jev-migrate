@@ -96,6 +96,21 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("display", "DISPLAY", "DISPLAY of literals and items, each item in its GnuCOBOL DISPLAY form", Builtins::display));
         register(Handler.of("if", "IF", "IF / ELSE with relation, sign and combined conditions", Builtins::ifElse));
         register(Handler.of("perform", "PERFORM", "PERFORM paragraph/section or inline; TIMES, UNTIL, single VARYING", Builtins::perform));
+        register(Handler.of("stop_literal_accept", "STOP",
+                "STOP literal as GnuCOBOL runs it: the literal is displayed on standard output, then one line of standard input "
+                        + "is read (the operator's reply) and the program continues", Builtins::stopLiteralAccept));
+        register(Handler.of("stop_literal_continue", "STOP",
+                "STOP literal shown on standard output, then the program continues without reading a reply "
+                        + "(correct only if nothing must wait for an operator)", Builtins::stopLiteralContinue));
+        register(Handler.of("display_printer", "DISPLAY",
+                "DISPLAY UPON PRINTER as GnuCOBOL runs it: appended to the file COB_DISPLAY_PRINT_FILE names, else standard output",
+                Builtins::displayPrinter));
+        register(Handler.of("display_device_stdout", "DISPLAY",
+                "DISPLAY UPON PRINTER / SYSPCH written to standard output (correct if the device is the job's output)",
+                Builtins::displayDeviceStdout));
+        register(Handler.of("display_device_stderr", "DISPLAY",
+                "DISPLAY UPON PRINTER / SYSPCH written to standard error (correct if the device is the job's error log)",
+                Builtins::displayDeviceStderr));
         register(Handler.of("stop_run", "STOP", "STOP RUN ends the run unit with RETURN-CODE as exit status", Builtins::stopRun));
         register(Handler.of("goback", "GOBACK", "GOBACK returns to the caller, or ends the run unit", (u, c) ->
                 List.of(stmt(staticCall("ProgramSupport", "goback", self())))));
@@ -717,31 +732,76 @@ public final class Builtins implements MappingRegistry.Catalog {
 
     // ------------------------------------------------------------- DISPLAY
 
+    /** Where a DISPLAY writes. */
+    private enum Output { STDOUT, STDERR, PRINTER }
+
     private static List<Statement> display(OpUnit u, TranslationContext c) throws HandlerException {
         DisplayStatement d = (DisplayStatement) u.statement();
+        String device = d.getUpon() == null ? "SYSOUT" : c.device(deviceName(d.getUpon()));
+        if (device.equals("ENVIRONMENT-NAME") || device.equals("ENVIRONMENT-VALUE") || device.equals("ARGUMENT-NUMBER")) {
+            return displayEnvironment(d, device, c);
+        }
+        Output output = switch (device) {
+            // cobc's device names for standard output and standard error.
+            case "CONSOLE", "SYSOUT", "SYSLIST", "SYSLST", "STDOUT", "PRINT", "TERMINAL", "ALTERNATE-CONSOLE" -> Output.STDOUT;
+            case "SYSERR", "STDERR" -> Output.STDERR;
+            // GnuCOBOL sends these to files named by the environment; the target system decides what they are.
+            case "PRINTER", "PRINTER-1", "SYSPCH", "SYSPUNCH" -> throw HandlerException.missingTarget("DISPLAY UPON " + device
+                    + ": the target system decides where the " + (device.startsWith("SYSP") ? "punch" : "printer") + " output goes", true);
+            default -> throw new HandlerException(HandlerException.Kind.MISSING_TARGET,
+                    "DISPLAY UPON " + device + " (not an output device of GnuCOBOL) has no target");
+        };
+        return displayTo(d, output, c);
+    }
+
+    /** DISPLAY written to {@code output}. */
+    private static List<Statement> displayTo(DisplayStatement d, Output output, TranslationContext c) throws HandlerException {
         if (d.getAt() != null || d.getOnExceptionClause() != null || d.getNotOnExceptionClause() != null) {
             throw HandlerException.unsupported("DISPLAY with AT or exception phrases is not supported");
-        }
-        boolean err = false;
-        if (d.getUpon() != null) {
-            String device = c.device(deviceName(d.getUpon()));
-            if (device.equals("ENVIRONMENT-NAME") || device.equals("ENVIRONMENT-VALUE") || device.equals("ARGUMENT-NUMBER")) {
-                return displayEnvironment(d, device, c);
-            }
-            switch (device) {
-                case "CONSOLE", "SYSOUT" -> err = false;
-                case "SYSERR" -> err = true;
-                default -> throw new HandlerException(HandlerException.Kind.MISSING_TARGET,
-                        "DISPLAY UPON " + device + " (a device other than CONSOLE, SYSOUT or SYSERR) has no target");
-            }
         }
         NodeList<Expression> args = new NodeList<>();
         for (var operand : d.getOperands()) {
             args.add(displayValue(c.operand(operand.getOperandValueStmt()), c));
         }
         boolean noAdvancing = d.getWith() != null;
-        String method = err ? (noAdvancing ? "errNoAdvancing" : "err") : (noAdvancing ? "noAdvancing" : "line");
+        if (output == Output.PRINTER) {
+            args.addFirst(bool(!noAdvancing));
+            return List.of(stmt(new com.github.javaparser.ast.expr.MethodCallExpr(name("Display"), "printer", args)));
+        }
+        String method = output == Output.STDERR ? (noAdvancing ? "errNoAdvancing" : "err") : (noAdvancing ? "noAdvancing" : "line");
         return List.of(stmt(new com.github.javaparser.ast.expr.MethodCallExpr(name("Display"), method, args)));
+    }
+
+    /** The device of DISPLAY UPON PRINTER / SYSPCH (candidates only), or null for another DISPLAY. */
+    private static String printDevice(OpUnit u, TranslationContext c) {
+        DisplayStatement d = (DisplayStatement) u.statement();
+        String device = d.getUpon() == null ? null : c.device(deviceName(d.getUpon()));
+        return device != null && List.of("PRINTER", "PRINTER-1", "SYSPCH", "SYSPUNCH").contains(device) ? device : null;
+    }
+
+    /** Candidate for DISPLAY UPON PRINTER: GnuCOBOL's print file (COB_DISPLAY_PRINT_FILE), else standard output. */
+    private static List<Statement> displayPrinter(OpUnit u, TranslationContext c) throws HandlerException {
+        String device = printDevice(u, c);
+        if (device == null || device.startsWith("SYSP")) {
+            throw HandlerException.notApplicable("not DISPLAY UPON PRINTER");
+        }
+        return displayTo((DisplayStatement) u.statement(), Output.PRINTER, c);
+    }
+
+    /** Candidate for DISPLAY UPON PRINTER / SYSPCH: the device is the job's standard output. */
+    private static List<Statement> displayDeviceStdout(OpUnit u, TranslationContext c) throws HandlerException {
+        if (printDevice(u, c) == null) {
+            throw HandlerException.notApplicable("not DISPLAY UPON PRINTER / SYSPCH");
+        }
+        return displayTo((DisplayStatement) u.statement(), Output.STDOUT, c);
+    }
+
+    /** Candidate for DISPLAY UPON PRINTER / SYSPCH: the device is the job's standard error. */
+    private static List<Statement> displayDeviceStderr(OpUnit u, TranslationContext c) throws HandlerException {
+        if (printDevice(u, c) == null) {
+            throw HandlerException.notApplicable("not DISPLAY UPON PRINTER / SYSPCH");
+        }
+        return displayTo((DisplayStatement) u.statement(), Output.STDERR, c);
     }
 
     /** The DISPLAY text of an operand. */
@@ -1385,8 +1445,9 @@ public final class Builtins implements MappingRegistry.Catalog {
         StopStatement s = (StopStatement) u.statement();
         switch (s.getStopType()) {
             case STOP_RUN -> { }
-            case STOP_RUN_AND_DISPLAY -> throw new HandlerException(HandlerException.Kind.MISSING_TARGET,
-                    "STOP literal shows the literal and waits for an operator reply; there is no operator console target");
+            case STOP_RUN_AND_DISPLAY -> throw HandlerException.missingTarget(
+                    "STOP literal shows the literal and waits for an operator reply; the target system decides what replaces the console",
+                    true);
             case STOP_RUN_GIVING -> {
                 // cobc: cob_stop_run (cob_get_int (x)), the integer part of the value.
                 Operand status = c.operand(s.getStopStatementGiving().getGivingValueStmt());
@@ -1399,6 +1460,28 @@ public final class Builtins implements MappingRegistry.Catalog {
             }
         }
         return List.of(stmt(staticCall("ProgramSupport", "stopRun", self())));
+    }
+
+    /**
+     * Candidate for STOP literal, as GnuCOBOL compiles it: DISPLAY of the literal on standard
+     * output, then an ACCEPT that reads one line of standard input and discards it; the program
+     * continues.
+     */
+    private static List<Statement> stopLiteralAccept(OpUnit u, TranslationContext c) throws HandlerException {
+        return List.of(stmt(staticCall("Display", "line", stopLiteral(u, c))), stmt(staticCall("Accept", "line")));
+    }
+
+    /** Candidate for STOP literal: DISPLAY of the literal on standard output, and the program continues without waiting. */
+    private static List<Statement> stopLiteralContinue(OpUnit u, TranslationContext c) throws HandlerException {
+        return List.of(stmt(staticCall("Display", "line", stopLiteral(u, c))));
+    }
+
+    private static Expression stopLiteral(OpUnit u, TranslationContext c) throws HandlerException {
+        StopStatement s = (StopStatement) u.statement();
+        if (s.getStopType() != StopStatement.StopType.STOP_RUN_AND_DISPLAY) {
+            throw HandlerException.notApplicable("not STOP literal");
+        }
+        return displayValue(c.operand(s.getDisplayValueStmt()), c);
     }
 
     private static List<Statement> exit(OpUnit u, TranslationContext c) throws HandlerException {

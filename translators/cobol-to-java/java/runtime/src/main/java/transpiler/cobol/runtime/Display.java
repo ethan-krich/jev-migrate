@@ -9,7 +9,8 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 
 /**
- * DISPLAY UPON SYSOUT / CONSOLE (standard output) and UPON SYSERR (standard error). Output is
+ * DISPLAY UPON SYSOUT / CONSOLE (standard output), UPON SYSERR (standard error) and UPON PRINTER
+ * (GnuCOBOL's print file or standard output). Output is
  * written byte-for-byte (one byte per character, ISO-8859-1) with a single LF terminator,
  * independent of the platform line separator.
  */
@@ -38,6 +39,39 @@ public final class Display {
     /** DISPLAY ... UPON SYSERR WITH NO ADVANCING. */
     public static void errNoAdvancing(String... operands) {
         write(ERR, operands);
+    }
+
+    /**
+     * DISPLAY ... UPON PRINTER as GnuCOBOL 3.2 does it: appended to the file COB_DISPLAY_PRINT_FILE
+     * names (opened and closed for each DISPLAY; standard error when it cannot be opened), else
+     * standard output. A print command (COB_DISPLAY_PRINT_PIPE) is not reproduced: the run unit ends.
+     */
+    public static void printer(boolean advancing, String... operands) {
+        String file = System.getenv("COB_DISPLAY_PRINT_FILE");
+        if (file != null) {
+            try (OutputStream out = new FileOutputStream(file, true)) {
+                write(out, operands);
+                if (advancing) {
+                    write(out, "\n");
+                }
+                return;
+            } catch (IOException e) {
+                if (advancing) {
+                    err(operands);
+                } else {
+                    errNoAdvancing(operands);
+                }
+                return;
+            }
+        }
+        if (System.getenv("COB_DISPLAY_PRINT_PIPE") != null || System.getenv("COBPRINTER") != null) {
+            Bounds.fail("DISPLAY UPON PRINTER to a print command (COB_DISPLAY_PRINT_PIPE) is not supported");
+        }
+        if (advancing) {
+            line(operands);
+        } else {
+            noAdvancing(operands);
+        }
     }
 
     public static void flush() {

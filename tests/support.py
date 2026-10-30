@@ -84,6 +84,16 @@ def mappings(case: Case):
     return registry
 
 
+def provider(case: Case):
+    """A StaticProvider applying the case's ``answers`` ([{"decision": id, "candidate": id}]), or None."""
+    answers = case.spec.get("answers")
+    if not answers:
+        return None
+    from transpiler import DecisionResponse, StaticProvider
+
+    return StaticProvider([DecisionResponse(a["candidate"], decision_id=a["decision"]) for a in answers])
+
+
 def copy_data(case: Case, run_dir: Path) -> None:
     """Puts the fixture's input files (``<fixture>/data/``) in the directory the program runs in."""
     data = case.path / "data"

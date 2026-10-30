@@ -185,7 +185,7 @@ equivalence fixtures.
 | ✅ | `IF`/`ELSE`, `EVALUATE`, relation (`= < > <= >= NOT`), sign, abbreviated (`A = 1 OR 2`) and combined (`A = (1 OR 2 AND 3)`) conditions, condition-names (also subscripted), class conditions read from the bytes (`NUMERIC`, `ALPHABETIC[-UPPER/-LOWER]`, user CLASS) | ordered alphanumeric comparisons need `Dialect.collating_sequence` (ASCII) |
 | ✅ | `NEXT SENTENCE`, `EXIT PARAGRAPH / SECTION / PERFORM [CYCLE]` | EXIT SECTION from a paragraph PERFORMed on its own uses the procedure dispatcher |
 | ✅ | `DIVIDE … REMAINDER`, `MOVE / ADD / SUBTRACT CORRESPONDING` | |
-| ✅ | `DISPLAY UPON CONSOLE / SYSERR`, `EXHIBIT [NAMED]`, `ACCEPT` from stdin and `FROM DATE / DAY / DAY-OF-WEEK / TIME / MICROSECOND-TIME` | |
+| ✅ | `DISPLAY UPON CONSOLE / SYSERR` and cobc's other names for them (`SYSLST`, `STDOUT`, `PRINT`, `TERMINAL`, `STDERR`, …), `EXHIBIT [NAMED]`, `ACCEPT` from stdin and `FROM DATE / DAY / DAY-OF-WEEK / TIME / MICROSECOND-TIME` | |
 | ✅ | Paragraphs, sections, fall-through, `PERFORM` proc / inline / `THRU`, `TIMES`, `UNTIL`, `VARYING … AFTER`, `WITH TEST AFTER` | |
 | ✅ | `GO TO`, `GO TO … DEPENDING ON` | procedure dispatcher with GnuCOBOL's PERFORM return points (a GO TO out of a performed range leaves the PERFORM waiting, as GnuCOBOL does); overlapping / recursive ranges are decisions; `ALTER` of a paragraph holding only a GO TO |
 | ✅ | `STOP RUN [GIVING]`, `GOBACK`, `EXIT`, `EXIT PROGRAM`, `CONTINUE`, `RETURN-CODE` → exit status, `CALL … RETURNING / GIVING` a numeric item | RETURNING gets the callee's RETURN-CODE and leaves the caller's unchanged, as GnuCOBOL |
@@ -205,11 +205,11 @@ equivalence fixtures.
 | ✅ | `WRITE … BEFORE / AFTER ADVANCING n LINES / PAGE / mnemonic`, `LINAGE` (`FOOTING`, `TOP`, `BOTTOM`), `LINAGE-COUNTER`, `[NOT] AT END-OF-PAGE` | GnuCOBOL's control bytes and paging, byte for byte |
 | ❌ | `SELECT OPTIONAL`, `ASSIGN TO` a data item (file name chosen at run time), split keys, `SUPPRESS WHEN`, `LOCK` phrases, SORT / MERGE `USING` / `GIVING` of files in ACCESS RANDOM, `REWRITE` of an INDEXED file with alternate keys in `ACCESS SEQUENTIAL`, `USE FOR DEBUGGING` with `WITH DEBUGGING MODE` (without it the section never runs and is left out), `GLOBAL` declaratives in programs with nested programs, declaratives with `GO TO` / `PERFORM THRU`, `RERUN` / `MULTIPLE FILE` | decisions |
 | ✅ | `ACCEPT FROM ENVIRONMENT-VALUE / ENVIRONMENT "name" / ARGUMENT-NUMBER / ARGUMENT-VALUE / COMMAND-LINE`, `DISPLAY UPON ENVIRONMENT-NAME / ENVIRONMENT-VALUE / ARGUMENT-NUMBER`, `[NOT] ON EXCEPTION` | as GnuCOBOL: unset variables give spaces and an exception |
-| ❌ | `CALL` of a program outside the project, `CALL … RETURNING` with `ON EXCEPTION`, `DISPLAY UPON` printer / other devices, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
+| ◐ | `CALL` of a program outside the project, `DISPLAY UPON PRINTER / SYSPCH`, `STOP literal` | decisions with candidates (GnuCOBOL's behaviour among them) that a provider such as Jev chooses; `CALL … RETURNING` with `ON EXCEPTION` is a decision |
 | ❌ | Other special registers (`DEBUG-ITEM`, `SORT-RETURN`, …), other dialects | files ProLeap cannot parse (XML / JSON GENERATE, ALLOCATE, OO COBOL, …) fail with `unsupported_dialect` |
 
 Constructs deliberately left to Phase 2 (floating point, pointers, national pictures,
-operator and printer devices, EBCDIC data) are listed with the reasons in
+EBCDIC data) are listed with the reasons in
 [docs/architecture.md](docs/architecture.md#constructs-deferred-to-phase-2).
 
 Known divergence: GnuCOBOL 3.2 prints an empty value for a `COMPUTE` receiver when it is displayed

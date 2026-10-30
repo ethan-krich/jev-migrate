@@ -33,6 +33,15 @@ public final class HandlerException extends Exception {
         return new HandlerException(Kind.MISSING_TARGET, message, false, program);
     }
 
+    /**
+     * MISSING_TARGET: the target system decides what replaces a device or console; with
+     * {@code offerCandidates} the operation's other builtin handlers are offered, each exact for
+     * one answer.
+     */
+    public static HandlerException missingTarget(String message, boolean offerCandidates) {
+        return new HandlerException(Kind.MISSING_TARGET, message, offerCandidates, null);
+    }
+
     /** The program a CALL names that is not in the project, or null. */
     public String missingProgram() {
         return missingProgram;

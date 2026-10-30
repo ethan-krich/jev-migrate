@@ -21,9 +21,14 @@ BUILTIN_HANDLERS = MappingProxyType({
     "compute": "COMPUTE",
     "compute_gnucobol": "COMPUTE",
     "display": "DISPLAY",
+    "display_printer": "DISPLAY",
+    "display_device_stdout": "DISPLAY",
+    "display_device_stderr": "DISPLAY",
     "if": "IF",
     "perform": "PERFORM",
     "stop_run": "STOP",
+    "stop_literal_accept": "STOP",
+    "stop_literal_continue": "STOP",
     "goback": "GOBACK",
     "exit": "EXIT",
     "continue": "CONTINUE",
@@ -64,8 +69,12 @@ BUILTIN_HANDLERS = MappingProxyType({
 })
 
 # Handlers that no default rule selects: the worker offers them as candidates on a decision
-# (compute when a rule is missing, call_external for a CALL outside the project).
-CANDIDATE_HANDLERS = frozenset({"compute", "call_external"})
+# (compute when a rule is missing, call_external for a CALL outside the project, the STOP literal
+# and DISPLAY UPON PRINTER / SYSPCH ones for a console or device the target system decides).
+CANDIDATE_HANDLERS = frozenset({
+    "compute", "call_external", "stop_literal_accept", "stop_literal_continue",
+    "display_printer", "display_device_stdout", "display_device_stderr",
+})
 
 # Facts the worker computes per operation instance; usable as `when` condition keys.
 FACTS = MappingProxyType({

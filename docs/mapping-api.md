@@ -188,10 +188,12 @@ rules).
 
 A decision with candidates. The worker generates each candidate for the statement and compiles
 its preview; `JevProvider` (or `StaticProvider`, or a person) only picks one. Without a provider
-these stay pending. With `default_mappings()` there are three kinds:
+these stay pending. With `default_mappings()` there are these kinds:
 
 | Decision | When | Candidates |
 |---|---|---|
+| STOP literal | `STOP "text"` (`missing_target_api`): it waits for an operator, and the target system decides what replaces the console | `builtin:stop_literal_accept` (GnuCOBOL's behaviour: the literal on standard output, then one line of standard input read and discarded) and `builtin:stop_literal_continue` (shown, and the program goes on; correct only if nothing must wait for an operator) |
+| DISPLAY UPON PRINTER / SYSPCH | the device's output goes where the target system says (`missing_target_api`) | `builtin:display_printer` (PRINTER only; GnuCOBOL's behaviour: appended to the file `COB_DISPLAY_PRINT_FILE` names, else standard output; a print command in `COB_DISPLAY_PRINT_PIPE` ends the run unit), `builtin:display_device_stdout`, `builtin:display_device_stderr` |
 | CALL of a program outside the project | `CALL 'X'` and `X` is not in the project (`missing_target_api`) | `builtin:call_external`, whose slots are separate decisions, and nothing is generated until every slot is chosen: `target` (`target:not_found`, GnuCOBOL's behaviour when the module is absent at run time: `ON EXCEPTION`, or the run unit ends with "module not found"; or `target:program:<name>`, a project program whose USING items match, under another name; never the calling program itself) and, with `USING`, `args` (`args:as_written`, or `args:by_content`, correct only if the target never changes its parameters) |
 | An unset `encoding`, `collating_sequence`, `out_of_range`, `sync_alignment` or `move_overlap` | a statement depends on the setting (`dialect:<field>`, `missing_mapping`) | the field's values (`setting:ascii`, `setting:ebcdic`, …), with every statement that depends on it as evidence; the program is translated again with the chosen value. See [Dialect](#dialect-project-settings) |
 | A handler choice | only after the project changes the rules: a removed rule or `strategy="unresolved"` (`missing_mapping`), rules that tie (`ambiguous_mapping`), or a rule whose handler does not apply (`invalid_mapping`) | the verb's handlers that generate for that statement, e.g. the other MOVE handlers, or `compute` (`+ - *` only) for COMPUTE |
@@ -221,12 +223,12 @@ the supported subset in the README and
 | MOVE | a sending category the receiver does not take: non-integer numeric → alphanumeric and `MOVE ALL` of a numeric literal (invalid COBOL: cobc rejects them), alphanumeric data into edited, BLANK WHEN ZERO or P-scaled numeric items, a group or an alphanumeric literal into a packed or binary item, `ALL` of non-digits into a numeric item; a receiver sharing storage with the sender; CORRESPONDING problems |
 | ADD, SUBTRACT, MULTIPLY, DIVIDE | non-numeric operands or receivers, CORRESPONDING with SIZE ERROR, REMAINDER without GIVING (or with several receivers) |
 | COMPUTE | `**` with a non-integer or negative exponent, floating-point intrinsic functions |
-| DISPLAY | `UPON` printer or other devices (`missing_target_api`), AT / exception phrases |
+| DISPLAY | `UPON` a name that is not an output device of GnuCOBOL (`missing_target_api`, no candidates), AT / exception phrases |
 | EXHIBIT | `CHANGED` (`missing_mapping`; GnuCOBOL 3.2 does not implement it) |
 | IF, EVALUATE | nested parenthesised abbreviations, WHEN objects that do not match the subjects |
 | PERFORM | overlapping or recursive ranges, a PERFORM inside its own range, TIMES of a non-integer (invalid COBOL: cobc rejects it) |
 | GO TO, ALTER | `GO TO.` with no target, ALTER of a paragraph that holds more than a GO TO |
-| STOP, GOBACK, EXIT, CONTINUE | `STOP literal` (`missing_target_api`), `STOP RUN GIVING` of a non-numeric item |
+| STOP, GOBACK, EXIT, CONTINUE | `STOP RUN GIVING` of a non-numeric item |
 | CALL | `RETURNING` / `GIVING` into a non-numeric item or together with ON EXCEPTION, `BY VALUE` (cobc 3.2 warns that its handling is unfinished and may change, so there is no stable reference), USING items whose number or sizes differ from the callee's, a CALL of the program itself, both ON OVERFLOW and ON EXCEPTION, a path or system routine with no matching program |
 | CANCEL, ENTRY | CANCEL of a library name; ENTRY that is not the first statement of a paragraph, or in a program with sections or GO TO |
 | SET | `SET` of a mnemonic name that is not SWITCH-0 .. SWITCH-36, several values, `TO FALSE` without `WHEN SET TO FALSE`, pointers |

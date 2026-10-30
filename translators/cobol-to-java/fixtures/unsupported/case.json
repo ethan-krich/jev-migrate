@@ -42,13 +42,20 @@
         "reason": "missing_target_api",
         "operation": "DISPLAY",
         "line": 44,
-        "candidates": []
+        "candidates": [
+          "builtin:display_printer",
+          "builtin:display_device_stdout",
+          "builtin:display_device_stderr"
+        ]
       },
       {
         "reason": "missing_target_api",
         "operation": "STOP",
         "line": 46,
-        "candidates": []
+        "candidates": [
+          "builtin:stop_literal_accept",
+          "builtin:stop_literal_continue"
+        ]
       },
       {
         "reason": "unsupported_construct",
