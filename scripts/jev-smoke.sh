@@ -34,7 +34,8 @@ case "$endpoint" in
   *) die "JEV_ENDPOINT must be openrouter or typesafe, not '$endpoint'" ;;
 esac
 [[ -n "${!key_env:-}" ]] || die "set OPENROUTER_API_KEY or TYPESAFE_API_KEY (this script calls the live API; $key_env is empty)"
-[[ -x "$TRANSPILER_CORE" ]] || "$ROOT/scripts/build.sh"
+# Incremental: picks up any change to the core or the worker since the last run.
+"$ROOT/scripts/build.sh" >&2
 
 info "examples/cobol-to-java-jev with JevProvider via $endpoint (model $model, key from \$$key_env)"
 # --all-packages --extra jev installs the optional typesafe_sdk dependency from uv.lock.
