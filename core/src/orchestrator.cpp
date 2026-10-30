@@ -157,7 +157,10 @@ class Run {
       order_.clear();
       decisions_.clear();
       resolved_.clear();
-      if (!settings.empty()) params["settings"] = settings;
+      if (!settings.empty()) {
+        params["settings"] = settings;
+        params["setting_provenance"] = setting_provenance_;
+      }
 
       auto init = worker.call("initialize", session, params, job_.request_timeout, on_event);
       if (auto s = check(init, "initialize")) return *s;
@@ -285,7 +288,16 @@ class Run {
                                        {"decision", p.decision->raw},
                                        {"resolution", p.answer.to_report(p.decision->importance)}});
       }
-      if (agree) chosen[field] = group.front().value;
+      if (agree) {
+        chosen[field] = group.front().value;
+        // Who chose it, for the worker to note in the generated code (the lowest confidence of the picks).
+        const DecisionResponse& a = group.front().answer;
+        json provenance = {{"provider", a.provider}};
+        for (const auto& pick : group)
+          if (pick.answer.confidence && (!provenance.contains("confidence") || *pick.answer.confidence < provenance["confidence"].get<double>()))
+            provenance["confidence"] = *pick.answer.confidence;
+        setting_provenance_[field] = provenance;
+      }
     }
     return std::nullopt;
   }
@@ -450,6 +462,8 @@ class Run {
   const Job& job_;
   DecisionProvider& provider_;
   json report_;
+  // Field -> {provider, confidence} of each chosen setting, sent with initialize.settings.
+  json setting_provenance_ = json::object();
   std::map<std::string, json> programs_;
   std::vector<std::string> order_;
   std::map<std::string, DecisionRequest> decisions_;

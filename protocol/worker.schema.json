@@ -43,6 +43,14 @@
         "layout": {"type": "object", "description": "Translator-specific folder convention"},
         "options": {"type": "object", "description": "Translator-specific options"},
         "settings": {"type": "object", "description": "Values chosen for setting decisions, written over `options` by the worker"},
+        "setting_provenance": {
+          "type": "object",
+          "description": "Setting field -> who chose its value in `settings` (provider and its confidence); the worker notes it in the generated code",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {"provider": {"type": "string"}, "confidence": {"type": "number", "minimum": 0, "maximum": 1}}
+          }
+        },
         "copybook_paths": {"type": "array", "items": {"type": "string"}},
         "importance": {
           "type": "array",

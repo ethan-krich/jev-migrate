@@ -546,12 +546,12 @@ public final class ProgramTranslator implements TranslationContext {
                 f.path = in.dialect().fileAssignments().get(f.assigned);
                 if (f.path == null) {
                     // The project must say where the file is; it is never guessed.
-                    Decision.Plan none = id -> {
+                    Decision.Plan none = (id, note) -> {
                         throw new IllegalArgumentException("decision has no candidates");
                     };
                     root.add(new Decision(Reason.MISSING_MAPPING, "dialect:file_assignments", "ASSIGN TO '" + f.assigned + "' (file "
                             + f.cobolName + ") has no entry in Dialect.file_assignments", location(f.ctx), in.programId(),
-                            Map.of("field", "file_assignments", "name", f.assigned), null, List.of(), null, id -> none.apply(id))
+                            Map.of("field", "file_assignments", "name", f.assigned), null, List.of(), null, none)
                             .withContext(context(f.ctx)));
                     statements++;
                     files.remove(f.cobolName);
@@ -2992,7 +2992,7 @@ public final class ProgramTranslator implements TranslationContext {
             List<Candidate> candidates, Map<String, Generated> plans, BlockStmt block) {
         EmptyStmt placeholder = placeholder(unit, null);
         block.addStatement(placeholder);
-        Decision.Plan plan = candidateId -> {
+        Decision.Plan plan = (candidateId, note) -> {
             Generated g = plans.get(candidateId);
             if (g == null) {
                 throw new IllegalArgumentException("no plan for candidate " + candidateId);
@@ -3003,11 +3003,25 @@ public final class ProgramTranslator implements TranslationContext {
             }
             block.getStatements().remove(index);
             block.getStatements().addAll(index, g.statements());
+            annotate(g.statements(), note);
             return g.nested();
         };
         return new Decision(reason, unit.operation(), message, unit.location(), in.programId(), facts,
                 rule == null ? null : rule.id(), candidates, rule == null ? null : rule.callback(), plan)
                 .withContext(context(unit.statement().getCtx()));
+    }
+
+    /**
+     * Puts {@code note} (who decided a statement, e.g. "Decided by jev (confidence 0.87): ...") as a
+     * Java line comment on the first statement generated for it, before any comment it already has.
+     */
+    static void annotate(List<Statement> statements, String note) {
+        if (note == null || statements.isEmpty()) {
+            return;
+        }
+        Statement first = statements.getFirst();
+        String text = " " + note + first.getComment().map(c -> " | " + c.getContent().strip()).orElse("");
+        first.setComment(new LineComment(text));
     }
 
     /** The context graph a provider reads for a decision about the source at {@code ctx}. */
@@ -3063,11 +3077,11 @@ public final class ProgramTranslator implements TranslationContext {
         block.addStatement(placeholder);
         ContextGraph graph = context(call.getCtx());
         String ruleId = rule == null ? null : rule.id();
-        Decision.Plan plan = candidateId -> {
+        Decision.Plan plan = (candidateId, chosenNote) -> {
             if (!candidateId.equals(external.id())) {
                 throw new IllegalArgumentException("no plan for candidate " + candidateId);
             }
-            SlotGroup group = new SlotGroup(slots.stream().map(Candidate.Slot::name).toList(), chosen -> {
+            SlotGroup group = new SlotGroup(slots.stream().map(Candidate.Slot::name).toList(), (chosen, note) -> {
                 Generated g = combos.get(chosen.get("target") + "|" + chosen.getOrDefault("args", ARGS_AS_WRITTEN));
                 int index = block.getStatements().indexOf(placeholder);
                 if (g == null || index < 0) {
@@ -3075,6 +3089,7 @@ public final class ProgramTranslator implements TranslationContext {
                 }
                 block.getStatements().remove(index);
                 block.getStatements().addAll(index, g.statements());
+                annotate(g.statements(), note);
                 return g.nested();
             });
             List<Decision> raised = new ArrayList<>();
@@ -3153,7 +3168,7 @@ public final class ProgramTranslator implements TranslationContext {
 
     private void dataDecision(ParserRuleContext ctx, String operation, String message, Reason reason) {
         statements++;
-        Decision.Plan none = id -> {
+        Decision.Plan none = (id, note) -> {
             throw new IllegalArgumentException("decision has no candidates");
         };
         sink.add(new Decision(reason, operation, message, location(ctx), in.programId(),
@@ -3185,7 +3200,7 @@ public final class ProgramTranslator implements TranslationContext {
             existing.putFact("usages", List.copyOf(usages));
             return;
         }
-        Decision.Plan none = id -> {
+        Decision.Plan none = (id, note) -> {
             throw new IllegalArgumentException("a setting is applied by translating again, not by resolve");
         };
         List<Candidate> candidates = new ArrayList<>();

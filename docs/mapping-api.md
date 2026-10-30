@@ -205,6 +205,11 @@ Every default rule covers every fact value of its verb, except ACCEPT
 `escape_key` / `message_count` / `other_date` (`TODAYS-DATE`, `YEAR`, `TIMER`, …: other dialects, which cobc rejects) and EXHIBIT `changed`. No handler generates those,
 so they are [unsupported](#unsupported) rather than handler choices.
 
+Every applied answer is visible in the Java: the first statement generated for the decision gets a
+line comment such as `// Decided by jev (confidence 0.87): builtin:stop_literal_accept`, and a setting
+a provider chose is noted at the top of each class (`// Dialect.move_overlap = "ibm" decided by jev
+(confidence 0.91)`).
+
 A decision's [importance](#importance) tier does not change who answers it. It only sets the
 confidence floor when `JevProvider` runs with a `Gate`.
 

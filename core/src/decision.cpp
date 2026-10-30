@@ -37,6 +37,8 @@ json DecisionResponse::to_resolution() const {
             {"provider", provider}};
   if (!fingerprint.empty()) j["fingerprint"] = fingerprint;
   if (!rationale.empty()) j["rationale"] = rationale;
+  // The worker writes who decided (and how sure it was) into the generated code.
+  if (confidence) j["confidence"] = *confidence;
   return j;
 }
 

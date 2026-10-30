@@ -140,16 +140,16 @@ class ProgramTranslatorTest {
         Candidate external = d.candidates().getFirst();
         assertEquals("builtin:call_external", external.id());
         assertEquals(List.of("target", "args"), external.slots().stream().map(Candidate.Slot::name).toList());
-        List<Decision> slots = d.resolve(external.id());
+        List<Decision> slots = d.resolve(external.id(), null);
         assertFalse(d.statementTranslated(), "the statement waits for its slots");
         assertEquals(List.of("target", "args"), slots.stream().map(Decision::slotName).toList());
         // OTHER's USING items are unknown (it is not parsed here), so only "not found" is offered.
         assertEquals(List.of("target:not_found"), slots.get(0).candidates().stream().map(Candidate::id).toList());
         assertEquals(List.of("args:as_written", "args:by_content"), slots.get(1).candidates().stream().map(Candidate::id).toList());
         assertTrue(r.compilationUnit().toString().contains("UNRESOLVED CALL"));
-        assertTrue(slots.get(0).resolve("target:not_found").isEmpty());
+        assertTrue(slots.get(0).resolve("target:not_found", null).isEmpty());
         assertFalse(slots.get(0).statementTranslated());
-        assertTrue(slots.get(1).resolve("args:as_written").isEmpty());
+        assertTrue(slots.get(1).resolve("args:as_written", null).isEmpty());
         assertTrue(slots.get(1).statementTranslated());
         String out = java(r);
         assertFalse(out.contains("UNRESOLVED"), out);
@@ -177,10 +177,23 @@ class ProgramTranslatorTest {
         assertEquals(List.of("builtin:display"), d.candidates().stream().map(c -> c.id()).toList());
         assertTrue(d.candidates().getFirst().preview().contains("Display.line(\"one\")"));
         assertTrue(d.fingerprint().startsWith("sha256:"));
-        assertTrue(d.resolve("builtin:display").isEmpty());
+        assertTrue(d.resolve("builtin:display", null).isEmpty());
         String src = java(r);
         assertFalse(src.contains("UNRESOLVED"), src);
         assertTrue(src.contains("Display.line(\"one\");"), src);
+        assertEquals("", compile("test.gen.T", src));
+    }
+
+    @Test
+    void anAppliedDecisionSaysWhoDecidedInALineComment() throws Exception {
+        var r = translate(dir, program("", "STOP 'mount tape'."), defaultRules());
+        Decision d = r.decisions().getFirst();
+        var resolution = transpiler.cobol2java.protocol.Json.MAPPER.readTree(
+                "{\"provider\": \"jev\", \"confidence\": 0.8734, \"selection\": {\"kind\": \"candidate\", "
+                        + "\"candidate_id\": \"builtin:stop_literal_accept\"}}");
+        d.resolve("builtin:stop_literal_accept", transpiler.cobol2java.session.Session.decidedBy(resolution));
+        String src = java(r);
+        assertTrue(src.contains("// Decided by jev (confidence 0.87): builtin:stop_literal_accept\n"), src);
         assertEquals("", compile("test.gen.T", src));
     }
 
@@ -190,10 +203,10 @@ class ProgramTranslatorTest {
         rules.removeIf(n -> n.get("source").asText().equals("IF") || n.get("source").asText().equals("DISPLAY"));
         var r = translate(dir, program("01 A PIC 9.", "IF A = 1 DISPLAY 'one' END-IF."), rules);
         assertEquals(1, r.decisions().size(), "the nested DISPLAY is only raised once IF is resolved");
-        List<Decision> nested = r.decisions().getFirst().resolve("builtin:if");
+        List<Decision> nested = r.decisions().getFirst().resolve("builtin:if", null);
         assertEquals(1, nested.size());
         assertEquals("DISPLAY", nested.getFirst().operation());
-        nested.getFirst().resolve("builtin:display");
+        nested.getFirst().resolve("builtin:display", null);
         assertFalse(java(r).contains("UNRESOLVED"));
     }
 

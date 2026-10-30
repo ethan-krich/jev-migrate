@@ -23,8 +23,12 @@ public final class Decision {
 
     /** Applies a selected candidate to the session's partially built AST. */
     public interface Plan {
-        /** Replaces the placeholder; returns decisions raised by nested statements of the candidate. */
-        List<Decision> apply(String candidateId);
+        /**
+         * Replaces the placeholder; returns decisions raised by nested statements of the candidate.
+         * {@code note}, when not null, says who decided (provider and confidence) and goes into the
+         * generated code as a comment.
+         */
+        List<Decision> apply(String candidateId, String note);
     }
 
     private final Reason reason;
@@ -73,7 +77,7 @@ public final class Decision {
     public static Decision slot(Reason reason, String operation, String message, SourceLocation location, String programId,
             Map<String, Object> facts, String ruleId, List<Candidate> candidates, SlotGroup group, String name) {
         Decision d = new Decision(reason, operation, message, location, programId, facts, ruleId, candidates, null,
-                candidateId -> group.fill(name, candidateId));
+                (candidateId, note) -> group.fill(name, candidateId, note));
         d.slotGroup = group;
         d.slotName = name;
         return d;
@@ -173,9 +177,12 @@ public final class Decision {
         return candidates.stream().anyMatch(c -> c.id().equals(candidateId));
     }
 
-    /** Applies the candidate; the caller has validated it. Returns newly raised nested decisions. */
-    public List<Decision> resolve(String candidateId) {
-        List<Decision> nested = plan.apply(candidateId);
+    /**
+     * Applies the candidate; the caller has validated it. Returns newly raised nested decisions.
+     * {@code note} (who decided, or null) is written as a comment on the generated code.
+     */
+    public List<Decision> resolve(String candidateId, String note) {
+        List<Decision> nested = plan.apply(candidateId, note);
         state = State.RESOLVED;
         selectedCandidate = candidateId;
         return nested;

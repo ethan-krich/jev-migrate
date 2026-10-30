@@ -87,6 +87,10 @@ A decision with `setting: {field, values: {candidate_id: value}}` asks for a pro
 source does not state (cobol-to-java: `dialect:encoding`, `dialect:collating_sequence`,
 `dialect:out_of_range`, `dialect:sync_alignment`, `dialect:move_overlap`). Each candidate is one value with what it means;
 `context.facts.usages` lists every statement of the program that depends on it, as evidence.
+A setting a provider chose comes back in `initialize.settings`, with `initialize.setting_provenance`
+(`{field: {provider, confidence}}`) saying who chose it; the worker notes it in the generated code.
+A resolution may carry the provider's `confidence`; the worker writes who decided each statement,
+with that confidence, as a line comment of the target language on the code it generates for it.
 The orchestrator asks the provider about setting decisions before any other decision of the
 pass. A passed, valid answer is not sent to `resolve`: the orchestrator starts a new session
 whose `initialize.settings` holds the value and translates every program again, so no other

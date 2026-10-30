@@ -96,6 +96,8 @@ public final class Session {
     private final Map<String, String> programDirectory = new HashMap<>();
     private final List<Decision> decisions = new ArrayList<>();
     private final Map<String, Decision> decisionsById = new HashMap<>();
+    /** One note per setting a provider chose (initialize.setting_provenance), written at the top of each class. */
+    private final List<String> settingNotes = new ArrayList<>();
     private State state = State.ACTIVE;
 
     private Session(String id, Path sourceRoot, Path outputRoot, Layout layout, MappingRegistry registry, Builtins builtins,
@@ -145,6 +147,7 @@ public final class Session {
         }
 
         Session session = new Session(id, sourceRoot, outputRoot, layout, registry, builtins, dialect, importance, contextBudget);
+        session.settingNotes.addAll(settingNotes(params.get("settings"), params.get("setting_provenance")));
         ArrayNode files = Json.requireArray(params, "files");
         List<ProgramState> toParse = new ArrayList<>();
         for (JsonNode f : files) {
@@ -497,6 +500,13 @@ public final class Session {
             if (!ps.failed) {
                 var out = translateUnit(ps, ps.unit, ps.programId, ps.className);
                 ps.java = out.compilationUnit();
+                // Settings a provider chose shape the whole program: say so once, at the top of its class.
+                var type = ps.java.getType(0);
+                if (!type.getMembers().isEmpty() && !settingNotes.isEmpty()) {
+                    var first = type.getMember(0);
+                    String existing = first.getComment().map(c -> " | " + c.getContent().strip()).orElse("");
+                    first.setComment(new com.github.javaparser.ast.comments.LineComment(" " + String.join(" | ", settingNotes) + existing));
+                }
                 ps.statements = out.statements();
                 ps.translatedStatements = out.translated();
                 List<Decision> all = new ArrayList<>(out.decisions());
@@ -613,7 +623,7 @@ public final class Session {
                 rej.put("message", problem);
                 continue;
             }
-            List<Decision> nested = d.resolve(selection.get("candidate_id").asText());
+            List<Decision> nested = d.resolve(selection.get("candidate_id").asText(), decidedBy(r));
             ProgramState owner = ownerOf(d);
             for (Decision n : nested) {
                 register(n);
@@ -628,6 +638,44 @@ public final class Session {
         ArrayNode pending = result.putArray("pending");
         decisions.stream().filter(x -> x.state() == Decision.State.PENDING).forEach(x -> pending.add(x.id()));
         return new Outcome(pending.isEmpty() ? Protocol.STATUS_OK : Protocol.STATUS_INCOMPLETE, result);
+    }
+
+    /**
+     * The comment for a resolution, written into the generated code: who decided, with the
+     * provider's confidence when it reports one ({@code Decided by jev (confidence 0.87): <candidate>}).
+     */
+    public static String decidedBy(JsonNode resolution) {
+        String provider = resolution.path("provider").asText("");
+        StringBuilder sb = new StringBuilder("Decided by ").append(provider.isEmpty() ? "a provider" : provider);
+        if (resolution.path("confidence").isNumber()) {
+            sb.append(String.format(java.util.Locale.ROOT, " (confidence %.2f)", resolution.get("confidence").asDouble()));
+        }
+        return sb.append(": ").append(resolution.path("selection").path("candidate_id").asText()).toString();
+    }
+
+    /**
+     * The notes for settings a provider chose: {@code Dialect.move_overlap = "ibm" decided by jev
+     * (confidence 0.91)}. Settings set by the project itself have no provenance and no note.
+     */
+    static List<String> settingNotes(JsonNode settings, JsonNode provenance) {
+        List<String> notes = new ArrayList<>();
+        if (provenance == null || !provenance.isObject() || settings == null || !settings.isObject()) {
+            return notes;
+        }
+        for (var e : provenance.properties()) {
+            JsonNode value = settings.get(e.getKey());
+            if (value == null) {
+                continue;
+            }
+            String provider = e.getValue().path("provider").asText("");
+            StringBuilder sb = new StringBuilder("Dialect.").append(e.getKey()).append(" = ").append(value)
+                    .append(" decided by ").append(provider.isEmpty() ? "a provider" : provider);
+            if (e.getValue().path("confidence").isNumber()) {
+                sb.append(String.format(java.util.Locale.ROOT, " (confidence %.2f)", e.getValue().get("confidence").asDouble()));
+            }
+            notes.add(sb.toString());
+        }
+        return notes;
     }
 
     private ProgramState ownerOf(Decision d) {

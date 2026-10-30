@@ -35,6 +35,10 @@ def test_fixture_translation(case: Case, tmp_path: Path, built) -> None:
     if result.status == "ok":
         assert not result.pending_decisions
         assert all(p.status == "translated" for p in result.programs)
+        if case.spec.get("answers"):
+            # Each answered decision is noted in the Java, in a line comment naming the provider.
+            java = "".join(f.read_text() for f in (tmp_path / "src").rglob("*.java"))
+            assert java.count("// Decided by static: ") == len(case.spec["answers"]), java
     else:
         # Incomplete translations never write (partial) Java.
         assert result.files_written == []
