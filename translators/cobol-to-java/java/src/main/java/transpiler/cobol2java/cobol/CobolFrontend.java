@@ -13,8 +13,21 @@ import java.util.Locale;
 /** Parses COBOL source into ProLeap's abstract semantic graph. ProLeap types stay inside this module. */
 public final class CobolFrontend {
 
-    /** @param debuggingLines compile {@code D} lines (otherwise they are comments, as in GnuCOBOL) */
-    public record Options(CobolSourceFormatEnum format, Charset charset, boolean debuggingLines) {
+    /**
+     * @param debuggingLines compile {@code D} lines (otherwise they are comments, as in GnuCOBOL)
+     * @param free free-format source, rewritten as {@code format} (VARIABLE) before parsing
+     */
+    public record Options(CobolSourceFormatEnum format, Charset charset, boolean debuggingLines, boolean free) {
+        public Options(CobolSourceFormatEnum format, Charset charset, boolean debuggingLines) {
+            this(format, charset, debuggingLines, false);
+        }
+
+        /** Options for a {@code Dialect.source_format} value: fixed, variable, tandem or free. */
+        public static Options of(String sourceFormat, Charset charset, boolean debuggingLines) {
+            boolean free = sourceFormat.equalsIgnoreCase("free");
+            return new Options(free ? CobolSourceFormatEnum.VARIABLE : parseFormat(sourceFormat), charset, debuggingLines, free);
+        }
+
         public static CobolSourceFormatEnum parseFormat(String value) {
             return CobolSourceFormatEnum.valueOf(value.toUpperCase(Locale.ROOT));
         }
@@ -64,6 +77,17 @@ public final class CobolFrontend {
             source = java.nio.file.Files.readString(file, options.charset());
         } catch (java.io.IOException e) {
             throw new ParseFailure("syntax_error", "cannot read " + file + ": " + e.getMessage(), e);
+        }
+        if (options.free()) {
+            try {
+                source = FreeFormat.toVariable(source);
+            } catch (FreeFormat.Unsupported e) {
+                throw new ParseFailure("unsupported_dialect", e.getMessage() + " at line " + e.line, e);
+            }
+            if (!SourceMap.copybooks(source, params).isEmpty()) {
+                throw new ParseFailure("unsupported_dialect", "COPY in free-format source: copybooks are read in "
+                        + options.format() + " format, not free format", null);
+            }
         }
         String unitName = unitName(file);
         // ProLeap always compiles debugging lines; GnuCOBOL treats them as comments unless asked.

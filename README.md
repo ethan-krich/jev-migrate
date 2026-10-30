@@ -165,7 +165,7 @@ equivalence fixtures.
 
 | | Construct | Notes |
 |---|---|---|
-| ✅ | IDENTIFICATION / DATA / PROCEDURE divisions, WORKING-STORAGE | one top-level program per file (nested programs allowed), fixed / variable / tandem format |
+| ✅ | IDENTIFICATION / DATA / PROCEDURE divisions, WORKING-STORAGE | one top-level program per file (nested programs allowed), fixed / variable / tandem / free format (free: no COPY, no directives other than `>>SOURCE` and `>>D`) |
 | ✅ | Debugging lines (`D` indicator) | comments unless `Dialect.debugging_lines` or `WITH DEBUGGING MODE` |
 | ✅ | `PIC X(n)` / `A(n)`, `PIC [S]9(i)[V9(s)]`, `P` scaling (`99PPP`, `PPP99`, `VPP9`), levels 01–49, 77 and 78, `VALUE` literal / figurative | byte-addressed storage per record (GnuCOBOL byte images); default init: spaces / zero |
 | ✅ | `USAGE DISPLAY`, `PACKED-DECIMAL` / `COMP-3`, `BINARY` / `COMP` / `COMP-4` / `COMP-X` (big-endian; `Dialect.binary_truncate`), `COMP-5`, `INDEX`; group USAGE | |
@@ -206,10 +206,10 @@ equivalence fixtures.
 | ❌ | `SELECT OPTIONAL`, `ASSIGN TO` a data item (file name chosen at run time), split keys, `SUPPRESS WHEN`, `LOCK` phrases, SORT / MERGE `USING` / `GIVING` of files in ACCESS RANDOM, `REWRITE` of an INDEXED file with alternate keys in `ACCESS SEQUENTIAL`, `USE FOR DEBUGGING` with `WITH DEBUGGING MODE` (without it the section never runs and is left out), `GLOBAL` declaratives in programs with nested programs, declaratives with `GO TO` / `PERFORM THRU`, `RERUN` / `MULTIPLE FILE` | decisions |
 | ✅ | `ACCEPT FROM ENVIRONMENT-VALUE / ENVIRONMENT "name" / ARGUMENT-NUMBER / ARGUMENT-VALUE / COMMAND-LINE`, `DISPLAY UPON ENVIRONMENT-NAME / ENVIRONMENT-VALUE / ARGUMENT-NUMBER`, `[NOT] ON EXCEPTION` | as GnuCOBOL: unset variables give spaces and an exception |
 | ❌ | `CALL` of a program outside the project, `CALL … RETURNING` with `ON EXCEPTION`, `DISPLAY UPON` printer / other devices, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
-| ❌ | Other special registers (`DEBUG-ITEM`, `SORT-RETURN`, …), free format / other dialects | files ProLeap cannot parse (XML / JSON GENERATE, ALLOCATE, OO COBOL, …) fail with `unsupported_dialect` |
+| ❌ | Other special registers (`DEBUG-ITEM`, `SORT-RETURN`, …), other dialects | files ProLeap cannot parse (XML / JSON GENERATE, ALLOCATE, OO COBOL, …) fail with `unsupported_dialect` |
 
-Constructs deliberately left to Phase 2 (floating point, pointers, national pictures, free
-format, operator and printer devices, EBCDIC data) are listed with the reasons in
+Constructs deliberately left to Phase 2 (floating point, pointers, national pictures,
+operator and printer devices, EBCDIC data) are listed with the reasons in
 [docs/architecture.md](docs/architecture.md#constructs-deferred-to-phase-2).
 
 Known divergence: GnuCOBOL 3.2 prints an empty value for a `COMPUTE` receiver when it is displayed

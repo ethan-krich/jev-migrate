@@ -387,7 +387,7 @@ A key set both by `dialect=` and `options=` raises `TranspilerError`.
 | `binary_truncate` | `True` | COMP/BINARY arithmetic is limited by the PICTURE (GnuCOBOL `binary-truncate`); `False` limits it by the bytes only (MOVE still cuts to the PICTURE) |
 | `sync_alignment` | `None` | whether SYNCHRONIZED inserts slack bytes before binary items (`False` only; `True` is a decision) |
 | `debugging_lines` | `False` | compile `D` lines (otherwise comments, as GnuCOBOL; `WITH DEBUGGING MODE` also enables them) |
-| `source_format` | `fixed` | `fixed`, `variable`, `tandem` |
+| `source_format` | `fixed` | `fixed`, `variable`, `tandem`, `free` (GnuCOBOL's `-free`: rewritten line for line as `variable` format; `*>` comments, `>>D` debugging lines and `>>SOURCE FORMAT FREE` are carried over; other directives, literals continued on the next line and COPY fail the file with `unsupported_dialect`) |
 | `file_assignments` | `{}` | `ASSIGN TO` name (literal text or word) → run-time path; an unmapped name is a `dialect:file_assignments` decision |
 | `when_compiled` | `None` | value of WHEN-COMPILED, `YYYY-MM-DDTHH:MM:SS` |
 | `dynamic_calls` | `None` | what `CALL identifier` can reach: `project` (the programs of this translation project; any other name is a program that is not found) |

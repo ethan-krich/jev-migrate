@@ -212,7 +212,6 @@ as the reference to prove an exact one.
 | `**` with a non-integer or negative exponent | `unsupported_construct` | Same: not provably bit-exact |
 | `POINTER`, `ADDRESS OF`, `ALLOCATE` / `FREE`, `SET ADDRESS` | `unsupported_construct` (`ALLOCATE`: `unsupported_dialect`, ProLeap cannot parse it) | Byte-addressed storage can model offsets, not arbitrary addresses or memory shared with C |
 | `N` (national) pictures | `unsupported_construct` | GnuCOBOL 3.2's national support is incomplete, so there is no reliable reference |
-| Free-format source | `source_format` accepts only `fixed`, `variable`, `tandem` | ProLeap's grammar does not read it; needs a reformatter or grammar work |
 | `STOP literal` | `missing_target_api` | Shows the literal and waits for an operator; the target system decides what replaces the console |
 | `DISPLAY UPON` printer / other devices | `missing_target_api` | The device has no Java counterpart until the project names one |
 | EBCDIC data (`Dialect.encoding = ebcdic`) | `missing_mapping` / `unsupported_construct` | GnuCOBOL runs on ASCII data, so EBCDIC byte images cannot be checked against it (the EBCDIC *collating sequence* is supported) |

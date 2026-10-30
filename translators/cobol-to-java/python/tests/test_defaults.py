@@ -80,4 +80,4 @@ def test_dialect_is_validated_and_frozen():
     with pytest.raises(ValueError, match="when_compiled"):
         Dialect(when_compiled="yesterday")
     with pytest.raises(ValueError, match="source_format"):
-        Dialect(source_format="free")
+        Dialect(source_format="punched")

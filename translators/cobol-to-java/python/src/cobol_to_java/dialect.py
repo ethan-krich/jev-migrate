@@ -20,7 +20,7 @@ from typing import Any
 ENCODINGS = ("ascii", "ebcdic")
 COLLATING_SEQUENCES = ("native", "ascii", "ebcdic")
 OUT_OF_RANGE = ("fail", "decision")
-SOURCE_FORMATS = ("fixed", "variable", "tandem")
+SOURCE_FORMATS = ("fixed", "variable", "tandem", "free")
 DYNAMIC_CALLS = ("project",)
 _WHEN_COMPILED = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")
 
@@ -40,7 +40,7 @@ class Dialect:
       ``-fbinary-truncate``, the default).
     * ``sync_alignment``: whether SYNCHRONIZED inserts slack bytes before binary items.
     * ``debugging_lines``: compile lines with ``D`` in the indicator area.
-    * ``source_format``: ``fixed`` (columns 8-72), ``variable`` or ``tandem``.
+    * ``source_format``: ``fixed`` (columns 8-72), ``variable``, ``tandem`` or ``free`` (GnuCOBOL's ``-free``).
     * ``file_assignments``: ``ASSIGN TO`` name -> path used at run time.
     * ``when_compiled``: fixed value of the WHEN-COMPILED register, ``YYYY-MM-DDTHH:MM:SS``.
     * ``dynamic_calls``: what ``CALL identifier`` can reach. ``project``: the programs of this

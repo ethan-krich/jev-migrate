@@ -61,7 +61,7 @@ class DialectTest {
     void unknownKeysAndBadValuesAreInvalidParams() {
         for (String bad : new String[] {
             "{\"colour\": \"blue\"}", "{\"encoding\": \"utf-8\"}", "{\"binary_truncate\": \"yes\"}",
-            "{\"source_format\": \"free\"}", "{\"when_compiled\": \"today\"}", "{\"file_assignments\": {\"A\": 1}}", "{\"dynamic_calls\": \"all\"}", "[]"}) {
+            "{\"source_format\": \"punched\"}", "{\"when_compiled\": \"today\"}", "{\"file_assignments\": {\"A\": 1}}", "{\"dynamic_calls\": \"all\"}", "[]"}) {
             var e = assertThrows(ProtocolException.class, () -> parse(bad), bad);
             assertEquals(ErrorCode.INVALID_PARAMS, e.code(), bad);
         }

@@ -142,7 +142,7 @@ public record Dialect(
                 bool(options, "binary_truncate").orElse(true),
                 bool(options, "sync_alignment"),
                 bool(options, "debugging_lines").orElse(false),
-                text(options, "source_format", Set.of("fixed", "variable", "tandem")).orElse("fixed"),
+                text(options, "source_format", Set.of("fixed", "variable", "tandem", "free")).orElse("fixed"),
                 Map.copyOf(files),
                 whenCompiled,
                 text(options, "dynamic_calls", Set.of("project")));

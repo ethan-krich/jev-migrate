@@ -129,8 +129,7 @@ public final class Session {
         ContextGraph.Budget contextBudget = contextBudget(params.get("context"));
         CobolFrontend frontend;
         try {
-            frontend = new CobolFrontend(new CobolFrontend.Options(
-                    CobolFrontend.Options.parseFormat(dialect.sourceFormat()),
+            frontend = new CobolFrontend(CobolFrontend.Options.of(dialect.sourceFormat(),
                     Charset.forName(options.path("source_encoding").asText("ISO-8859-1")),
                     dialect.debuggingLines()));
         } catch (IllegalArgumentException e) {
