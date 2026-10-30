@@ -1,0 +1,7 @@
+{
+  "description": "CALL ... RETURNING / GIVING (the callee's RETURN-CODE into a numeric item; the caller's RETURN-CODE unchanged; NOT ON EXCEPTION) and STOP RUN GIVING (exit status from a literal or an item)",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "out_of_range": "fail"},
+  "equivalence": {"programs": ["CALLRET.cbl", "RETSUB.cbl"], "main_class": "fixtures.call_returning.Callret"},
+  "layout": {"base_package": "fixtures.call_returning"}
+}

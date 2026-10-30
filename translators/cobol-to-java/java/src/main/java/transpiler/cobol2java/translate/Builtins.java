@@ -1317,7 +1317,16 @@ public final class Builtins implements MappingRegistry.Catalog {
             case STOP_RUN -> { }
             case STOP_RUN_AND_DISPLAY -> throw new HandlerException(HandlerException.Kind.MISSING_TARGET,
                     "STOP literal shows the literal and waits for an operator reply; there is no operator console target");
-            case STOP_RUN_GIVING -> throw HandlerException.unsupported("STOP RUN GIVING / RETURNING is not supported");
+            case STOP_RUN_GIVING -> {
+                // cobc: cob_stop_run (cob_get_int (x)), the integer part of the value.
+                Operand status = c.operand(s.getStopStatementGiving().getGivingValueStmt());
+                Expression value = switch (status) {
+                    case Operand.NumericLiteral n when n.isInteger() -> integer(n.value().intValueExact());
+                    case Operand.Field f when f.numeric() -> call(c.field(status), "intValue");
+                    default -> throw HandlerException.unsupported("STOP RUN GIVING " + status.category() + " is not supported");
+                };
+                return List.of(stmt(staticCall("ProgramSupport", "stopRun", value)));
+            }
         }
         return List.of(stmt(staticCall("ProgramSupport", "stopRun", self())));
     }
@@ -1374,8 +1383,16 @@ public final class Builtins implements MappingRegistry.Catalog {
     private static List<Statement> callTo(OpUnit u, TranslationContext c, String target, boolean byContent, boolean absent)
             throws HandlerException {
         CallStatement call = (CallStatement) u.statement();
+        Expression returning = null;
         if (call.getGivingPhrase() != null) {
-            throw HandlerException.unsupported("CALL ... RETURNING / GIVING is not supported");
+            Operand r = c.operand(call.getGivingPhrase().getGivingCall());
+            if (!(r instanceof Operand.Field rf && rf.numeric())) {
+                throw HandlerException.unsupported("CALL ... RETURNING " + r.category() + " is not supported (a numeric item)");
+            }
+            if (call.getOnExceptionClause() != null || call.getOnOverflowPhrase() != null) {
+                throw HandlerException.unsupported("CALL ... RETURNING with ON EXCEPTION / ON OVERFLOW is not supported");
+            }
+            returning = c.field(r);
         }
         if (call.getOnExceptionClause() != null && call.getOnOverflowPhrase() != null) {
             throw HandlerException.unsupported("CALL with both ON OVERFLOW and ON EXCEPTION");
@@ -1461,6 +1478,21 @@ public final class Builtins implements MappingRegistry.Catalog {
         String method = dynamic || absent ? "callNamed" : c.entryIndex(program) > 0 ? "callEntry" : "call";
         Expression invoke = new com.github.javaparser.ast.expr.MethodCallExpr(name("ProgramSupport"), method, args);
         BlockStmt notOnException = call.getNotOnExceptionClause() == null ? new BlockStmt() : c.nested(call.getNotOnExceptionClause());
+        if (returning != null) {
+            // RETURNING receives the int the callee returns (its RETURN-CODE) with cob_set_int; the
+            // caller's RETURN-CODE is not updated, so it is put back after the call.
+            String saved = c.fresh("returnCode");
+            Expression rc = c.field(new Operand.ReturnCode());
+            List<Statement> out = new ArrayList<>();
+            out.add(declare(type("BigDecimal"), saved, call(rc, "get")));
+            out.add(stmt(invoke));
+            out.add(stmt(call(returning, "move", call(rc.clone(), "get"))));
+            out.add(stmt(call(rc.clone(), "move", name(saved))));
+            if (!notOnException.isEmpty()) {
+                out.add(notOnException);
+            }
+            return out;
+        }
         if (onException == null) {
             return notOnException.isEmpty() ? List.of(stmt(invoke)) : List.of(stmt(invoke), notOnException);
         }

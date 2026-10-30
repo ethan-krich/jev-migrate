@@ -1,0 +1,5 @@
+result +00010 rc +000000011
+called
+packed -500.0 rc +000000011
+bin 1998
+plain rc -000001998

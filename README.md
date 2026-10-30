@@ -188,7 +188,7 @@ equivalence fixtures.
 | ✅ | `DISPLAY UPON CONSOLE / SYSERR`, `EXHIBIT [NAMED]`, `ACCEPT` from stdin and `FROM DATE / DAY / DAY-OF-WEEK / TIME` | |
 | ✅ | Paragraphs, sections, fall-through, `PERFORM` proc / inline / `THRU`, `TIMES`, `UNTIL`, `VARYING … AFTER`, `WITH TEST AFTER` | |
 | ✅ | `GO TO`, `GO TO … DEPENDING ON` | procedure dispatcher with GnuCOBOL's PERFORM return points; overlapping / recursive ranges and GO TO out of a performed range are decisions; `ALTER` of a paragraph holding only a GO TO |
-| ✅ | `STOP RUN`, `GOBACK`, `EXIT`, `EXIT PROGRAM`, `CONTINUE`, `RETURN-CODE` → exit status | |
+| ✅ | `STOP RUN [GIVING]`, `GOBACK`, `EXIT`, `EXIT PROGRAM`, `CONTINUE`, `RETURN-CODE` → exit status, `CALL … RETURNING / GIVING` a numeric item | RETURNING gets the callee's RETURN-CODE and leaves the caller's unchanged, as GnuCOBOL |
 | ✅ | `COPY` (copybook search path; decision lines map back to the original file), `CALL 'literal'` of a program in the project, `CALL identifier` (needs `Dialect.dynamic_calls`), `ON EXCEPTION` / `ON OVERFLOW`, `CANCEL`, `ENTRY "name" [USING]` (first statement of a paragraph, programs without sections) | persistent WORKING-STORAGE, RETURN-CODE propagation, PROGRAM-IDs matched case-sensitively as GnuCOBOL does |
 | ◐ | `REPLACE` statements | parsed by ProLeap; line numbers then fall back to the preprocessed source (warning `approximate_line_numbers`) |
 | ✅ | Nested programs (`END PROGRAM`), `IS COMMON`, `GLOBAL` data items | static nested classes of the file's class; callable only from their container (and, when COMMON, from its other programs), as in GnuCOBOL; GLOBAL items of containers are shared, a program's own item of the same name hides them |
@@ -205,7 +205,7 @@ equivalence fixtures.
 | ✅ | `WRITE … BEFORE / AFTER ADVANCING n LINES / PAGE / mnemonic`, `LINAGE` (`FOOTING`, `TOP`, `BOTTOM`), `LINAGE-COUNTER`, `[NOT] AT END-OF-PAGE` | GnuCOBOL's control bytes and paging, byte for byte |
 | ❌ | `SELECT OPTIONAL`, `ASSIGN TO` a data item (file name chosen at run time), split keys, `SUPPRESS WHEN`, `LOCK` phrases, SORT / MERGE `USING` / `GIVING` of RELATIVE / INDEXED files, `REWRITE` of an INDEXED file with alternate keys in `ACCESS SEQUENTIAL`, `USE FOR DEBUGGING` / `GLOBAL` declaratives, declaratives with `GO TO` / `PERFORM THRU`, `RERUN` / `MULTIPLE FILE` | decisions |
 | ✅ | `ACCEPT FROM ENVIRONMENT-VALUE / ENVIRONMENT "name" / ARGUMENT-NUMBER / ARGUMENT-VALUE / COMMAND-LINE`, `DISPLAY UPON ENVIRONMENT-NAME / ENVIRONMENT-VALUE / ARGUMENT-NUMBER`, `[NOT] ON EXCEPTION` | as GnuCOBOL: unset variables give spaces and an exception |
-| ❌ | `CALL` of a program outside the project, `CALL … RETURNING`, `DISPLAY UPON` printer / other devices, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
+| ❌ | `CALL` of a program outside the project, `CALL … RETURNING` with `ON EXCEPTION`, `DISPLAY UPON` printer / other devices, `STOP literal` | `missing_mapping`, `missing_target_api` or `unsupported_construct` |
 | ❌ | Other special registers (`DEBUG-ITEM`, `SORT-RETURN`, …), free format / other dialects | files ProLeap cannot parse (XML / JSON GENERATE, ALLOCATE, OO COBOL, …) fail with `unsupported_dialect` |
 
 Constructs deliberately left to Phase 2 (floating point, pointers, national pictures, free

@@ -1,0 +1,27 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CALLRET.
+      * CALL ... RETURNING and STOP RUN GIVING.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-ARG     PIC 9(3) VALUE 5.
+       01 WS-RESULT  PIC S9(5).
+       01 WS-PACKED  PIC S9(3)V9 COMP-3.
+       01 WS-BIN     PIC 9(4) COMP.
+       01 WS-STATUS  PIC 9V9 VALUE 7.9.
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           MOVE 11 TO RETURN-CODE.
+           CALL "RETSUB" USING WS-ARG RETURNING WS-RESULT.
+           DISPLAY "result " WS-RESULT " rc " RETURN-CODE.
+           MOVE 250 TO WS-ARG.
+           CALL "RETSUB" USING WS-ARG GIVING WS-PACKED
+               NOT ON EXCEPTION DISPLAY "called"
+           END-CALL.
+           DISPLAY "packed " WS-PACKED " rc " RETURN-CODE.
+           MOVE 999 TO WS-ARG.
+           CALL "RETSUB" USING WS-ARG RETURNING WS-BIN.
+           DISPLAY "bin " WS-BIN.
+           CALL "RETSUB" USING WS-ARG.
+           DISPLAY "plain rc " RETURN-CODE.
+           MOVE 0 TO RETURN-CODE.
+           STOP RUN GIVING WS-STATUS.
