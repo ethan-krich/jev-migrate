@@ -285,7 +285,9 @@ public final class ProgramTranslator implements TranslationContext {
     private List<Decision> sink = new ArrayList<>();
     /** Program-level decisions (never discarded with a failed candidate), in source order with the rest. */
     private final List<Decision> root = sink;
-    private final Set<String> dialectDecisions = new HashSet<>();
+    /** The program's decision per unset dialect setting, with the uses collected as its evidence. */
+    private final Map<String, Decision> dialectDecisions = new HashMap<>();
+    private final Map<String, List<String>> dialectUsages = new HashMap<>();
     /** Times an unset dialect setting was required; a rise during fact extraction blocks a unit. */
     private int dialectHits;
     // SPECIAL-NAMES
@@ -3073,21 +3075,51 @@ public final class ProgramTranslator implements TranslationContext {
     }
 
     /**
-     * Records the program's single decision for an unset dialect setting. It has no candidates:
-     * the project must set the field and translate again.
+     * Records the program's single decision for an unset dialect setting. A field of
+     * {@link Dialect#SETTINGS} offers its values as candidates (a setting decision: the
+     * orchestrator translates again with the chosen value); others have none. Every source line
+     * that needs the setting is kept in the {@code usages} fact, as evidence for the choice.
      */
     private void dialectDecision(String field, ParserRuleContext ctx, String usage) {
         SourceLocation where = location(ctx);
-        if (!dialectDecisions.add(field)) {
+        List<String> usages = dialectUsages.computeIfAbsent(field, f -> new ArrayList<>());
+        // The whole statement: translating it stops at the first use, so its other uses are only seen here.
+        ParserRuleContext statement = ctx;
+        while (statement != null && !(statement instanceof io.proleap.cobol.CobolParser.StatementContext)) {
+            statement = statement.getParent();
+        }
+        SourceLocation shown = statement == null ? where : location(statement);
+        String text = shown.text().replaceAll("\\s+", " ");
+        String evidence = "line " + shown.line() + ": " + (text.length() > 400 ? text.substring(0, 397) + "..." : text);
+        if (usages.size() < MAX_SETTING_USAGES && !usages.contains(evidence)) {
+            usages.add(evidence);
+        }
+        Decision existing = dialectDecisions.get(field);
+        if (existing != null) {
+            existing.putFact("usages", List.copyOf(usages));
             return;
         }
         Decision.Plan none = id -> {
-            throw new IllegalArgumentException("decision has no candidates");
+            throw new IllegalArgumentException("a setting is applied by translating again, not by resolve");
         };
-        root.add(new Decision(Reason.MISSING_MAPPING, "dialect:" + field, usage + " depends on Dialect." + field
-                + ", which the project leaves unset", where, in.programId(), Map.of("field", field), null, List.of(), null, none)
-                .withContext(context(ctx)));
+        List<Candidate> candidates = new ArrayList<>();
+        Map<String, Object> values = new LinkedHashMap<>();
+        Dialect.SETTINGS.getOrDefault(field, Map.of()).forEach((value, meaning) -> {
+            candidates.add(new Candidate("setting:" + value, "setting", meaning, null));
+            values.put("setting:" + value, value);
+        });
+        Decision d = new Decision(Reason.MISSING_MAPPING, "dialect:" + field, usage + " depends on Dialect." + field
+                + ", which the project leaves unset", where, in.programId(), Map.of("field", field, "usages", List.copyOf(usages)),
+                null, candidates, null, none).withContext(context(ctx));
+        if (!candidates.isEmpty()) {
+            d.withSetting(field, values);
+        }
+        dialectDecisions.put(field, d);
+        root.add(d);
     }
+
+    /** The uses of an unset setting kept as evidence on its decision. */
+    private static final int MAX_SETTING_USAGES = 20;
 
     @Override
     public Dialect dialect() {

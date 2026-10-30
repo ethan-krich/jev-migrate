@@ -4,7 +4,7 @@ A modular transpiler for researching hybrid deterministic + probabilistic code t
 **Phase 1** is a working, tested, *deterministic* COBOL-to-Java translator. Operations that cannot
 be translated reliably come back as structured **decisions**. **Phase 2** can route them to
 [Jev](docs/architecture.md#phase-2-jev), which only chooses among candidates the worker has already
-generated and validated, gated by each decision's importance. Phase 2 is opt-in: by default
+generated and validated, and reports how confident it is in each pick. Phase 2 is opt-in: by default
 nothing makes AI or network calls at runtime.
 
 ```
@@ -106,28 +106,40 @@ from transpiler import ContextBudget, Gate, JevProvider, transpile
 
 jev = JevProvider(
     model="jev-preview",
-    gate=Gate(floors={"low": 0.70, "normal": 0.85, "high": 0.95, "critical": None}, min_margin=0.15),
     context=ContextBudget(max_chars=4000, max_depth=2, max_expansions=2),
     api_key_env="TYPESAFE_API_KEY",
 )
 result = transpile("examples/cobol-to-java/input", output="generated", mappings=mappings, provider=jev)
-for r in result.resolutions.held:         # below its floor, abstained, or out of context expansions
-    print(r.decision_id, r.importance, r.gate, r.confidence)
+for r in sorted(result.resolutions.applied, key=lambda r: r.confidence):   # least confident first
+    print(r.decision_id, r.importance, r.confidence, r.candidate_id, r.rationale)
 print((result.output / "review.md").read_text())   # the review queue, also result.review_queue()
 ```
 
-A pick is applied only if its confidence reaches the floor of the decision's importance tier
-(`None`: never automatically) and beats the runner-up by `min_margin`. Anything else stays
+By default Jev always makes an attempt: every decision with candidates gets the candidate Jev
+ranks highest, and `confidence` is the probability Jev gives it. When Jev would rather have
+abstained (no candidate fits), the pick is still applied and its rationale says so; a low
+confidence is the signal to review it. To hold picks instead, pass a gate:
+`gate=Gate(floors={"low": 0.70, "normal": 0.85, "high": 0.95, "critical": None}, min_margin=0.15)`
+applies a pick only if Jev's confidence reaches the floor of the decision's importance tier
+(`None`: never automatically) and beats the runner-up by `min_margin`; anything else stays
 pending, so the run is `incomplete` and nothing is written. Tiers come from
 [`DEFAULT_IMPORTANCE`](docs/mapping-api.md#importance) (`transpile(importance=...)` overrides
-it). `./scripts/jev-smoke.sh` runs the bundled example against the live API
+it).
+
+Jev can also choose a setting the source does not state, such as the collating sequence a
+program was written for, by reading the code that depends on it; every program is then
+translated again with that value (see [setting decisions](docs/worker-protocol.md#setting-decisions)).
+`./scripts/jev-smoke.sh` runs the two projects in
+[`examples/cobol-to-java-jev`](examples/cobol-to-java-jev/projects.py) against the live API and
+says whether Jev's pick matches the setting each program was written for
 (`OPENROUTER_API_KEY=... ./scripts/jev-smoke.sh`, or `TYPESAFE_API_KEY=...`; it also reads them
 from a git-ignored `.env`, see `.env.example`). It is not part of any test suite.
 
 Settings the source does not determine (character set, out-of-range policy, file paths, …) go
 in a [`Dialect`](docs/mapping-api.md#dialect-project-settings):
 `transpile(..., dialect=Dialect(encoding="ascii", out_of_range="fail"))`. A program that needs
-an unset one gets a single `dialect:<field>` decision.
+an unset one gets a single `dialect:<field>` decision, which a provider can answer for the
+fields with a fixed set of values.
 
 From the shell: `./scripts/run.sh examples/cobol-to-java/input -o generated --base-package com.acme`
 (`--mappings file.py` loads a `configure(mappings)` hook).
@@ -160,7 +172,7 @@ equivalence fixtures.
 | ✅ | Group items as operands (MOVE, compare, DISPLAY, ACCEPT), `REDEFINES`, `SIGN LEADING / TRAILING [SEPARATE]`, `JUSTIFIED RIGHT`, `BLANK WHEN ZERO`, `SYNCHRONIZED` (no slack bytes) | byte images of signed zoned / COMP-5 items need `Dialect.encoding` = ascii |
 | ✅ | Numeric-edited and alphanumeric-edited pictures, de-editing | GnuCOBOL's editing, byte for byte |
 | ✅ | `OCCURS` (nested, `VALUE`, `DEPENDING ON`, `KEY`), subscripts (`n`, `item`, `index`, `± n`), `INDEXED BY`, `SET` index, reference modification | ranges that are not literals need `Dialect.out_of_range` |
-| ✅ | `INITIALIZE`, `STRING`, `UNSTRING`, `INSPECT`, serial `SEARCH` | `SEARCH ALL` is a decision with candidates |
+| ✅ | `INITIALIZE`, `STRING`, `UNSTRING`, `INSPECT`, `SEARCH`, `SEARCH ALL … WHEN key = value` | `SEARCH ALL` is GnuCOBOL's binary search, whatever order the keys are in |
 | ✅ | LINKAGE SECTION, `PROCEDURE DIVISION USING`, `CALL 'literal' USING BY REFERENCE / BY CONTENT`, `NUMBER-OF-CALL-PARAMETERS`, `LENGTH OF`, `WHEN-COMPILED` (`Dialect.when_compiled`), `IS INITIAL` | argument number and sizes are checked against the callee |
 | ✅ | Level 88 (values, `THRU`, `WHEN SET TO FALSE`) on elementary items and groups; `SET cond TO TRUE / FALSE` | a group's values are nonnumeric literals or figuratives |
 | ✅ | Level 66 `RENAMES [THRU]`, the `TALLY` register | RENAMES of a single COMP / COMP-3 item is a decision (GnuCOBOL 3.2 reads it as DISPLAY) |
@@ -175,7 +187,7 @@ equivalence fixtures.
 | ✅ | `DIVIDE … REMAINDER`, `MOVE / ADD / SUBTRACT CORRESPONDING` | |
 | ✅ | `DISPLAY UPON CONSOLE / SYSERR`, `EXHIBIT [NAMED]`, `ACCEPT` from stdin and `FROM DATE / DAY / DAY-OF-WEEK / TIME` | |
 | ✅ | Paragraphs, sections, fall-through, `PERFORM` proc / inline / `THRU`, `TIMES`, `UNTIL`, `VARYING … AFTER`, `WITH TEST AFTER` | |
-| ✅ | `GO TO`, `GO TO … DEPENDING ON` | procedure dispatcher with GnuCOBOL's PERFORM return points; overlapping / recursive ranges and GO TO out of a performed range are decisions; `ALTER` is a decision with a candidate |
+| ✅ | `GO TO`, `GO TO … DEPENDING ON` | procedure dispatcher with GnuCOBOL's PERFORM return points; overlapping / recursive ranges and GO TO out of a performed range are decisions; `ALTER` of a paragraph holding only a GO TO |
 | ✅ | `STOP RUN`, `GOBACK`, `EXIT`, `EXIT PROGRAM`, `CONTINUE`, `RETURN-CODE` → exit status | |
 | ✅ | `COPY` (copybook search path; decision lines map back to the original file), `CALL 'literal'` of a program in the project, `CALL identifier` (needs `Dialect.dynamic_calls`), `ON EXCEPTION` / `ON OVERFLOW`, `CANCEL`, `ENTRY "name" [USING]` (first statement of a paragraph, programs without sections) | persistent WORKING-STORAGE, RETURN-CODE propagation, PROGRAM-IDs matched case-sensitively as GnuCOBOL does |
 | ◐ | `REPLACE` statements | parsed by ProLeap; line numbers then fall back to the preprocessed source (warning `approximate_line_numbers`) |
@@ -187,7 +199,7 @@ equivalence fixtures.
 | ❌ | `**` with a non-integer or negative exponent | `unsupported_construct` |
 | ✅ | SEQUENTIAL and LINE SEQUENTIAL files: `OPEN`, `READ [INTO]`, `WRITE [FROM]`, `REWRITE`, `CLOSE`, `FILE STATUS` | paths from `Dialect.file_assignments`; GnuCOBOL status values; record areas start as zero bytes, as in GnuCOBOL |
 | ✅ | RELATIVE and INDEXED files: `ACCESS SEQUENTIAL / RANDOM / DYNAMIC`, `RELATIVE KEY`, `RECORD KEY`, `ALTERNATE RECORD KEY [WITH DUPLICATES]`, `READ [NEXT / PREVIOUS] [KEY IS]`, `START` (`= > >= < <= NOT < NOT >`, leading part of a key), `WRITE`, `REWRITE`, `DELETE`, `[NOT] INVALID KEY` | GnuCOBOL 3.2's statuses and file positioning, checked by dense random fixtures; RELATIVE files use GnuCOBOL's file format, INDEXED files the runtime's own (not Berkeley DB) |
-| ✅ | `SORT … WITH DUPLICATES IN ORDER`, `MERGE`, `RELEASE`, `RETURN`, `USING` / `GIVING` / INPUT and OUTPUT PROCEDURE | SORT without DUPLICATES IN ORDER is a decision with a stable-sort candidate |
+| ✅ | `SORT [WITH DUPLICATES IN ORDER]`, `MERGE`, `RELEASE`, `RETURN`, `USING` / `GIVING` / INPUT and OUTPUT PROCEDURE | stable, as GnuCOBOL 3.2: equal keys come out in release order with or without DUPLICATES IN ORDER |
 | ✅ | Exact intrinsic functions (see docs/mapping-api.md) | floating-point functions are decisions |
 | ✅ | `DECLARATIVES` with `USE AFTER ERROR / EXCEPTION PROCEDURE ON file / INPUT / OUTPUT / I-O / EXTEND` | run for file exceptions the statement's phrases do not handle, chosen by file, else by the mode of the file's last OPEN, as GnuCOBOL does |
 | ✅ | `WRITE … BEFORE / AFTER ADVANCING n LINES / PAGE / mnemonic`, `LINAGE` (`FOOTING`, `TOP`, `BOTTOM`), `LINAGE-COUNTER`, `[NOT] AT END-OF-PAGE` | GnuCOBOL's control bytes and paging, byte for byte |

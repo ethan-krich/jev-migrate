@@ -10,9 +10,20 @@ about the same state (the decision, its candidates and its context graph):
 - ``review_priority``: an advisory ``Score`` on the :data:`~transpiler.protocol.REVIEW_PRIORITY`
   scale. It never affects the gate and is not part of the fingerprint.
 
-The :class:`Gate` decides from the decision's deterministic importance tier whether the pick may
-be applied. A pick that fails it stays pending (``below_floor`` / ``abstained``): the run is
-incomplete and nothing is written. The C++ orchestrator re-validates every passed pick.
+The state tells Jev what the candidates are (tested handlers whose preview was generated for this
+statement) and asks it to check fit: whether a candidate's description covers the statement as
+written and its Java carries out every part of it. Abstaining is for a concrete misfit or a
+candidate that is correct only under a condition the program does not guarantee; a vague
+"preserves the semantics exactly" makes Jev abstain on candidates it cannot fault.
+
+By default Jev always makes an attempt: the candidate it ranks highest is applied even when it
+ranks ``__abstain__`` above every candidate, and the answer's ``confidence`` is the probability
+Jev gives that candidate (the full distribution, ``__abstain__`` included, stays in the report and
+a rationale says when Jev would have abstained). Only a ``__need_context__`` answer that can be
+served delays the pick. With a :class:`Gate`, the decision's deterministic importance tier
+instead decides whether the pick may be applied: a pick that fails it stays pending
+(``below_floor`` / ``abstained``), the run is incomplete and nothing is written. Either way the
+C++ orchestrator re-validates every passed pick.
 
 The network client (``typesafe_sdk``, the ``transpiler[jev]`` extra) is imported only when a
 real client is needed; tests use :class:`RecordedJevClient`. The API key is read from the
@@ -41,6 +52,39 @@ ABSTAIN = "__abstain__"
 NEED_CONTEXT = "__need_context__"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api"
 DEFAULT_FLOORS: Mapping[str, float | None] = {"low": 0.70, "normal": 0.85, "high": 0.95, "critical": 0.99}
+
+TASK = (
+    "You are choosing which builtin handler translates one COBOL statement to Java (GnuCOBOL 3.2 semantics). "
+    "Every candidate is a tested handler of the translator: for the statements its description covers, its Java "
+    "reproduces GnuCOBOL exactly, and the translator already generated and compiled the preview for this very "
+    "statement. Your job is to check fit: does the candidate's description cover this statement's form, operands "
+    "and clauses as written? Pick the candidate whose description fits. Abstain only for a concrete reason: the "
+    "description excludes something this statement has, the preview does something the statement does not ask "
+    "for, or the description says the candidate is correct only under a condition (\"correct only if\", "
+    "\"candidate only\", \"may\") that the program does not guarantee. Behaviour a description names, such as "
+    "truncation, padding, alignment, rounding, sign handling or GnuCOBOL's intermediate precision, is how COBOL "
+    "itself behaves and the handler reproduces it; it is not a loss of semantics. Use the data definitions in the "
+    "context (PICTURE, USAGE, VALUE) to check the operands' categories against what the description covers."
+)
+WHY_ASKED: Mapping[str, str] = {
+    "missing_mapping": "No mapping rule is configured for this statement's facts, so no handler was chosen automatically.",
+    "unsupported_construct": "The translator could not prove that the standard translation is exact here.",
+    "missing_target_api": "The statement depends on something outside the translation project.",
+    "callback_required": "The mapping rule asks for a person's decision.",
+}
+ABSTAIN_CRITERION = ("No candidate fits: each one either excludes something this statement has, or is correct only "
+                     "under a condition the program does not guarantee.")
+SETTING_TASK = (
+    "You are inferring a project setting that COBOL source does not state, so that the Java translation behaves "
+    "like the original programs did. The programs were written for, and ran with, one of the candidate values; "
+    "each candidate says what its value means. Decide from the evidence: decision.evidence lists every statement of "
+    "the program that depends on the setting, and the context shows the data they use. Look for logic that only "
+    "makes sense under one value, such as a range check, an ordering or a comparison whose outcome the program "
+    "relies on (for example `>= \"A\" AND <= \"9\"` covers letters and digits only in EBCDIC order, where digits "
+    "sort after letters). Comments and names may also say where the code came from. Abstain only if the evidence "
+    "does not favour any value."
+)
+SETTING_ABSTAIN_CRITERION = "The evidence does not favour any value: the statements behave the same under each."
 
 
 class ChoiceLike(Protocol):
@@ -168,11 +212,15 @@ class RecordedJevClient:
 
 
 class JevProvider(DecisionProvider):
-    """Asks Jev to choose among worker-validated candidates, gated by importance.
+    """Asks Jev to choose among worker-validated candidates.
+
+        JevProvider(model="jev-preview", context=ContextBudget(max_chars=4000, max_depth=2, max_expansions=2))
+
+    always applies Jev's best candidate and reports its probability as the confidence. A gate
+    holds picks below a floor per importance tier instead:
 
         JevProvider(model="jev-preview",
-                    gate=Gate({"low": 0.70, "normal": 0.85, "high": 0.95, "critical": 0.99}, min_margin=0.15),
-                    context=ContextBudget(max_chars=4000, max_depth=2, max_expansions=2))
+                    gate=Gate({"low": 0.70, "normal": 0.85, "high": 0.95, "critical": 0.99}, min_margin=0.15))
 
     Through OpenRouter: ``JevProvider("jev-latest", base_url=OPENROUTER_BASE_URL,
     api_key_env="OPENROUTER_API_KEY")``. ``timeout_seconds`` bounds each HTTP call to the API.
@@ -192,7 +240,7 @@ class JevProvider(DecisionProvider):
         timeout_seconds: float = 120.0,
     ):
         self.model = model
-        self.gate = gate or Gate()
+        self.gate = gate
         self.context = context or ContextBudget()
         self.api_key_env = api_key_env
         self.request_timeout_seconds = request_timeout_seconds
@@ -204,7 +252,8 @@ class JevProvider(DecisionProvider):
 
     def config(self) -> dict[str, Any]:
         """What :meth:`from_config` needs in the provider process (never the API key itself)."""
-        d: dict[str, Any] = {"model": self.model, "gate": self.gate.to_json(), "context": self.context.to_json(),
+        d: dict[str, Any] = {"model": self.model, "gate": self.gate.to_json() if self.gate else None,
+                             "context": self.context.to_json(),
                              "api_key_env": self.api_key_env, "timeout_seconds": self.timeout_seconds}
         if self.base_url:
             d["base_url"] = self.base_url
@@ -221,7 +270,7 @@ class JevProvider(DecisionProvider):
         recordings = config.get("recordings")
         return cls(
             model=config["model"],
-            gate=Gate(**config.get("gate", {})),
+            gate=Gate(**config["gate"]) if config.get("gate") is not None else None,
             context=ContextBudget(**config.get("context", {})),
             api_key_env=config.get("api_key_env", "TYPESAFE_API_KEY"),
             client=RecordedJevClient(recordings) if recordings else None,
@@ -279,49 +328,86 @@ class JevProvider(DecisionProvider):
         truncated = [r for r in refs if r.get("truncated")]
         can_expand = bool(truncated) and left > 0
         questions = self.questions(request, truncated if can_expand else [])
-        state = {
-            "task": "Choose how this COBOL operation is translated to Java. Pick a candidate only if its generated "
-                    "Java preserves the COBOL semantics exactly in this program; otherwise abstain.",
-            "decision": {"id": request.id, "fingerprint": request.fingerprint, "reason": str(request.reason),
-                         "operation": request.operation, "message": request.message,
-                         "source": {"file": request.source.file, "line": request.source.line, "text": request.source.text},
-                         "facts": request.context.get("facts", {}), "program_id": request.context.get("program_id")},
-            "candidates": [{"id": c.id, "description": c.description, "preview": c.preview} for c in request.candidates],
-            "context": refs,
-            "expansions": expansions,
-        }
+        state = self.state(request, refs, expansions)
         response = self.client.system_one(state, questions, model=self.model)
         pick = response.choices["pick"]
         review = self.review_priority(response.scores.get("review_priority"))
-        gate = self.gate.check(request.importance, pick)
         common = {"decision_id": request.id, "fingerprint": request.fingerprint, "confidence": pick.confidence,
                   "probabilities": dict(pick.probabilities), "review_priority": review}
-        if gate == "need_context":
+        if pick.choice == NEED_CONTEXT:
             wanted = response.choices.get("refs")
-            if not can_expand or wanted is None or wanted.choice not in {r["ref"] for r in truncated}:
+            if can_expand and wanted is not None and wanted.choice in {r["ref"] for r in truncated}:
+                return DecisionResponse(None, gate="need_context", need_context=(wanted.choice,), **common)
+            if self.gate is not None:
                 return DecisionResponse(None, gate="abstained", rationale="asked for context that cannot be opened",
                                         **common)
-            return DecisionResponse(None, gate="need_context", need_context=(wanted.choice,), **common)
+        if self.gate is None:
+            return self.attempt(request, pick, common)
+        gate = self.gate.check(request.importance, pick)
         candidate = None if gate == "abstained" else pick.choice
         return DecisionResponse(candidate, gate=gate, **common)
 
     @staticmethod
+    def attempt(request: DecisionRequest, pick: ChoiceLike, common: Mapping[str, Any]) -> DecisionResponse:
+        """The ungated answer: Jev's choice, or the candidate it ranks highest when it chose ``__abstain__``
+        or context that cannot be opened. ``confidence`` is the probability of the selected candidate."""
+        def p(c: str) -> float:
+            return pick.probabilities.get(c, pick.confidence if c == pick.choice else 0.0)
+        rationale = ""
+        selected = pick.choice
+        if selected in (ABSTAIN, NEED_CONTEXT):
+            selected = max((c.id for c in request.candidates), key=p)  # the first offered on a tie
+            rationale = f"jev ranked {pick.choice} first ({p(pick.choice):.2f}); applied its best candidate"
+        # A choice the worker did not offer is passed on for the orchestrator to reject.
+        return DecisionResponse(selected, gate="passed", rationale=rationale, **{**common, "confidence": p(selected)})
+
+    @staticmethod
+    def state(request: DecisionRequest, refs: Sequence[Mapping[str, Any]], expansions: int) -> dict[str, Any]:
+        """The ``system_one`` state: the task, the statement, its candidates and its context graph."""
+        if request.setting:
+            facts = request.context.get("facts", {})
+            values = request.setting.get("values", {})
+            return {
+                "task": SETTING_TASK,
+                "decision": {"id": request.id, "fingerprint": request.fingerprint, "setting": request.setting.get("field"),
+                             "evidence": facts.get("usages", [request.source.text]), "question": request.message,
+                             "program_id": request.context.get("program_id"), "file": request.source.file},
+                "candidates": [{"id": c.id, "value": values.get(c.id), "means": c.description} for c in request.candidates],
+                "context": list(refs),
+                "expansions": expansions,
+            }
+        reason = str(request.reason)
+        return {
+            "task": TASK,
+            "decision": {"id": request.id, "fingerprint": request.fingerprint, "cobol": request.source.text,
+                         "operation": request.operation, "facts": request.context.get("facts", {}),
+                         "why_asked": f"{WHY_ASKED.get(reason, reason)} {request.message}",
+                         "program_id": request.context.get("program_id"),
+                         "file": request.source.file, "line": request.source.line},
+            "candidates": [{"id": c.id, "description": c.description, "java": c.preview} for c in request.candidates],
+            "context": list(refs),
+            "expansions": expansions,
+        }
+
+    @staticmethod
     def questions(request: DecisionRequest, truncated: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         """The ``system_one`` questions (plain question dictionaries; no SDK import needed)."""
+        if request.setting:
+            return JevProvider._setting_questions(request, truncated)
         criteria: dict[str, Any] = {}
         for c in request.candidates:
-            option: dict[str, Any] = {"description": c.description}
+            option: dict[str, Any] = {"covers": c.description}
             if c.preview is not None:
                 option["java"] = c.preview
             if c.slots:
                 option["then_asks"] = [f"{s.name}: {s.description}" for s in c.slots]
             criteria[c.id] = option
-        criteria[ABSTAIN] = "None of the candidates preserves the COBOL semantics exactly."
+        criteria[ABSTAIN] = ABSTAIN_CRITERION
         if truncated:
-            criteria[NEED_CONTEXT] = "The context shown is not enough to decide; open one of the truncated nodes."
+            criteria[NEED_CONTEXT] = "Deciding needs a context node that is shown truncated."
         questions: dict[str, Any] = {"pick": {
             "type": "choice",
-            "instructions": f"{request.message} Which candidate translates `{request.source.text}` exactly?",
+            "instructions": f"Which handler's description covers `{request.source.text}` as written?",
             "criteria": criteria,
         }}
         if truncated:
@@ -333,6 +419,29 @@ class JevProvider(DecisionProvider):
         questions["review_priority"] = {
             "type": "score",
             "instructions": "If this translation were wrong, how much would it matter?",
+            "criteria": [f"{label}: {meaning}" for label, meaning in REVIEW_PRIORITY],
+        }
+        return questions
+
+    @staticmethod
+    def _setting_questions(request: DecisionRequest, truncated: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        values = request.setting.get("values", {}) if request.setting else {}
+        criteria: dict[str, Any] = {c.id: {"value": values.get(c.id), "means": c.description} for c in request.candidates}
+        criteria[ABSTAIN] = SETTING_ABSTAIN_CRITERION
+        if truncated:
+            criteria[NEED_CONTEXT] = "Deciding needs a context node that is shown truncated."
+        field = request.setting.get("field") if request.setting else request.operation
+        questions: dict[str, Any] = {"pick": {
+            "type": "choice",
+            "instructions": f"Which value of `{field}` were these programs written for and run with?",
+            "criteria": criteria,
+        }}
+        if truncated:
+            questions["refs"] = {"type": "choice", "instructions": "Which truncated context node would settle the choice?",
+                                 "criteria": {r["ref"]: r.get("summary") for r in truncated}}
+        questions["review_priority"] = {
+            "type": "score",
+            "instructions": "If this setting were wrong, how much would it matter?",
             "criteria": [f"{label}: {meaning}" for label, meaning in REVIEW_PRIORITY],
         }
         return questions

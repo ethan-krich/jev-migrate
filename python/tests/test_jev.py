@@ -89,12 +89,24 @@ def test_decide_skips_decisions_without_candidates_or_recordings():
     assert client.calls == []
 
 
-def test_below_floor_and_abstention_are_reported_not_applied():
+def test_with_a_gate_below_floor_and_abstention_are_reported_not_applied():
     p, _ = provider({"sha256:aa": {"pick": pick("builtin:display", 0.90)},
-                     "sha256:bb": {"pick": pick("__abstain__", 0.9)}})
+                     "sha256:bb": {"pick": pick("__abstain__", 0.9)}}, gate=Gate())
     low, abstain = p.decide([request(importance="critical"), request(fingerprint="sha256:bb", id_="decision-2")])
     assert low.gate == "below_floor" and low.candidate_id == "builtin:display" and not low.passed
     assert abstain.gate == "abstained" and abstain.candidate_id is None
+
+
+def test_without_a_gate_jev_always_attempts_and_reports_the_candidate_probability():
+    abstained = {"choice": "__abstain__", "confidence": 0.9,
+                 "probabilities": {"builtin:a": 0.04, "builtin:b": 0.06, "__abstain__": 0.9}}
+    p, _ = provider({"sha256:aa": {"pick": pick("builtin:display", 0.55)}, "sha256:bb": {"pick": abstained}})
+    low, best = p.decide([request(importance="critical"),
+                          request(fingerprint="sha256:bb", id_="decision-2", candidates=("builtin:a", "builtin:b"))])
+    assert (low.gate, low.candidate_id, low.confidence, low.rationale) == ("passed", "builtin:display", 0.55, "")
+    assert (best.gate, best.candidate_id, best.confidence) == ("passed", "builtin:b", 0.06)
+    assert best.rationale == "jev ranked __abstain__ first (0.90); applied its best candidate"
+    assert best.probabilities["__abstain__"] == 0.9, "the full distribution stays in the report"
 
 
 def test_fabricated_choice_is_passed_on_for_the_orchestrator_to_reject():
@@ -125,11 +137,13 @@ def test_need_context_round_trip():
     assert "refs" not in second["questions"]
 
 
-def test_need_context_without_a_valid_ref_is_an_abstention():
-    p, _ = provider({"sha256:aa": {"pick": pick("__need_context__", 0.6),
-                                   "refs": {"choice": "data:ELSEWHERE@1:1", "confidence": 0.9, "probabilities": {}}}})
-    [answer] = p.decide([request(refs=TRUNCATED)])
+def test_need_context_without_a_valid_ref_is_an_abstention_or_an_attempt():
+    recordings = {"sha256:aa": {"pick": pick("__need_context__", 0.6),
+                                "refs": {"choice": "data:ELSEWHERE@1:1", "confidence": 0.9, "probabilities": {}}}}
+    [answer] = provider(recordings, gate=Gate())[0].decide([request(refs=TRUNCATED)])
     assert answer.gate == "abstained"
+    [answer] = provider(recordings)[0].decide([request(refs=TRUNCATED)])
+    assert (answer.gate, answer.candidate_id, answer.confidence) == ("passed", "builtin:display", 0.0)
 
 
 def test_merge_refs_replaces_truncated_nodes_only():
@@ -153,6 +167,8 @@ def test_to_config_runs_this_interpreter_and_never_carries_the_key(tmp_path, mon
     again = JevProvider.from_config(json.loads(config["command"][4]))
     assert again.gate == p.gate and again.context == p.context and again.api_key_env == "MY_JEV_KEY"
     assert p.context_budget() == {"max_depth": 1, "max_chars": 1000}
+    ungated = JevProvider("jev-test", client=RecordedJevClient(path))
+    assert JevProvider.from_config(json.loads(ungated.to_config()["command"][4])).gate is None
     with pytest.raises(ValueError):
         JevProvider("m", client=RecordedJevClient({})).to_config()
 

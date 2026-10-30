@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Opt-in live run of examples/cobol-to-java with Jev as the decision provider. The DISPLAY rule
-# is removed (as in the README) so the example has decisions for Jev to answer. It calls the
-# API, so it is never part of test.sh or docker.sh test.
+# Opt-in live run of examples/cobol-to-java-jev with Jev as the decision provider: two projects
+# whose collating sequence the source does not state (the default rules translate everything
+# else). Jev infers the setting from the code; the run prints its pick and confidence, the
+# setting each program was written for, and the translated program's output. It calls the API,
+# so it is never part of test.sh or docker.sh test.
 #   OPENROUTER_API_KEY=... ./scripts/jev-smoke.sh     # through OpenRouter (model jev-latest)
 #   TYPESAFE_API_KEY=... ./scripts/jev-smoke.sh       # TypeSafe's own API (model jev-preview)
 # JEV_ENDPOINT=openrouter|typesafe chooses when both keys are set (default: openrouter if its key is
 # set). JEV_MODEL overrides the model, JEV_API_KEY_ENV the key variable, JEV_TIMEOUT_SECONDS
 # (default 120) the timeout of each API call. Any of these may also be set in $ROOT/.env (see
 # .env.example); variables already in the environment take precedence.
-# Exit status: 0 when the run finished (ok or incomplete), 1 when it failed.
+# Exit status: 0 when both runs finished (whatever Jev chose), 1 when one failed.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 # KEY=value lines of .env, read as data (never executed); quotes and a leading `export` are allowed.
@@ -34,37 +36,48 @@ esac
 [[ -n "${!key_env:-}" ]] || die "set OPENROUTER_API_KEY or TYPESAFE_API_KEY (this script calls the live API; $key_env is empty)"
 [[ -x "$TRANSPILER_CORE" ]] || "$ROOT/scripts/build.sh"
 
-info "examples/cobol-to-java with JevProvider via $endpoint (model $model, key from \$$key_env)"
+info "examples/cobol-to-java-jev with JevProvider via $endpoint (model $model, key from \$$key_env)"
 # --all-packages --extra jev installs the optional typesafe_sdk dependency from uv.lock.
 ROOT="$ROOT" JEV_API_KEY_ENV="$key_env" JEV_MODEL="$model" JEV_BASE_URL="$base_url" \
   uv run --project "$ROOT" --frozen --all-packages --extra jev python - <<'PY'
 import os
+import subprocess
 import sys
 from pathlib import Path
 
-from cobol_to_java import Layout, default_mappings
-from transpiler import ContextBudget, Gate, JevProvider, transpile
+from cobol_to_java import Dialect, Layout
+from transpiler import JevProvider, transpile
 
 root = Path(os.environ["ROOT"])
-example = root / "examples/cobol-to-java"
-sys.path.insert(0, str(example))
-from mappings import configure  # noqa: E402
+demo = root / "examples/cobol-to-java-jev"
+sys.path.insert(0, str(demo))
+from projects import PROJECTS  # noqa: E402
 
-mappings = configure(default_mappings())
-mappings.remove("DISPLAY")
-jev = JevProvider(os.environ["JEV_MODEL"], Gate(), ContextBudget(), api_key_env=os.environ["JEV_API_KEY_ENV"],
-                  base_url=os.environ["JEV_BASE_URL"] or None,
-                  timeout_seconds=float(os.environ.get("JEV_TIMEOUT_SECONDS", "120")))
-result = transpile(example / "input", output=root / "build/examples/cobol-to-java-jev",
-                   mappings=mappings, layout=Layout(base_package="com.example.legacy"),
-                   provider=jev)
-print(result.summary())
-r = result.resolutions
-print(f"\njev: {len(r.applied)} applied, {len(r.held)} held, {len(r.rejected)} rejected")
-for x in r:
-    rp = x.review_priority.label if x.review_priority else "-"
-    print(f"  {x.outcome:8} {x.decision_id} [{x.importance}] gate={x.gate} confidence={x.confidence} "
-          f"review={rp} -> {x.candidate_id}")
-print(f"\nreview queue: {result.output / 'review.md'}")
-sys.exit(1 if result.status == "failed" else 0)
+failed = False
+for name, project in PROJECTS.items():
+    jev = JevProvider(os.environ["JEV_MODEL"], api_key_env=os.environ["JEV_API_KEY_ENV"],
+                      base_url=os.environ["JEV_BASE_URL"] or None,
+                      timeout_seconds=float(os.environ.get("JEV_TIMEOUT_SECONDS", "120")))
+    out = root / "build/examples/cobol-to-java-jev" / name
+    result = transpile(demo / name, output=out, provider=jev, dialect=Dialect(**project["dialect"]),
+                       layout=Layout(base_package=f"com.example.{name}"))
+    print(f"\n== {name}: {project['about']}")
+    print(result.summary())
+    for s in result.settings:
+        p = s.resolution.confidence
+        want = project["written_for"].get(s.field)
+        verdict = "matches" if s.value == want else f"does NOT match (written for {want!r})"
+        print(f"jev chose {s.field} = {s.value!r} (confidence {p:.2f}); {verdict}")
+        probs = result.report["settings"][0]["resolution"].get("probabilities", {})
+        print("  probabilities:", {k: round(v, 2) for k, v in sorted(probs.items(), key=lambda kv: -kv[1])})
+    failed |= result.status == "failed"
+    if result.ok:
+        classes = out / "classes"
+        subprocess.run(["javac", "-encoding", "UTF-8", "-d", str(classes),
+                        *map(str, (out / "src/main/java").rglob("*.java"))], check=True)
+        run = subprocess.run(["java", "-cp", str(classes), project["main"]], capture_output=True, text=True)
+        print("output:", run.stdout.strip().replace("\n", " | "))
+        print("expected:", " | ".join(project["expected_output"]))
+    print(f"review queue: {out / 'review.md'}")
+sys.exit(1 if failed else 0)
 PY

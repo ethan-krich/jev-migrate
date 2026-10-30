@@ -6,10 +6,14 @@
 //   malformed   answers translate with a non-JSON line
 //   wrong_id    answers translate with a different correlation id
 //   slow        sleeps 3 s before answering translate
+//   setting     translate raises a setting decision (dialect:collating_sequence) until a session is
+//               initialized with settings.collating_sequence, then the normal decision; resolve
+//               rejects the setting decision
 // expand_context answers decision-1 with "text of <ref>" per ref (refs starting "unknown" are rejected).
 #include <chrono>
 #include <cstdio>
 #include <iostream>
+#include <map>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <thread>
@@ -37,6 +41,23 @@ json decision() {
           {"context", {{"source_operation", "DISPLAY"}, {"target_language", "java"}}},
           {"candidates", {{{"id", "builtin:display"}, {"description", "print"}}}}};
 }
+// One setting decision per program file: A.cbl keeps the ids the single-file tests expect.
+json setting_decision(const std::string& file = "A.cbl") {
+  bool first = file == "A.cbl";
+  return {{"id", first ? "decision-1" : "decision-" + file},
+          {"fingerprint", first ? "sha256:setting" : "sha256:setting-" + file},
+          {"reason", "missing_mapping"},
+          {"operation", "dialect:collating_sequence"},
+          {"message", "unset"},
+          {"state", "pending"},
+          {"importance", "normal"},
+          {"source", {{"file", file}, {"line", 5}, {"column", 12}, {"text", "A < 'B'"}}},
+          {"context", {{"source_operation", "dialect:collating_sequence"}, {"target_language", "java"}}},
+          {"candidates", {{{"id", "setting:ascii"}, {"description", "ASCII order"}},
+                          {{"id", "setting:ebcdic"}, {"description", "EBCDIC order"}}}},
+          {"setting", {{"field", "collating_sequence"},
+                       {"values", {{"setting:ascii", "ascii"}, {"setting:ebcdic", "ebcdic"}}}}}};
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -49,6 +70,7 @@ int main(int argc, char** argv) {
   send({{"protocol", mode == "bad_protocol" ? "other/9" : kProtocol}, {"type", "event"}, {"event", "ready"},
         {"data", {{"translator", "fake"}}}});
   bool resolved = false;
+  std::map<std::string, json> settings;  // per session
   std::string line;
   while (std::getline(std::cin, line)) {
     json req = json::parse(line, nullptr, false);
@@ -68,7 +90,9 @@ int main(int argc, char** argv) {
               {"error", {{"code", "invalid_mapping"}, {"message", "missing"}}}});
         continue;
       }
-      send(response(req, "ok", {{"session", req["session"]}, {"programs", json::array()}}));
+      settings[req.value("session", "")] = req["params"].value("settings", json::object());
+      json dialect = {{"collating_sequence", settings[req.value("session", "")].value("collating_sequence", json())}};
+      send(response(req, "ok", {{"session", req["session"]}, {"programs", json::array()}, {"dialect", dialect}}));
     } else if (method == "translate") {
       if (mode == "crash") return 3;
       if (mode == "malformed") {
@@ -78,9 +102,10 @@ int main(int argc, char** argv) {
       if (mode == "slow") std::this_thread::sleep_for(std::chrono::seconds(3));
       send({{"protocol", kProtocol}, {"type", "event"}, {"event", "progress"}, {"in_reply_to", req["id"]},
             {"data", {{"phase", "translate"}, {"index", 1}, {"total", 1}}}});
+      bool unset = mode == "setting" && !settings[req.value("session", "")].contains("collating_sequence");
       json r = response(req, "incomplete",
                         {{"files", {{{"file", req["params"]["files"][0]}, {"status", "incomplete"}}}},
-                         {"decisions", {decision()}}});
+                         {"decisions", {unset ? setting_decision(req["params"]["files"][0].get<std::string>()) : decision()}}});
       if (mode == "wrong_id") r["id"] = "someone-else";
       send(r);
     } else if (method == "resolve") {
@@ -113,8 +138,10 @@ int main(int argc, char** argv) {
     } else if (method == "finalize") {
       if (resolved)
         send(response(req, "ok", {{"files_written", {{{"path", "src/main/java/A.java"}}}}, {"pending", json::array()}}));
-      else
-        send(response(req, "incomplete", {{"files_written", json::array()}, {"pending", {decision()}}}));
+      else {
+        bool unset = mode == "setting" && !settings[req.value("session", "")].contains("collating_sequence");
+        send(response(req, "incomplete", {{"files_written", json::array()}, {"pending", {unset ? setting_decision() : decision()}}}));
+      }
     } else {
       send({{"protocol", kProtocol}, {"type", "response"}, {"id", req["id"]}, {"status", "error"},
             {"error", {{"code", "unknown_method"}, {"message", method}}}});

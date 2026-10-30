@@ -1,5 +1,5 @@
 {
-  "description": "SORT ... WITH DUPLICATES IN ORDER (USING / GIVING, INPUT / OUTPUT PROCEDURE, RELEASE [FROM], RETURN INTO), MERGE of files in key order",
+  "description": "SORT with and without WITH DUPLICATES IN ORDER (stable either way, as GnuCOBOL; USING / GIVING, INPUT / OUTPUT PROCEDURE, RELEASE [FROM], RETURN INTO), MERGE of files in key order",
   "expect": {"status": "ok"},
   "dialect": {"encoding": "ascii", "collating_sequence": "native",
               "file_assignments": {"people.txt": "people.txt", "sorted.txt": "sorted.txt", "odd.txt": "odd.txt", "even.txt": "even.txt"}},

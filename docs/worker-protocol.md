@@ -35,7 +35,7 @@ Error codes: `malformed_json` (response `id` is null), `invalid_request`,
 
 | Method | Params | Result |
 |---|---|---|
-| `initialize` | `source_root`, `output_root` (absolute), `target_language`, `files: [{path, role: program\|copybook}]`, `mappings`, `layout`, `options` (the dialect keys of [`Dialect`](mapping-api.md#dialect-project-settings), plus `source_encoding`: `ISO-8859-1`; any other key is `invalid_params`), `copybook_paths`, `importance` (the [importance table](#importance)), `context` (`{max_depth, max_chars}`, the [context](#decision-context) budget) | `programs: [{file, status, program_id, package, class, output_path, diagnostics}]`, `dialect` (the settings in effect). Parse failures are per-file diagnostics, not errors. |
+| `initialize` | `source_root`, `output_root` (absolute), `target_language`, `files: [{path, role: program\|copybook}]`, `mappings`, `layout`, `options` (the dialect keys of [`Dialect`](mapping-api.md#dialect-project-settings), plus `source_encoding`: `ISO-8859-1`; any other key is `invalid_params`), `settings` (values chosen for [setting decisions](#setting-decisions), written over `options`; only fields a setting decision offers), `copybook_paths`, `importance` (the [importance table](#importance)), `context` (`{max_depth, max_chars}`, the [context](#decision-context) budget) | `programs: [{file, status, program_id, package, class, output_path, diagnostics}]`, `dialect` (the settings in effect). Parse failures are per-file diagnostics, not errors. |
 | `translate` | `files` (relative paths; default all) | `files: [...]`, `decisions: [request…]`. Status `incomplete` if any file has pending decisions or failed. |
 | `resolve` | `resolutions: [{decision_id, fingerprint?, selection: {kind: "candidate", candidate_id}}]` | `applied`, `rejected: [{decision_id, code, message}]`, `new_decisions` (raised by a newly applied structural candidate), `pending` |
 | `expand_context` | `decision_id`, `refs: [ref]`, `max_chars?` | `decision_id`, `refs` (the nodes with their text, then their neighbours one level deeper as truncated nodes), `rejected: [{ref, code: unknown_ref, message}]`. An unknown `decision_id` is `invalid_params`. |
@@ -44,7 +44,7 @@ Error codes: `malformed_json` (response `id` is null), `invalid_request`,
 
 Resolution rejection codes: `unknown_decision`, `already_resolved`, `fingerprint_mismatch`,
 `unsupported_selection` (only `candidate` exists in v1), `no_candidates`, `unknown_candidate`,
-`duplicate_resolution`.
+`duplicate_resolution`, `setting` (a [setting decision](#setting-decisions) is never resolved).
 
 A session can't be used after `finalize` (`invalid_state`, `expand_context` included), and
 re-translating a file is `invalid_state`.
@@ -80,6 +80,20 @@ A candidate may declare `slots: [{name, description}]`. Applying it raises one f
 decision per slot (in `resolve.new_decisions`), each with its own validated candidates and the
 fact `slot`, so every question stays a flat choice. Nothing is generated until every slot is
 resolved.
+
+### Setting decisions
+
+A decision with `setting: {field, values: {candidate_id: value}}` asks for a project setting the
+source does not state (cobol-to-java: `dialect:encoding`, `dialect:collating_sequence`,
+`dialect:out_of_range`, `dialect:sync_alignment`). Each candidate is one value with what it means;
+`context.facts.usages` lists every statement of the program that depends on it, as evidence.
+The orchestrator asks the provider about setting decisions before any other decision of the
+pass. A passed, valid answer is not sent to `resolve`: the orchestrator starts a new session
+whose `initialize.settings` holds the value and translates every program again, so no other
+decision is asked under a setting that is about to change. Answers that disagree about one field
+(two programs suggesting different values) are all held as `conflicting_settings`. Chosen
+settings are reported as `settings: [{field, value, decision, resolution}]` in
+`transpile-report.json` and in a "Settings chosen" section of `review.md`.
 
 ## Provider protocol `transpiler-provider/1`
 

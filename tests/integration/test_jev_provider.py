@@ -21,10 +21,11 @@ def pick(choice: str, confidence: float) -> dict:
     return {"choice": choice, "confidence": confidence, "probabilities": {choice: confidence, "__abstain__": 1 - confidence}}
 
 
-def jev(tmp_path: Path, recordings: dict, context: ContextBudget | None = None, name: str = "rec.json") -> JevProvider:
+def jev(tmp_path: Path, recordings: dict, context: ContextBudget | None = None, name: str = "rec.json",
+        gate: Gate | None = Gate()) -> JevProvider:
     path = tmp_path / name
     path.write_text(json.dumps(recordings))
-    return JevProvider("jev-test", Gate(), context or ContextBudget(), client=RecordedJevClient(path))
+    return JevProvider("jev-test", gate, context or ContextBudget(), client=RecordedJevClient(path))
 
 
 def basics(tmp_path: Path, provider: JevProvider, out: str = "out"):
@@ -70,6 +71,24 @@ def test_answer_below_its_floor_holds_the_decision_and_writes_nothing(tmp_path, 
     assert result.review_queue()[0].decision.id == low.id
     review = (result.output / "review.md").read_text()
     assert f"| {low.id} | pending | low | 3 business | held | below_floor | 0.65 | builtin:display |" in review
+
+
+def test_without_a_gate_an_abstention_is_still_attempted_and_reported(tmp_path, built):
+    decisions = pending_display(tmp_path)
+    recordings = {d.fingerprint: {"pick": pick("builtin:display", 0.97)} for d in decisions}
+    doubted = decisions[2]
+    recordings[doubted.fingerprint] = {"pick": {"choice": "__abstain__", "confidence": 0.7,
+                                                "probabilities": {"builtin:display": 0.2, "__abstain__": 0.8}},
+                                       "review_priority": REVIEW}
+    result = basics(tmp_path, jev(tmp_path, recordings, gate=None))
+    assert result.status == "ok", result.summary()
+    attempt = result.resolutions.for_decision(doubted.id)
+    assert (attempt.gate, attempt.candidate_id, round(attempt.confidence, 6)) == ("passed", "builtin:display", 0.2)
+    assert attempt.rationale.startswith("jev ranked __abstain__ first (0.80)")
+    main = next(p for p in result.programs if p.class_name).package + ".Basics"
+    assert run_java(result.output, main) == golden(BASICS)
+    assert f"| {doubted.id} | resolved | low | 3 business | applied | passed | 0.20 | builtin:display |" in (
+        result.output / "review.md").read_text()
 
 
 def test_fabricated_candidate_is_rejected_before_resolve(tmp_path, built):
@@ -125,3 +144,33 @@ def test_external_call_slots_are_separate_jev_decisions(tmp_path, built):
     assert [r.candidate_id for r in done.resolutions.applied] == ["builtin:call_external", "target:not_found"]
     java = (done.output / "src/main/java/generated/Caller.java").read_text()
     assert 'ProgramSupport.callNamed(this, "EXTPROG", name -> null, false);' in java
+
+
+EBCDIC = next(c for c in cases() if c.name == "ebcdic_collating")
+
+
+def ebcdic_unset(tmp_path: Path, provider: JevProvider, out: str):
+    """ebcdic_collating with its collating sequence left for the provider to choose."""
+    from cobol_to_java import Dialect
+    dialect = {k: v for k, v in EBCDIC.spec["dialect"].items() if k != "collating_sequence"}
+    return transpile(EBCDIC.src, output=tmp_path / out, mappings=default_mappings(), provider=provider,
+                     dialect=Dialect(**dialect), layout=Layout(**EBCDIC.spec["layout"]))
+
+
+def test_a_chosen_setting_translates_the_program_again_with_it(tmp_path, built):
+    probe = ebcdic_unset(tmp_path, jev(tmp_path, {}, name="none.json", gate=None), "probe")
+    [setting] = probe.pending_decisions
+    assert setting.operation == "dialect:collating_sequence" and setting.setting["field"] == "collating_sequence"
+    assert [c.id for c in setting.candidates] == ["setting:native", "setting:ascii", "setting:ebcdic"]
+    recordings = {setting.fingerprint: {"pick": {"choice": "setting:ebcdic", "confidence": 0.9,
+                                                 "probabilities": {"setting:ebcdic": 0.92, "setting:native": 0.04,
+                                                                   "setting:ascii": 0.02, "__abstain__": 0.02}}}}
+    result = ebcdic_unset(tmp_path, jev(tmp_path, recordings, gate=None), "out")
+    assert result.status == "ok", result.summary()
+    [chosen] = result.settings
+    assert (chosen.field, chosen.value, chosen.confidence) == ("collating_sequence", "ebcdic", 0.92)
+    assert result.report["dialect"]["collating_sequence"] == "ebcdic"
+    assert run_java(result.output, EBCDIC.equivalence["main_class"], case=EBCDIC) == golden(EBCDIC)
+    review = (result.output / "review.md").read_text()
+    assert "## Settings chosen" in review and "| collating_sequence | ebcdic | 0.92 |" in review
+    assert "setting collating_sequence = 'ebcdic'" in result.summary()

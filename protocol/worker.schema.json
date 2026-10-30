@@ -42,6 +42,7 @@
         "mappings": {"$ref": "mapping.schema.json"},
         "layout": {"type": "object", "description": "Translator-specific folder convention"},
         "options": {"type": "object", "description": "Translator-specific options"},
+        "settings": {"type": "object", "description": "Values chosen for setting decisions, written over `options` by the worker"},
         "copybook_paths": {"type": "array", "items": {"type": "string"}},
         "importance": {
           "type": "array",

@@ -78,6 +78,23 @@ std::string review_table(const json& report) {
                      str(report, "status"), rows.size(), pending, str(resolutions, "provider"),
                      resolutions.value("applied", json::array()).size(), resolutions.value("held", json::array()).size(),
                      resolutions.value("rejected", json::array()).size());
+  const json& settings = report.value("settings", json::array());
+  if (!settings.empty()) {
+    out += "## Settings chosen\n\nThe programs were translated again with these settings.\n\n";
+    out += "| Setting | Value | Confidence | Asked at | Rationale |\n|---|---|---|---|---|\n";
+    for (const auto& st : settings) {
+      const json& o = st.value("resolution", json::object());
+      const json& value = st.value("value", json{});
+      const json& src = st.value("decision", json::object()).value("source", json::object());
+      std::string confidence = o.contains("confidence") && o["confidence"].is_number()
+                                   ? std::format("{:.2f}", o["confidence"].get<double>())
+                                   : "";
+      out += std::format("| {} | {} | {} | {} | {} |\n", cell(str(st, "field")),
+                         cell(value.is_string() ? value.get<std::string>() : value.dump()), cell(confidence),
+                         cell(std::format("{}:{}", str(src, "file"), src.value("line", 0))), cell(str(o, "rationale")));
+    }
+    out += "\n";
+  }
   if (rows.empty()) return out + "No decisions.\n";
   out += "| Decision | State | Importance | Review priority | Outcome | Gate | Confidence | Selection | Source | Operation | "
          "Reason | Flags |\n";

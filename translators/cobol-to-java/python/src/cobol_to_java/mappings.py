@@ -51,25 +51,20 @@ BUILTIN_HANDLERS = MappingProxyType({
     "delete_file": "DELETE",
     "start_file": "START",
     "sort": "SORT",
-    "sort_stable": "SORT",
     "merge": "MERGE",
     "release": "RELEASE",
     "return_record": "RETURN",
     "alter": "ALTER",
-    "alter_goto": "ALTER",
     "unstring": "UNSTRING",
     "inspect": "INSPECT",
     "set_index": "SET",
     "search": "SEARCH",
     "search_all": "SEARCH",
-    "search_all_binary": "SEARCH",
-    "search_all_linear": "SEARCH",
 })
 
 # Handlers that no default rule selects: the worker offers them as candidates on a decision
-# (they are correct only under conditions it cannot prove, e.g. SEARCH ALL key order).
-CANDIDATE_HANDLERS = frozenset({"search_all_binary", "search_all_linear", "alter_goto", "sort_stable",
-                                "compute", "call_external"})
+# (compute when a rule is missing, call_external for a CALL outside the project).
+CANDIDATE_HANDLERS = frozenset({"compute", "call_external"})
 
 # Facts the worker computes per operation instance; usable as `when` condition keys.
 FACTS = MappingProxyType({
@@ -207,14 +202,14 @@ DEFAULT_RULES: tuple[tuple[str, str, str, dict, str], ...] = (
     ("cobol.rewrite", "REWRITE", "rewrite_file", {}, "REWRITE"),
     ("cobol.delete", "DELETE", "delete_file", {}, "DELETE of a RELATIVE / INDEXED record"),
     ("cobol.start", "START", "start_file", {}, "START of a RELATIVE / INDEXED file"),
-    ("cobol.sort", "SORT", "sort", {}, "SORT (a decision without WITH DUPLICATES IN ORDER; sort_stable candidate)"),
+    ("cobol.sort", "SORT", "sort", {}, "SORT as a stable sort (GnuCOBOL's tie order)"),
     ("cobol.merge", "MERGE", "merge", {}, "MERGE of files in key order"),
     ("cobol.release", "RELEASE", "release", {}, "RELEASE to a sort file"),
     ("cobol.return", "RETURN", "return_record", {}, "RETURN from a sort file"),
     ("cobol.go_to", "GO_TO", "go_to", {}, "GO TO / GO TO DEPENDING ON (procedure dispatcher)"),
-    ("cobol.alter", "ALTER", "alter", {}, "ALTER (a decision; the alter_goto candidate needs review)"),
+    ("cobol.alter", "ALTER", "alter", {}, "ALTER as an assignment of the GO TO target"),
     ("cobol.set.index", "SET", "set_index", {"form": ("to", "up_by", "down_by")}, "SET index TO / UP BY / DOWN BY"),
     ("cobol.search", "SEARCH", "search", {"all": False}, "serial SEARCH"),
     ("cobol.search_all", "SEARCH", "search_all", {"all": True},
-     "SEARCH ALL (a decision unless key order is proven; binary and serial candidates)"),
+     "SEARCH ALL as GnuCOBOL's binary search"),
 )

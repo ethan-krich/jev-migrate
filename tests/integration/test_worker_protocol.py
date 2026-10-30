@@ -161,14 +161,32 @@ def test_session_lifecycle_with_synthetic_resolution(worker, tmp_path):
 
 
 def test_decisions_without_candidates_cannot_be_selected(worker, tmp_path):
-    src = FIXTURES / "dialect_unset/src"
-    worker.call("initialize", init_params(tmp_path, [src / "NEEDS.cbl"], src))
-    decision = worker.call("translate")["result"]["decisions"][0]
-    assert decision["operation"] == "dialect:encoding" and decision["candidates"] == []
+    src = FIXTURES / "unsupported/src"
+    worker.call("initialize", init_params(tmp_path, [src / "UNSUP.cbl"], src))
+    decision = next(d for d in worker.call("translate")["result"]["decisions"] if d["operation"] == "DATA")
+    assert decision["candidates"] == []
     resp = worker.call("resolve", {"resolutions": [
         {"decision_id": decision["id"], "selection": {"kind": "candidate", "candidate_id": "builtin:display"}}]})
     assert resp["result"]["rejected"][0]["code"] == "no_candidates"
     assert resp["status"] == "incomplete"
+
+
+def test_setting_decisions_offer_values_and_are_applied_by_initialize_settings(worker, tmp_path):
+    src = FIXTURES / "dialect_unset/src"
+    worker.call("initialize", init_params(tmp_path, [src / "NEEDS.cbl"], src))
+    decision = worker.call("translate")["result"]["decisions"][0]
+    assert decision["operation"] == "dialect:encoding"
+    assert decision["setting"] == {"field": "encoding", "values": {"setting:ascii": "ascii", "setting:ebcdic": "ebcdic"}}
+    assert decision["context"]["facts"]["usages"][0].startswith("line 6: ")
+    resp = worker.call("resolve", {"resolutions": [
+        {"decision_id": decision["id"], "selection": {"kind": "candidate", "candidate_id": "setting:ascii"}}]})
+    assert resp["result"]["rejected"][0]["code"] == "setting"
+    params = init_params(tmp_path, [src / "NEEDS.cbl"], src)
+    params["settings"] = {"encoding": "ascii"}
+    init = worker.call("initialize", params, session="session-2")
+    assert init["result"]["dialect"]["encoding"] == "ascii"
+    again = worker.call("translate", session="session-2")["result"]["decisions"]
+    assert [d["operation"] for d in again] == ["dialect:collating_sequence"]
 
 
 def test_external_call_is_bound_through_slot_decisions(worker, tmp_path):

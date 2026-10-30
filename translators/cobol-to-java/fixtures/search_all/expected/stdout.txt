@@ -1,0 +1,16 @@
+sorted 00 not found, index 1
+sorted 01 at 1
+sorted 02 at 2
+sorted 03 at 3
+sorted 04 at 4
+sorted 05 at 5
+sorted 06 at 6
+sorted 07 not found, index 6
+dup 2 tag D
+mixed 01 at 3
+mixed 03 not found
+mixed 05 not found
+mixed 07 at 4
+mixed 09 not found
+down B at 2
+after down Z

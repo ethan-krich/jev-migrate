@@ -97,24 +97,36 @@ transpiler-core                     provider process                       Jev
   │ decide {decisions}  ───────────────▶ JevProvider.decide: per decision ──▶ system_one(pick, refs?, review_priority)
   │ ◀─────────────── {answers: gate, confidence, review_priority, selection | need_context}
   │ need_context? expand_context ──▶ worker; decide {decisions, extra_context} again (≤ max_expansions)
-  │ gate passed and validate() ok? ──▶ worker resolve (re-validates, applies)
-  │ otherwise: held (below_floor / abstained / context cap) or rejected; never cached
+  │ passed and validate() ok? ──▶ worker resolve (re-validates, applies)
+  │ otherwise: held (with a Gate: below_floor / abstained; context cap) or rejected; never cached
   ▼ transpile-report.json + review.md
 ```
 
 1. The worker raises decisions as in Phase 1. Each has a deterministic `importance` tier and a
-   budgeted `context` graph (see below).
+   budgeted `context` graph (see below). Setting decisions (a project setting the source does
+   not state, with its values as candidates and every dependent statement as evidence) are
+   asked first; a chosen value is not resolved but starts a new pass that translates every
+   program again with it ([setting decisions](worker-protocol.md#setting-decisions)).
 2. C++ starts the job's `kind: "python"` provider command (`JevProvider.to_config()`: this
    interpreter running `transpiler.providers.serve`) and talks `transpiler-provider/1` with it
    through the same `WorkerClient` as the worker: startup and request timeouts, crashes,
    malformed output and id mismatches fail the run with `stage: provider` and the stderr tail.
 3. `JevProvider` makes one `system_one` call per decision with candidates (decisions without
-   candidates are never sent). It asks `pick`, a `Choice` among the candidate ids plus
-   `__abstain__` ("none preserves the semantics exactly") and, when the context is truncated
-   and expansions remain, `__need_context__`. It asks `refs`, a `Choice` of which truncated
-   node to open, only with `__need_context__`. It asks `review_priority`, a `Score` (see below).
-4. `Gate.check(importance, pick)` turns the answer into `passed`, `below_floor`, `abstained`
-   or `need_context`.
+   candidates are never sent; [which decisions have candidates](mapping-api.md#jev-decisions)). The state says what a candidate is (a tested handler whose
+   preview was generated for this statement) and asks Jev to check fit: the description covers
+   the statement as written and the Java carries it out. It asks `pick`, a `Choice` among the
+   candidate ids plus `__abstain__` (no candidate fits, or one is correct only under a
+   condition the program does not guarantee) and, when the context is truncated and
+   expansions remain, `__need_context__`. It asks `refs`, a `Choice` of which truncated node
+   to open, only with `__need_context__`. It asks `review_priority`, a `Score` (see below).
+   Handler descriptions are what Jev judges fit by, so they name the receivers and forms a
+   handler covers; they must not claim clauses the preview is meant to prove (a description
+   that lists `UPON SYSERR` makes Jev accept a preview that writes to stdout).
+4. Without a gate (the default) Jev always makes an attempt: its choice, or the candidate it
+   ranks highest when it chose `__abstain__` or context that cannot be opened, is `passed`
+   with `confidence` set to that candidate's probability and, when Jev would have abstained,
+   a rationale saying so. With a `Gate`, `Gate.check(importance, pick)` turns the answer into
+   `passed`, `below_floor`, `abstained` or `need_context`.
 5. C++ applies only `passed` answers that `validate()` accepts (candidate offered, fingerprint
    matches); the worker's `resolve` checks again. A candidate the worker did not offer is
    rejected before `resolve`. Gated-out answers are reported as `held`. Only applied answers
@@ -125,6 +137,11 @@ transpiler-core                     provider process                       Jev
 Jev never writes code. It only chooses among candidates the worker generated and validated.
 
 ### Importance and the gate
+
+The gate is optional: `JevProvider(gate=None)`, the default, applies every pick and only
+reports its confidence (an abstention is then a low-confidence pick, not a hold); only a
+decision without candidates or a rejected answer still leaves the run `incomplete`. Pass a
+`Gate` to keep picks below a floor pending.
 
 Importance is decided before any model is asked. The worker looks the tier up from the
 `(reason, operation)` table passed in `initialize` (`cobol_to_java.DEFAULT_IMPORTANCE`,
@@ -138,7 +155,9 @@ Gate(floors={"low": 0.70, "normal": 0.85, "high": 0.95, "critical": 0.99}, min_m
 An answer passes only if its confidence reaches the tier's floor **and** the top probability
 beats the runner-up (including `__abstain__` / `__need_context__`) by at least `min_margin`. A
 floor of `None`, or a tier left out, means the tier is never applied automatically.
-Confidence is never multiplied by importance: the tier only selects the floor.
+Confidence is never multiplied by importance: the tier only selects the floor. Jev's
+`confidence` is its own certainty, lower than the top probability (a 0.85 pick can have a
+confidence near 0.6), so the floors are stricter than the probabilities they look like.
 
 ### Review priority
 

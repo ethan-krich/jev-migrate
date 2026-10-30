@@ -45,6 +45,9 @@ public final class Decision {
     /** The group of a slot decision (raised by a candidate with slots), with the slot it fills. */
     private SlotGroup slotGroup;
     private String slotName;
+    /** For a setting decision: the Dialect field and the value of each candidate. */
+    private String settingField;
+    private Map<String, Object> settingValues;
     private State state = State.PENDING;
     private String selectedCandidate;
 
@@ -74,6 +77,29 @@ public final class Decision {
         d.slotGroup = group;
         d.slotName = name;
         return d;
+    }
+
+    /**
+     * Makes this a setting decision: selecting candidate {@code id} means translating again with
+     * {@code field} set to {@code values.get(id)} (the orchestrator does that; resolve refuses it).
+     */
+    public Decision withSetting(String field, Map<String, Object> values) {
+        this.settingField = field;
+        this.settingValues = new java.util.LinkedHashMap<>(values);
+        return this;
+    }
+
+    /** The setting field of a setting decision, or null. */
+    public String setting() {
+        return settingField;
+    }
+
+    /** Adds or replaces a fact; only before {@link #register}, which fingerprints the facts. */
+    public void putFact(String key, Object value) {
+        if (fingerprint != null) {
+            throw new IllegalStateException("facts of " + id + " are fingerprinted already");
+        }
+        facts.put(key, value);
     }
 
     /** Attaches the source graph that {@code context.refs} is rendered from. */
@@ -209,6 +235,11 @@ public final class Decision {
                     slots.addObject().put("name", s.name()).put("description", s.description());
                 }
             }
+        }
+        if (settingField != null) {
+            ObjectNode st = n.putObject("setting");
+            st.put("field", settingField);
+            st.set("values", Json.MAPPER.valueToTree(settingValues));
         }
         if (callback != null) {
             ObjectNode cb = n.putObject("callback");

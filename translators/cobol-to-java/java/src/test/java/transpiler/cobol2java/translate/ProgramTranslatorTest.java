@@ -158,6 +158,15 @@ class ProgramTranslatorTest {
     }
 
     @Test
+    void acceptFromEnvironmentIsNotOfferedAsStandardInput() throws Exception {
+        var rules = defaultRules();
+        rules.removeIf(n -> n.get("source").asText().equals("ACCEPT"));
+        var r = translate(dir, program("01 V PIC X(10).", "ACCEPT V FROM ENVIRONMENT 'MYVAR'."), rules);
+        Decision d = r.decisions().getFirst();
+        assertEquals(List.of("builtin:accept_environment"), d.candidates().stream().map(Candidate::id).toList());
+    }
+
+    @Test
     void removedMappingOffersValidatedCandidatesAndApplies() throws Exception {
         var rules = defaultRules();
         rules.removeIf(n -> n.get("source").asText().equals("DISPLAY"));
@@ -211,7 +220,7 @@ class ProgramTranslatorTest {
         assertEquals(List.of("dialect:encoding"), operations(unset));
         Decision d = unset.decisions().getFirst();
         assertEquals(Reason.MISSING_MAPPING, d.reason());
-        assertTrue(d.candidates().isEmpty());
+        assertEquals(List.of("setting:ascii", "setting:ebcdic"), d.candidates().stream().map(Candidate::id).toList());
         var set = translate(dir, src, defaultRules(), Map.of(), TestSupport.dialect("{\"encoding\": \"ascii\"}"));
         assertTrue(set.decisions().isEmpty(), () -> set.decisions().toString());
         assertEquals("", compile("test.gen.T", java(set)));
@@ -224,6 +233,23 @@ class ProgramTranslatorTest {
         var ebcdic = translate(dir, src, defaultRules(), Map.of(), TestSupport.dialect("{\"collating_sequence\": \"ebcdic\"}"));
         assertTrue(ebcdic.decisions().isEmpty(), () -> ebcdic.decisions().toString());
         assertTrue(java(ebcdic).contains("Compare.ebcdic(") || java(ebcdic).contains("Compare.figurativeEbcdic("));
+    }
+
+    @Test
+    void aSettingDecisionOffersTheValuesWithEveryUseAsEvidence() throws Exception {
+        String src = program("01 C PIC X.", "IF C >= 'A' AND C <= '9' DISPLAY 'code' END-IF.",
+                "IF C < 'a' DISPLAY 'x' END-IF.");
+        Decision d = translate(dir, src, defaultRules()).decisions().getFirst();
+        d.register("decision-1", "java", "sha256:0", Importance.empty(), ContextGraph.Budget.DEFAULT);
+        var json = d.toJson("java");
+        assertEquals("collating_sequence", json.at("/setting/field").asText());
+        assertEquals("ebcdic", json.at("/setting/values/setting:ebcdic").asText());
+        assertEquals(List.of("setting:native", "setting:ascii", "setting:ebcdic"), d.candidates().stream().map(Candidate::id).toList());
+        assertTrue(d.candidates().get(2).description().contains("lower-case letters < upper-case letters < digits"));
+        var usages = json.at("/context/facts/usages");
+        assertEquals(2, usages.size(), usages::toString);
+        assertTrue(usages.get(0).asText().matches("line \\d+: IF C >= 'A' AND C <= '9' DISPLAY 'code' END-IF"), usages::toString);
+        assertTrue(usages.get(1).asText().endsWith("IF C < 'a' DISPLAY 'x' END-IF"), usages::toString);
     }
 
     @Test

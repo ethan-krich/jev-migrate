@@ -1,5 +1,6 @@
 #include "transpiler/orchestrator.hpp"
 
+#include <algorithm>
 #include <format>
 #include <fstream>
 #include <map>
@@ -67,6 +68,7 @@ class Run {
                  {"applied", json::array()},
                  {"rejected", json::array()},
                  {"held", json::array()}}},
+               {"settings", json::array()},
                {"files_written", json::array()},
                {"errors", json::array()}};
   }
@@ -133,9 +135,6 @@ class Run {
         log(LogLevel::info, "{} {}/{}: {}", e.data.value("phase", ""), e.data.value("index", 0), e.data.value("total", 0),
             e.data.value("file", ""));
     };
-    const std::string session = "session-1";
-    report_["session"] = session;
-
     json params = job_.translator_params;
     params["source_root"] = d.source_root.string();
     params["output_root"] = job_.output.string();
@@ -146,20 +145,49 @@ class Run {
       params["files"].push_back(
           {{"path", f.path.string()}, {"role", f.role == DiscoveredFile::Role::program ? "program" : "copybook"}});
 
-    auto init = worker.call("initialize", session, params, job_.request_timeout, on_event);
-    if (auto s = check(init, "initialize")) return *s;
-    // The project settings the worker translated under (opaque here; reported for reproducibility).
-    if (init->result.contains("dialect")) report_["dialect"] = init->result["dialect"];
+    // A pass translates every program under the settings chosen so far. Setting decisions are
+    // asked first; a chosen setting starts a new pass (a fresh session), so no statement decision
+    // is asked under a setting that is about to change.
+    json settings = json::object();
+    std::string session;
+    for (int pass = 1;; ++pass) {
+      session = std::format("session-{}", pass);
+      report_["session"] = session;
+      programs_.clear();
+      order_.clear();
+      decisions_.clear();
+      resolved_.clear();
+      if (!settings.empty()) params["settings"] = settings;
 
-    // One request per program keeps the interface ready for scheduling translation in parallel.
-    for (const auto& f : d.files) {
-      if (f.role != DiscoveredFile::Role::program) continue;
-      auto r = worker.call("translate", session, {{"files", {f.relative}}}, job_.request_timeout, on_event);
-      if (auto s = check(r, "translate")) return *s;
-      for (const auto& p : r->result.value("files", json::array())) programs_[p.value("file", "")] = p;
-      for (const auto& raw : r->result.value("decisions", json::array())) {
-        if (auto s = add_decision(raw)) return *s;
+      auto init = worker.call("initialize", session, params, job_.request_timeout, on_event);
+      if (auto s = check(init, "initialize")) return *s;
+      // The project settings the worker translated under (opaque here; reported for reproducibility).
+      if (init->result.contains("dialect")) report_["dialect"] = init->result["dialect"];
+
+      // One request per program keeps the interface ready for scheduling translation in parallel.
+      for (const auto& f : d.files) {
+        if (f.role != DiscoveredFile::Role::program) continue;
+        auto r = worker.call("translate", session, {{"files", {f.relative}}}, job_.request_timeout, on_event);
+        if (auto s = check(r, "translate")) return *s;
+        for (const auto& p : r->result.value("files", json::array())) programs_[p.value("file", "")] = p;
+        for (const auto& raw : r->result.value("decisions", json::array())) {
+          if (auto s = add_decision(raw)) return *s;
+        }
       }
+
+      json chosen = json::object();
+      size_t held_before = report_["resolutions"]["held"].size();
+      if (auto s = choose_settings(worker, session, chosen)) return *s;
+      if (chosen.empty()) break;
+      if (pass >= kMaxSettingPasses) {
+        log(LogLevel::warn, "stopped choosing settings after {} passes", pass);
+        break;
+      }
+      // Answers held in a pass that is translated again are asked again in the next one.
+      auto& held = report_["resolutions"]["held"];
+      held.erase(held.begin() + static_cast<std::ptrdiff_t>(held_before), held.end());
+      for (auto& [field, value] : chosen.items()) settings[field] = value;
+      log(LogLevel::info, "translating again with setting(s) {}", chosen.dump());
     }
 
     if (auto s = resolve_rounds(worker, session)) return *s;
@@ -186,8 +214,85 @@ class Run {
     return std::nullopt;
   }
 
+  static bool is_setting(const DecisionRequest& d) { return d.raw.contains("setting"); }
+
+  // Asks the provider about this pass's setting decisions. A passed, valid answer adds
+  // `field: value` to `chosen` and is reported under `settings`; it is never sent to resolve.
+  // A setting is project-wide: answers that disagree about one field (programs whose code
+  // suggests different values) are all held as conflicting_settings.
+  std::optional<RunResult::Status> choose_settings(WorkerClient& worker, const std::string& session, json& chosen) {
+    std::vector<DecisionRequest> batch;
+    std::vector<DecisionResponse> answers;
+    for (const auto& id : order_) {
+      const auto& d = decisions_.at(id);
+      if (!is_setting(d)) continue;
+      if (auto cached = cache_.lookup(d))
+        answers.push_back(*cached);
+      else
+        batch.push_back(d);
+    }
+    if (batch.empty() && answers.empty()) return std::nullopt;
+    if (!batch.empty()) {
+      log(LogLevel::info, "asking provider '{}' about {} setting(s)", provider_.name(), batch.size());
+      for (auto& a : provider_.decide(batch)) answers.push_back(std::move(a));
+      if (auto f = provider_.failure()) return fail_provider(*f);
+    }
+    struct Pick {
+      DecisionResponse answer;
+      const DecisionRequest* decision;
+      json value;
+    };
+    std::map<std::string, std::vector<Pick>> picks;  // by field
+    for (auto& a : answers) {
+      auto it = decisions_.find(a.decision_id);
+      if (it == decisions_.end() || !is_setting(it->second)) {
+        reject(a, "", "unknown setting decision");
+        continue;
+      }
+      const DecisionRequest& d = it->second;
+      std::string held_reason;
+      if (a.gate == kGateNeedContext) {
+        if (auto s = expand(worker, session, d, a, held_reason)) return s;
+      }
+      if (!a.candidate_id.empty()) {
+        if (auto ok = validate(d, a); !ok) {
+          reject(a, d.importance, ok.error());
+          continue;
+        }
+      }
+      if (!a.passed()) {
+        hold(a, d.importance, held_reason);
+        continue;
+      }
+      const json& setting = d.raw["setting"];
+      const json& values = setting.value("values", json::object());
+      if (!values.contains(a.candidate_id)) {
+        reject(a, d.importance, "setting decision has no value for " + a.candidate_id);
+        continue;
+      }
+      picks[setting.value("field", "")].push_back({a, &d, values[a.candidate_id]});
+    }
+    for (const auto& [field, group] : picks) {
+      bool agree = std::ranges::all_of(group, [&](const Pick& p) { return p.value == group.front().value; });
+      for (const auto& p : group) {
+        if (!agree) {
+          hold(p.answer, p.decision->importance, "conflicting_settings");
+          continue;
+        }
+        cache_.store(*p.decision, p.answer);
+        report_["settings"].push_back({{"field", field},
+                                       {"value", p.value},
+                                       {"decision", p.decision->raw},
+                                       {"resolution", p.answer.to_report(p.decision->importance)}});
+      }
+      if (agree) chosen[field] = group.front().value;
+    }
+    return std::nullopt;
+  }
+
   // Asks the provider, opens context it asks for, and sends only gated, validated answers to the
-  // worker. Gated-out answers are held (never cached); invalid ones are rejected.
+  // worker. Gated-out answers are held (never cached); invalid ones are rejected. Setting
+  // decisions were asked by choose_settings and stay pending here.
   std::optional<RunResult::Status> resolve_rounds(WorkerClient& worker, const std::string& session) {
     std::set<std::string> asked;
     for (int round = 0; round < job_.max_decision_rounds; ++round) {
@@ -195,7 +300,7 @@ class Run {
       std::vector<DecisionResponse> answers;
       for (const auto& id : order_) {
         const auto& d = decisions_.at(id);
-        if (resolved_.contains(id) || asked.contains(id)) continue;
+        if (resolved_.contains(id) || asked.contains(id) || is_setting(d)) continue;
         asked.insert(id);
         if (auto cached = cache_.lookup(d))
           answers.push_back(*cached);
@@ -338,6 +443,9 @@ class Run {
     }
     return {status, report_};
   }
+
+  // Each chosen setting can start one more translation pass.
+  static constexpr int kMaxSettingPasses = 8;
 
   const Job& job_;
   DecisionProvider& provider_;

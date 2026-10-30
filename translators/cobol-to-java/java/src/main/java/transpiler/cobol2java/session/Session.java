@@ -123,7 +123,7 @@ public final class Session {
         Path outputRoot = absolute(Json.requireText(params, "output_root"), "output_root");
         Layout layout = Layout.parse(params.get("layout"));
         MappingRegistry registry = MappingRegistry.parse(params.get("mappings"), builtins);
-        JsonNode options = params.path("options");
+        JsonNode options = Dialect.withSettings(params.path("options"), params.get("settings"));
         Dialect dialect = Dialect.parse(options);
         Importance importance = Importance.parse(params.get("importance"));
         ContextGraph.Budget contextBudget = contextBudget(params.get("context"));
@@ -600,6 +600,9 @@ public final class Session {
             } else if (d.candidates().isEmpty()) {
                 code = "no_candidates";
                 problem = "decision has no candidates; it cannot be resolved by selection";
+            } else if (d.setting() != null) {
+                code = "setting";
+                problem = "a setting decision is applied by translating again with initialize.settings, not by resolve";
             } else if (!d.hasCandidate(selection.path("candidate_id").asText())) {
                 code = "unknown_candidate";
                 problem = "candidate '" + selection.path("candidate_id").asText() + "' is not offered by this decision";

@@ -156,6 +156,21 @@ class Resolution:
 
 
 @dataclass(frozen=True)
+class SettingChoice:
+    """A project setting a provider chose for a setting decision; every program was translated
+    again with it. ``decision`` is the request as asked (from a pass that was then replaced)."""
+
+    field: str
+    value: Any
+    decision: DecisionRequest
+    resolution: Resolution
+
+    @property
+    def confidence(self) -> float | None:
+        return self.resolution.confidence
+
+
+@dataclass(frozen=True)
 class Resolutions:
     provider: str | None
     applied: tuple[Resolution, ...]
@@ -222,6 +237,13 @@ class TranspileResult:
         return self.report.get("errors", [])
 
     @property
+    def settings(self) -> list[SettingChoice]:
+        """Settings chosen for setting decisions, in the order they were chosen."""
+        return [SettingChoice(s["field"], s["value"], DecisionRequest.from_json(s["decision"]),
+                              Resolution.from_json(s["resolution"], "applied"))
+                for s in self.report.get("settings", [])]
+
+    @property
     def resolutions(self) -> Resolutions:
         r = self.report.get("resolutions", {})
         return Resolutions(
@@ -249,6 +271,9 @@ class TranspileResult:
 
     def summary(self) -> str:
         lines = [f"status: {self.status} ({len(self.programs)} program(s), {len(self.files_written)} file(s) written)"]
+        for s in self.settings:
+            confidence = "" if s.confidence is None else f" (confidence {s.confidence:.2f})"
+            lines.append(f"  setting {s.field} = {s.value!r}, chosen by {s.resolution.provider or 'provider'}{confidence}")
         for p in self.programs:
             lines.append(f"  {p.file}: {p.status} -> {p.output_path or '-'}")
             lines.extend(f"    {d['severity']}: {d['message']}" for d in p.diagnostics)

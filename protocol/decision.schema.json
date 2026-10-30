@@ -45,6 +45,15 @@
           "type": "object",
           "required": ["script", "function"],
           "properties": {"script": {"type": "string"}, "function": {"type": "string"}}
+        },
+        "setting": {
+          "type": "object",
+          "description": "A setting decision: selecting a candidate means translating again with `field` set to `values[candidate_id]` (sent in initialize.settings), never resolve",
+          "required": ["field", "values"],
+          "properties": {
+            "field": {"type": "string"},
+            "values": {"type": "object", "minProperties": 1, "additionalProperties": {"type": ["string", "boolean", "number"]}}
+          }
         }
       }
     },

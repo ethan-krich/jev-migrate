@@ -8,8 +8,9 @@ import java.util.function.Function;
 /**
  * An SD sort file: SORT collects records (USING files or RELEASE in an INPUT PROCEDURE), orders
  * them by their keys and hands them out (GIVING files or RETURN in an OUTPUT PROCEDURE). The
- * sort is stable, so records with equal keys keep their order (WITH DUPLICATES IN ORDER). MERGE
- * combines files already in key order, taking equal keys in the order the files are named.
+ * sort is stable, so records with equal keys keep their release order, as in GnuCOBOL (with or
+ * without WITH DUPLICATES IN ORDER). MERGE combines files already in key order, taking equal
+ * keys in the order the files are named.
  */
 public final class SortFile {
     private final String name;

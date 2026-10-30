@@ -79,9 +79,11 @@ public final class Builtins implements MappingRegistry.Catalog {
 
     public Builtins() {
         register(Handler.of("move_to_alphanumeric", "MOVE",
-                "MOVE into a PIC X receiver: left-justify, space-pad and right-truncate", Builtins::moveToAlphanumeric));
+                "MOVE into an alphanumeric receiver (PIC X, not edited): left-justify, space-pad and right-truncate",
+                Builtins::moveToAlphanumeric));
         register(Handler.of("move_to_numeric", "MOVE",
-                "MOVE into a PIC 9 receiver: decimal alignment with high- and low-order truncation", Builtins::moveToNumeric));
+                "MOVE into a numeric receiver (PIC 9, signed or unsigned, with or without decimal places; not edited): "
+                        + "decimal alignment with high- and low-order truncation", Builtins::moveToNumeric));
         register(Handler.of("add", "ADD", "ADD ... TO / GIVING with exact decimal arithmetic", Builtins::add));
         register(Handler.of("subtract", "SUBTRACT", "SUBTRACT ... FROM / GIVING with exact decimal arithmetic", Builtins::subtract));
         register(Handler.of("multiply", "MULTIPLY", "MULTIPLY ... BY / GIVING with exact decimal arithmetic", Builtins::multiply));
@@ -90,7 +92,7 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("compute_gnucobol", "COMPUTE",
                 "COMPUTE with / and integer ** as GnuCOBOL 3.2 computes them (quotients keep 38 extra digits, truncated)",
                 Builtins::computeGnucobol));
-        register(Handler.of("display", "DISPLAY", "DISPLAY to standard output in GnuCOBOL format", Builtins::display));
+        register(Handler.of("display", "DISPLAY", "DISPLAY of literals and items, each item in its GnuCOBOL DISPLAY form", Builtins::display));
         register(Handler.of("if", "IF", "IF / ELSE with relation, sign and combined conditions", Builtins::ifElse));
         register(Handler.of("perform", "PERFORM", "PERFORM paragraph/section or inline; TIMES, UNTIL, single VARYING", Builtins::perform));
         register(Handler.of("stop_run", "STOP", "STOP RUN ends the run unit with RETURN-CODE as exit status", Builtins::stopRun));
@@ -135,9 +137,8 @@ public final class Builtins implements MappingRegistry.Catalog {
                 "INSPECT TALLYING / REPLACING / CONVERTING with BEFORE / AFTER INITIAL", Builtins::inspect));
         register(Handler.of("go_to", "GO_TO", "GO TO procedure and GO TO ... DEPENDING ON (procedure dispatcher)", Builtins::goTo));
         register(Handler.of("alter", "ALTER",
-                "ALTER is a decision: it changes a GO TO at run time; the candidate below is offered for review", Builtins::alter));
-        register(Handler.of("alter_goto", "ALTER",
-                "ALTER as an assignment of the altered paragraph's GO TO target (candidate only)", Builtins::alterGoTo));
+                "ALTER paragraph TO [PROCEED TO] procedure: sets the GO TO target of the altered paragraph (procedure dispatcher)",
+                Builtins::alter));
         register(Handler.of("open_file", "OPEN", "OPEN INPUT / OUTPUT / I-O / EXTEND of SEQUENTIAL, LINE SEQUENTIAL, RELATIVE and INDEXED files",
                 Builtins::openFile));
         register(Handler.of("close_file", "CLOSE", "CLOSE files", Builtins::closeFile));
@@ -150,10 +151,8 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("start_file", "START", "START file [KEY IS =, >, >=, <, <= item] [INVALID KEY] of RELATIVE and INDEXED files",
                 Builtins::startFile));
         register(Handler.of("sort", "SORT",
-                "SORT ... WITH DUPLICATES IN ORDER: stable sort, USING / INPUT PROCEDURE, GIVING / OUTPUT PROCEDURE", Builtins::sort));
-        register(Handler.of("sort_stable", "SORT",
-                "SORT without DUPLICATES IN ORDER as a stable sort (candidate only: equal keys may come out in another order)",
-                Builtins::sortStable));
+                "SORT [WITH DUPLICATES IN ORDER] as a stable sort (GnuCOBOL returns equal keys in release order either way), "
+                        + "USING / INPUT PROCEDURE, GIVING / OUTPUT PROCEDURE", Builtins::sort));
         register(Handler.of("merge", "MERGE", "MERGE ... USING files in key order, GIVING / OUTPUT PROCEDURE", Builtins::merge));
         register(Handler.of("release", "RELEASE", "RELEASE sort record [FROM]", Builtins::release));
         register(Handler.of("return_record", "RETURN", "RETURN sort file [INTO] AT END", Builtins::returnRecord));
@@ -164,11 +163,8 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("set_index", "SET", "SET index TO / UP BY / DOWN BY, SET item TO index", Builtins::setIndex));
         register(Handler.of("search", "SEARCH", "Serial SEARCH [VARYING] with AT END and WHEN", Builtins::search));
         register(Handler.of("search_all", "SEARCH",
-                "SEARCH ALL where the table's keys are proven ascending/descending and unique", Builtins::searchAll));
-        register(Handler.of("search_all_binary", "SEARCH",
-                "SEARCH ALL as a binary search on the KEY (correct only if the keys are in order)", Builtins::searchAllBinary));
-        register(Handler.of("search_all_linear", "SEARCH",
-                "SEARCH ALL as a serial scan from the first occurrence (correct only if the keys are unique)", Builtins::searchAllLinear));
+                "SEARCH ALL ... WHEN key = value [AT END] as GnuCOBOL's binary search, whatever order the keys are in",
+                Builtins::searchAll));
     }
 
     private void register(Handler h) {
@@ -729,6 +725,10 @@ public final class Builtins implements MappingRegistry.Catalog {
     private static List<Statement> acceptStdin(OpUnit u, TranslationContext c) throws HandlerException {
         AcceptStatement a = (AcceptStatement) u.statement();
         rejectAcceptExceptions(a);
+        if (((io.proleap.cobol.CobolParser.AcceptStatementContext) a.getCtx()).ENVIRONMENT() != null) {
+            // ACCEPT ... FROM ENVIRONMENT "name" has no FROM type in the ASG, but it is not standard input.
+            throw HandlerException.notApplicable("ACCEPT FROM ENVIRONMENT is not standard input");
+        }
         if (a.getAcceptType() == AcceptStatement.AcceptType.MNEMONIC) {
             String device = c.device(deviceName(a.getAcceptFromMnemonicStatement()));
             if (!device.equals("SYSIN") && !device.equals("CONSOLE")) {
@@ -1663,9 +1663,10 @@ public final class Builtins implements MappingRegistry.Catalog {
     }
 
     /**
-     * SEARCH ALL finds a match only when the table is in KEY order; which occurrence it finds
-     * for equal keys, and what it does on an unordered table, depend on the compiler's binary
-     * search. Neither can be proven here, so it is always a decision offering both candidates.
+     * SEARCH ALL as cobc 3.2 generates it (codegen.c output_search_all): head = 0, tail = occurs + 1,
+     * probe (head + tail) / 2, head = probe while the key is below the value, else tail = probe.
+     * With low = head + 1 and high = tail - 1 this loop probes the same occurrences, so duplicate
+     * keys find the same occurrence and keys out of order miss the same values as GnuCOBOL.
      */
     private static List<Statement> searchAll(OpUnit u, TranslationContext c) throws HandlerException {
         if (!isSearchAll(u)) {
@@ -1676,59 +1677,18 @@ public final class Builtins implements MappingRegistry.Catalog {
         if (t.table().keys().isEmpty()) {
             throw HandlerException.unsupported("SEARCH ALL " + t.table().cobolName() + ": the table has no ASCENDING / DESCENDING KEY");
         }
-        throw HandlerException.unprovable("SEARCH ALL " + t.table().cobolName()
-                + ": the keys cannot be proven to be in order and unique, so the occurrence found is not determined");
-    }
-
-    /** One WHEN of SEARCH ALL, which must be the only one. */
-    private static io.proleap.cobol.asg.metamodel.procedure.search.WhenPhrase searchAllWhen(
-            io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement s) throws HandlerException {
-        if (s.getWhenPhrases().size() != 1) {
-            throw HandlerException.unsupported("SEARCH ALL has exactly one WHEN");
-        }
-        return s.getWhenPhrases().getFirst();
-    }
-
-    private static List<Statement> searchAllLinear(OpUnit u, TranslationContext c) throws HandlerException {
-        if (!isSearchAll(u)) {
-            throw HandlerException.notApplicable("not SEARCH ALL");
-        }
-        var s = (io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement) u.statement();
-        Searched t = searched(s, c);
-        var when = searchAllWhen(s);
-        String label = c.fresh("search");
-        String index = t.index().javaName();
-        BlockStmt found = c.nested(when);
-        found.addStatement(new BreakStmt(label));
-        BlockStmt atEnd = s.getAtEndPhrase() == null ? new BlockStmt() : c.nested(s.getAtEndPhrase());
-        BlockStmt loop = new BlockStmt(NodeList.nodeList(new IfStmt(c.condition(when.getCondition()), found, null)));
-        Statement scan = new ForStmt(NodeList.nodeList(new AssignExpr(name(index), integer(1), AssignExpr.Operator.ASSIGN)),
-                new BinaryExpr(name(index), occurrences(t.table(), c), BinaryExpr.Operator.LESS_EQUALS),
-                NodeList.nodeList(new UnaryExpr(name(index), UnaryExpr.Operator.POSTFIX_INCREMENT)), loop);
-        BlockStmt body = new BlockStmt(NodeList.nodeList(scan));
-        atEnd.getStatements().forEach(body::addStatement);
-        return List.of(new LabeledStmt(label, body));
-    }
-
-    /** Binary search on the first KEY: halves the occurrences in use by comparing the key with the WHEN's value. */
-    private static List<Statement> searchAllBinary(OpUnit u, TranslationContext c) throws HandlerException {
-        if (!isSearchAll(u)) {
-            throw HandlerException.notApplicable("not SEARCH ALL");
-        }
-        var s = (io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement) u.statement();
-        Searched t = searched(s, c);
         var when = searchAllWhen(s);
         var cond = when.getCondition();
         var rel = cond.getAndOrConditions().isEmpty() ? cond.getCombinableCondition().getSimpleCondition().getRelationCondition() : null;
         if (rel == null || rel.getArithmeticComparison() == null
                 || rel.getArithmeticComparison().getOperator().getRelationalOperatorType() != RelationalOperatorType.EQUAL) {
-            throw HandlerException.unsupported("binary SEARCH ALL candidate needs WHEN key = value");
+            throw HandlerException.unsupported("SEARCH ALL needs WHEN key = value (other conditions are not supported)");
         }
         Operand key = c.operand(rel.getArithmeticComparison().getArithmeticExpressionLeft());
         Operand value = c.operand(rel.getArithmeticComparison().getArithmeticExpressionRight());
         DataItem.Key first = t.table().keys().getFirst();
         if (!(key instanceof Operand.Field kf) || kf.item() != first.item()) {
-            throw HandlerException.unsupported("binary SEARCH ALL candidate needs WHEN on the first KEY");
+            throw HandlerException.unsupported("SEARCH ALL needs WHEN on the first KEY, written on the left");
         }
         String label = c.fresh("search");
         String low = c.fresh("low");
@@ -1752,6 +1712,15 @@ public final class Builtins implements MappingRegistry.Catalog {
         body.addStatement(new WhileStmt(new BinaryExpr(name(low), name(high), BinaryExpr.Operator.LESS_EQUALS), loop));
         atEnd.getStatements().forEach(body::addStatement);
         return List.of(new LabeledStmt(label, body));
+    }
+
+    /** One WHEN of SEARCH ALL, which must be the only one. */
+    private static io.proleap.cobol.asg.metamodel.procedure.search.WhenPhrase searchAllWhen(
+            io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement s) throws HandlerException {
+        if (s.getWhenPhrases().size() != 1) {
+            throw HandlerException.unsupported("SEARCH ALL has exactly one WHEN");
+        }
+        return s.getWhenPhrases().getFirst();
     }
 
     // ------------------------------------------------- STRING / UNSTRING / INSPECT
@@ -2068,12 +2037,8 @@ public final class Builtins implements MappingRegistry.Catalog {
         return List.of(new com.github.javaparser.ast.stmt.SwitchStmt(call(c.field(n), "intValue"), entries));
     }
 
+    /** The altered paragraph's GO TO reads its target from a field of the program, so ALTER is an assignment. */
     private static List<Statement> alter(OpUnit u, TranslationContext c) throws HandlerException {
-        throw HandlerException.unprovable("ALTER changes the target of a GO TO while the program runs; "
-                + "the translation keeps that behaviour only through the dispatcher candidate, which needs review");
-    }
-
-    private static List<Statement> alterGoTo(OpUnit u, TranslationContext c) throws HandlerException {
         var a = (io.proleap.cobol.asg.metamodel.procedure.alter.AlterStatement) u.statement();
         List<Statement> out = new ArrayList<>();
         for (var to : a.getProceedTos()) {
@@ -2514,16 +2479,12 @@ public final class Builtins implements MappingRegistry.Catalog {
         return name(f.javaName());
     }
 
+    /**
+     * SORT as a stable sort. GnuCOBOL 3.2 breaks ties between equal keys by release order (libcob's
+     * cob_file_sort_compare compares a per-record sequence number last), so WITH DUPLICATES IN ORDER
+     * does not change its result.
+     */
     private static List<Statement> sort(OpUnit u, TranslationContext c) throws HandlerException {
-        var s = (io.proleap.cobol.asg.metamodel.procedure.sort.SortStatement) u.statement();
-        if (s.getDuplicates() == null || !s.getDuplicates().isDuplicatesInOrder()) {
-            throw HandlerException.unprovable("SORT without WITH DUPLICATES IN ORDER: records with equal keys may come out "
-                    + "in any order, and their keys cannot be proven unique");
-        }
-        return sortStable(u, c);
-    }
-
-    private static List<Statement> sortStable(OpUnit u, TranslationContext c) throws HandlerException {
         var s = (io.proleap.cobol.asg.metamodel.procedure.sort.SortStatement) u.statement();
         if (s.getCollatingSequence() != null) {
             throw HandlerException.unsupported("SORT ... COLLATING SEQUENCE is not supported");

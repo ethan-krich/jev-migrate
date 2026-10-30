@@ -81,6 +81,9 @@ class DecisionRequest:
     context: dict[str, Any] = field(default_factory=dict)
     callback: dict[str, str] | None = None
     importance: str = "critical"  # what the worker assigns when no table matches
+    # A setting decision ({field, values: {candidate_id: value}}): choosing a candidate means
+    # translating again with that setting, which the orchestrator does.
+    setting: dict[str, Any] | None = None
 
     @property
     def refs(self) -> list[dict[str, Any]]:
@@ -110,6 +113,7 @@ class DecisionRequest:
             context=d.get("context", {}),
             callback=d.get("callback"),
             importance=d.get("importance", "critical"),
+            setting=d.get("setting"),
         )
 
 

@@ -30,6 +30,18 @@ class DialectTest {
     }
 
     @Test
+    void chosenSettingsOverrideTheOptions() throws Exception {
+        var options = Json.MAPPER.readTree("{\"encoding\": \"ascii\", \"collating_sequence\": null}");
+        var merged = Dialect.withSettings(options, Json.MAPPER.readTree("{\"collating_sequence\": \"ebcdic\"}"));
+        assertEquals(Optional.of("ebcdic"), Dialect.parse(merged).collatingSequence());
+        assertEquals(Optional.of("ascii"), Dialect.parse(merged).encoding());
+        assertEquals(options, Dialect.withSettings(options, null));
+        var e = assertThrows(ProtocolException.class,
+                () -> Dialect.withSettings(options, Json.MAPPER.readTree("{\"file_assignments\": {}}")));
+        assertEquals(ErrorCode.INVALID_PARAMS, e.code());
+    }
+
+    @Test
     void settingsAreParsed() throws Exception {
         Dialect d = parse("""
                 {"encoding": "ebcdic", "out_of_range": "fail", "sync_alignment": true, "binary_truncate": false,
