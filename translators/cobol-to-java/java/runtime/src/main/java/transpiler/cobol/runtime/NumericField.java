@@ -233,6 +233,100 @@ public final class NumericField {
     }
 
     /**
+     * MOVE of an alphanumeric item's bytes, as libcob's cob_move_alphanum_to_display: leading
+     * white space and one sign are skipped; the digits are aligned on the first decimal point,
+     * excess high-order digits are skipped and the copy stops when the receiver is full; spaces
+     * and the numeric separator are ignored. Any other byte, or a second decimal point, moves
+     * zero. Packed and binary receivers get the value through a signed 36-digit intermediate
+     * with 18 decimals, libcob's indirect move.
+     */
+    public void moveAlphanumeric(String source, char point, char separator) {
+        if (codec == Codec.ZONED) {
+            if (scale < 0 || scale > digits) {
+                throw new IllegalStateException("P scaling in an alphanumeric MOVE target");
+            }
+            putSign(alphanumericDigits(source, point, separator, digits, scale, storage.bytes, digitIndex(0)) < 0);
+            return;
+        }
+        byte[] temp = new byte[36];
+        int sign = alphanumericDigits(source, point, separator, 36, 18, temp, 0);
+        BigInteger magnitude = new BigInteger(new String(temp, java.nio.charset.StandardCharsets.ISO_8859_1));
+        BigDecimal value = new BigDecimal(sign < 0 ? magnitude.negate() : magnitude, 18);
+        if (codec == Codec.PACKED) {
+            // The intermediate's sign survives a zero magnitude (negative zero), as in cob_move_display_to_packed.
+            putPacked(value.setScale(scale, RoundingMode.DOWN).unscaledValue().abs().mod(modulus), signed && sign < 0);
+            return;
+        }
+        move(value);
+    }
+
+    /** The digits of an alphanumeric MOVE into {@code n} digit bytes at {@code at} with {@code sc} decimals; returns the sign. */
+    private static int alphanumericDigits(String src, char point, char separator, int n, int sc, byte[] out, int at) {
+        java.util.Arrays.fill(out, at, at + n, (byte) '0');
+        int s1 = 0;
+        int e1 = src.length();
+        while (s1 < e1 && cSpace(src.charAt(s1))) {
+            s1++;
+        }
+        int sign = 0;
+        if (s1 != e1 && (src.charAt(s1) == '+' || src.charAt(s1) == '-')) {
+            sign = src.charAt(s1++) == '+' ? 1 : -1;
+        }
+        int count = 0;
+        for (int p = s1; p < e1 && src.charAt(p) != point; p++) {
+            if (cDigit(src.charAt(p))) {
+                count++;
+            }
+        }
+        int size = n - sc;
+        int s2 = 0;
+        if (count < size) {
+            s2 = size - count;
+        } else {
+            while (count-- > size) {
+                while (!cDigit(src.charAt(s1))) {
+                    s1++;
+                }
+                s1++;
+            }
+        }
+        int points = 0;
+        for (; s1 < e1 && s2 < n; s1++) {
+            char c = src.charAt(s1);
+            if (cDigit(c)) {
+                out[at + s2++] = (byte) c;
+            } else if (c == point) {
+                if (points++ > 0) {
+                    java.util.Arrays.fill(out, at, at + n, (byte) '0');
+                    return 0;
+                }
+            } else if (!(cSpace(c) || c == separator)) {
+                java.util.Arrays.fill(out, at, at + n, (byte) '0');
+                return 0;
+            }
+        }
+        return sign;
+    }
+
+    private static boolean cDigit(char c) {
+        return c >= '0' && c <= '9';
+    }
+
+    /** C's isspace in the "C" locale. */
+    private static boolean cSpace(char c) {
+        return c == ' ' || (c >= '\t' && c <= '\r');
+    }
+
+    /** The 38-digit unsigned DISPLAY item libcob fills from {@code ALL "lit"} for a numeric receiver (cob_move_all). */
+    public static NumericField all(String pattern) {
+        Storage s = new Storage(38);
+        for (int i = 0; i < 38; i++) {
+            s.bytes[i] = (byte) pattern.charAt(i % pattern.length());
+        }
+        return new NumericField(s, 0, 38, 0, false);
+    }
+
+    /**
      * MOVE between numeric DISPLAY items: digit positions are aligned on the decimal point and
      * copied as they are, except that a space becomes a zero.
      */
@@ -375,14 +469,14 @@ public final class NumericField {
             digits = raw.length();
             String body = scale < 0 ? raw : point + raw;
             if (signSeparate) {
-                char sign = (char) (storage.bytes[signLeading ? offset : offset + this.digits] & 0xFF);
+                char sign = separateSignShown();
                 return signLeading ? sign + body : body + sign;
             }
             return signed ? (get().signum() < 0 ? '-' : '+') + body : body;
         }
         StringBuilder sb = new StringBuilder(digits + 2);
         // A separate sign is shown where it is stored, as it is stored; an embedded one leads.
-        char separate = signSeparate ? (char) (storage.bytes[signLeading ? offset : offset + digits] & 0xFF) : 0;
+        char separate = signSeparate ? separateSignShown() : 0;
         if (signSeparate && signLeading) {
             sb.append(separate);
         } else if (signed && !signSeparate) {
@@ -396,6 +490,12 @@ public final class NumericField {
             sb.append(separate);
         }
         return sb.toString();
+    }
+
+    /** A separate sign as DISPLAY shows it: as stored, except that a negative zero shows {@code +} (GnuCOBOL's edited move). */
+    private char separateSignShown() {
+        char sign = (char) (storage.bytes[signLeading ? offset : offset + digits] & 0xFF);
+        return sign == '-' && get().signum() == 0 ? '+' : sign;
     }
 
     @Override

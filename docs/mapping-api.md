@@ -73,7 +73,7 @@ a handler does not cover is listed under [Unsupported](#unsupported).
 | Handler | Default rule | Java | Behaviour |
 |---|---|---|---|
 | `move_to_alphanumeric` | MOVE, `target_category` alphanumeric | `AlphanumericField.set` | receiver PIC X / A or a reference modification; pad/truncate right (left with JUSTIFIED); integer numeric → digits; figuratives incl. `ALL "lit"` |
-| `move_to_numeric` | MOVE, `target_category` numeric | `NumericField.move` | receiver PIC 9 (any USAGE); decimal alignment, truncation, sign |
+| `move_to_numeric` | MOVE, `target_category` numeric | `NumericField.move`, `moveAlphanumeric` | receiver PIC 9 (any USAGE); decimal alignment, truncation, sign. From an alphanumeric item or reference modification: libcob's `cob_move_alphanum_to_display` (leading spaces and one sign skipped, digits aligned on the first decimal point, spaces and the numeric separator ignored, any other byte or a second point moves zero; packed and binary receivers through a 36-digit intermediate). An alphanumeric literal into a DISPLAY item without decimals or separate sign is copied as written, right-aligned, as cobc does at compile time. `ALL "digits"` moves 38 repeated digits |
 | `move_group` | MOVE, `target_category` group | `AlphanumericField.set` on the group's bytes | receiver a group: the sending bytes unconverted (a numeric item's digits and sign as stored), space-padded / cut; a variable-length group with its DEPENDING ON item inside receives at its maximum length |
 | `move_to_edited` | MOVE, `target_category` numeric- or alphanumeric-edited | `EditedField.move` | receiver numeric-edited (GnuCOBOL editing: `Z * $ + - CR DB . , B 0 /`, fixed and floating insertion, BLANK WHEN ZERO) or alphanumeric-edited (insertion) |
 | `move_from_edited` | MOVE, numeric-edited → numeric (wins over `move_to_numeric`: more conditions) | `NumericField.move(edited.value())` | de-editing |
@@ -126,7 +126,7 @@ a handler does not cover is listed under [Unsupported](#unsupported).
 | Handler | Default rule | Java | Behaviour |
 |---|---|---|---|
 | `string` | STRING | `StringOps.Concat` | `DELIMITED BY SIZE / literal / item`, `WITH POINTER`, `[NOT] ON OVERFLOW`; the target keeps unwritten positions |
-| `unstring` | UNSTRING | `StringOps.Unstring` | `DELIMITED BY [ALL] x OR [ALL] y`, `DELIMITER IN`, `COUNT IN`, `WITH POINTER`, `TALLYING IN`, `[NOT] ON OVERFLOW`; alphanumeric receivers |
+| `unstring` | UNSTRING | `StringOps.Unstring` | `DELIMITED BY [ALL] x OR [ALL] y`, `DELIMITER IN`, `COUNT IN`, `WITH POINTER`, `TALLYING IN`, `[NOT] ON OVERFLOW`; alphanumeric receivers, and numeric ones (each field moved as alphanumeric data, as `move_to_numeric` does) |
 | `inspect` | INSPECT | `StringOps.Inspect` | `TALLYING` (`CHARACTERS`, `ALL`, `LEADING`), `REPLACING` (`CHARACTERS`, `ALL`, `LEADING`, `FIRST`), `CONVERTING`, `BEFORE / AFTER INITIAL`; comparands in source order |
 
 ### Files and sorting
@@ -214,7 +214,7 @@ the supported subset in the README and
 
 | Operation | Unsupported |
 |---|---|
-| MOVE | MOVE ALL or a sending category the receiver does not take, non-integer numeric → alphanumeric, a receiver sharing storage with the sender, CORRESPONDING problems |
+| MOVE | a sending category the receiver does not take: non-integer numeric → alphanumeric and `MOVE ALL` of a numeric literal (invalid COBOL: cobc rejects them), alphanumeric data into edited, BLANK WHEN ZERO or P-scaled numeric items, a group or an alphanumeric literal into a packed or binary item, `ALL` of non-digits into a numeric item; a receiver sharing storage with the sender; CORRESPONDING problems |
 | ADD, SUBTRACT, MULTIPLY, DIVIDE | non-numeric operands or receivers, CORRESPONDING with SIZE ERROR, REMAINDER without GIVING (or with several receivers) |
 | COMPUTE | `**` with a non-integer or negative exponent, floating-point intrinsic functions |
 | DISPLAY | `UPON` printer or other devices (`missing_target_api`), AT / exception phrases |
@@ -227,7 +227,7 @@ the supported subset in the README and
 | CANCEL, ENTRY | CANCEL of a library name; ENTRY that is not the first statement of a paragraph, or in a program with sections or GO TO |
 | SET | `SET switch TO ON / OFF` (`missing_mapping`), several values, `TO FALSE` without `WHEN SET TO FALSE`, pointers |
 | ACCEPT | `FROM ESCAPE KEY`, message count, other date forms (`missing_mapping`); other devices (`missing_target_api`); non-alphanumeric receivers; exception phrases |
-| INITIALIZE, STRING, UNSTRING, INSPECT | INITIALIZE of RENAMES or OCCURS DEPENDING ON groups; `STRING … FOR`; UNSTRING into non-alphanumeric items; INSPECT REPLACING with lengths that differ |
+| INITIALIZE, STRING, UNSTRING, INSPECT | INITIALIZE of RENAMES or OCCURS DEPENDING ON groups; `STRING … FOR`; UNSTRING into edited items; INSPECT REPLACING with lengths that differ |
 | SEARCH | a table without INDEXED BY; SEARCH ALL without KEY, or WHEN other than `key = value` on the first key |
 | OPEN, CLOSE, READ, WRITE, REWRITE, DELETE, START | LOCK phrases, `NO REWIND`, I-O of LINE SEQUENTIAL, READ PREVIOUS of a sequential file, REWRITE of an INDEXED file with alternate keys in ACCESS SEQUENTIAL (GnuCOBOL's result depends on its internal state) |
 | SORT, MERGE, RELEASE, RETURN | `COLLATING SEQUENCE` phrase, GIVING several files, USING / GIVING of RELATIVE or INDEXED files |

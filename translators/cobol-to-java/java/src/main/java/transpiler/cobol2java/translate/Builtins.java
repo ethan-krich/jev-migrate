@@ -83,7 +83,8 @@ public final class Builtins implements MappingRegistry.Catalog {
                 Builtins::moveToAlphanumeric));
         register(Handler.of("move_to_numeric", "MOVE",
                 "MOVE into a numeric receiver (PIC 9, signed or unsigned, with or without decimal places; not edited): "
-                        + "decimal alignment with high- and low-order truncation", Builtins::moveToNumeric));
+                        + "decimal alignment with high- and low-order truncation; alphanumeric data converted as libcob does",
+                Builtins::moveToNumeric));
         register(Handler.of("add", "ADD", "ADD ... TO / GIVING with exact decimal arithmetic", Builtins::add));
         register(Handler.of("subtract", "SUBTRACT", "SUBTRACT ... FROM / GIVING with exact decimal arithmetic", Builtins::subtract));
         register(Handler.of("multiply", "MULTIPLY", "MULTIPLY ... BY / GIVING with exact decimal arithmetic", Builtins::multiply));
@@ -131,7 +132,7 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("string", "STRING",
                 "STRING ... DELIMITED BY ... INTO [WITH POINTER] [ON OVERFLOW]", Builtins::stringStatement));
         register(Handler.of("unstring", "UNSTRING",
-                "UNSTRING [DELIMITED BY [ALL] ... OR ...] INTO alphanumeric items [DELIMITER IN] [COUNT IN] [POINTER] [TALLYING]",
+                "UNSTRING [DELIMITED BY [ALL] ... OR ...] INTO alphanumeric or numeric items [DELIMITER IN] [COUNT IN] [POINTER] [TALLYING]",
                 Builtins::unstring));
         register(Handler.of("inspect", "INSPECT",
                 "INSPECT TALLYING / REPLACING / CONVERTING with BEFORE / AFTER INITIAL", Builtins::inspect));
@@ -347,7 +348,58 @@ public final class Builtins implements MappingRegistry.Catalog {
         if (!numericTarget) {
             throw HandlerException.notApplicable("receiver " + receiverName(u, target) + " is not numeric");
         }
-        return List.of(storeNumeric(c.field(target), moveSource(u, c), c));
+        Operand src = moveSource(u, c);
+        if (target instanceof Operand.Field t && !src.isNumericValued()) {
+            Statement s = alphanumericToNumeric(c.field(target), t, src, c);
+            if (s != null) {
+                return List.of(s);
+            }
+        }
+        return List.of(storeNumeric(c.field(target), src, c));
+    }
+
+    /**
+     * MOVE of alphanumeric data into numeric item {@code target} as GnuCOBOL 3.2 compiles it, or
+     * null when that is not reproduced (the caller refuses it). An alphanumeric item or reference
+     * modification moves through libcob's cob_move_alphanum_to_display. cobc copies an
+     * alphanumeric literal into a DISPLAY item without decimals or separate sign as written,
+     * right-aligned (cb_build_move_literal); into other DISPLAY items it moves like an item.
+     * {@code ALL "digits"} moves the 38 repeated digits libcob builds (cob_move_all).
+     */
+    static Statement alphanumericToNumeric(Expression field, Operand.Field target, Operand src, TranslationContext c)
+            throws HandlerException {
+        DataItem t = target.item();
+        boolean zoned = t.usage() == DataItem.Usage.DISPLAY;
+        if (!takesAlphanumeric(target)) {
+            return null;
+        }
+        return switch (src) {
+            case Operand.Field f when f.alphanumeric() && !f.edited() && (f.refmod() != null || !f.item().isGroup()) ->
+                    moveAlphanumeric(field, call(c.field(src), "get"), c);
+            case Operand.AlphanumericLiteral a when a.value().isEmpty() || a.value().chars().allMatch(ch -> ch == ' ') -> null;
+            case Operand.AlphanumericLiteral a when zoned && t.numeric().scale() == 0 && !t.signSeparate() -> {
+                int digits = t.numeric().digits();
+                String lit = a.value();
+                String bytes = lit.length() >= digits ? lit.substring(lit.length() - digits) : "0".repeat(digits - lit.length()) + lit;
+                yield stmt(call(call(field, "view"), "set", str(bytes)));
+            }
+            case Operand.AlphanumericLiteral a when zoned -> moveAlphanumeric(field, str(a.value()), c);
+            case Operand.Figurative f when f.name().equals("ALL") && f.pattern().chars().allMatch(ch -> ch >= '0' && ch <= '9') ->
+                    stmt(call(field, "move", staticCall("NumericField", "all", str(f.pattern()))));
+            default -> null;
+        };
+    }
+
+    /** A numeric receiver of an alphanumeric MOVE: not BLANK WHEN ZERO, no P scaling in a DISPLAY item. */
+    private static boolean takesAlphanumeric(Operand.Field target) {
+        DataItem t = target.item();
+        return target.numeric() && !t.blankWhenZero() && (t.usage() != DataItem.Usage.DISPLAY
+                || (t.numeric().scale() >= 0 && t.numeric().scale() <= t.numeric().digits()));
+    }
+
+    private static Statement moveAlphanumeric(Expression field, Expression bytes, TranslationContext c) {
+        boolean comma = c.decimalPointComma();
+        return stmt(call(field, "moveAlphanumeric", bytes, chr(comma ? ',' : '.'), chr(comma ? '.' : ',')));
     }
 
     /** MOVE of {@code src} into a numeric field. */
@@ -1844,12 +1896,14 @@ public final class Builtins implements MappingRegistry.Catalog {
                         new com.github.javaparser.ast.expr.ArrayInitializerExpr(all)))));
         for (var into : s.getIntoPhrase().getIntos()) {
             Operand r = c.operand(into.getIntoCall());
-            if (!(r instanceof Operand.Field rf) || !rf.alphanumeric() || rf.edited()) {
-                throw HandlerException.unsupported("UNSTRING INTO " + r.category() + " is not supported (only alphanumeric receivers)");
+            // A numeric receiver gets the field as an alphanumeric MOVE (libcob's cob_str_memcpy is cob_move).
+            boolean numeric = r instanceof Operand.Field nf && nf.numeric();
+            if (!(r instanceof Operand.Field rf) || (numeric ? !takesAlphanumeric(rf) : !rf.alphanumeric() || rf.edited())) {
+                throw HandlerException.unsupported("UNSTRING INTO " + r.category() + " is not supported (alphanumeric and numeric receivers)");
             }
             Expression field = c.field(r);
             BlockStmt then = new BlockStmt();
-            then.addStatement(stmt(call(field, "set", call(name(u1), "data"))));
+            then.addStatement(numeric ? moveAlphanumeric(field, call(name(u1), "data"), c) : stmt(call(field, "set", call(name(u1), "data"))));
             if (into.getDelimiterIn() != null) {
                 if (!delimited) {
                     throw HandlerException.unsupported("DELIMITER IN without DELIMITED BY");
@@ -1860,7 +1914,12 @@ public final class Builtins implements MappingRegistry.Catalog {
                 then.addStatement(stmt(call(integerItem(into.getCountIn().getCountInCall(), c), "move",
                         staticCall("BigDecimal", "valueOf", call(name(u1), "count")))));
             }
-            Expression next = delimited ? call(name(u1), "next") : call(name(u1), "next", call(field.clone(), "length"));
+            // Without DELIMITED BY a receiver takes as many characters as its COB_FIELD_SIZE: the digits of a
+            // DISPLAY item (a separate sign excluded), the bytes of a packed or binary one.
+            DataItem ri = ((Operand.Field) r).item();
+            Expression length = !numeric ? call(field.clone(), "length")
+                    : integer(ri.usage() == DataItem.Usage.DISPLAY ? ri.numeric().digits() : ri.size());
+            Expression next = delimited ? call(name(u1), "next") : call(name(u1), "next", length);
             out.add(new IfStmt(next, then, null));
         }
         if (s.getTallyingPhrase() != null) {
