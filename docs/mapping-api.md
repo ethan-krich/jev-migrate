@@ -53,6 +53,7 @@ exists because the plain Java result would differ from GnuCOBOL 3.2's:
 | `Compare` | IF, EVALUATE, PERFORM UNTIL, SEARCH | `alphanumeric` pads the shorter operand with spaces (`"AB" = "AB  "` is true, `String.equals` says false); `ebcdic` orders by EBCDIC code; `figurative` compares with `SPACES`, `ALL "AB"`, …; class tests (`NUMERIC`, `ALPHABETIC`, …). `numeric` is only `BigDecimal.compareTo` |
 | `Display` | DISPLAY, EXHIBIT | GnuCOBOL's output format, byte for byte with a single LF |
 | `Accept`, `Environment`, `Clock` | ACCEPT, DISPLAY UPON ENVIRONMENT-* | one stdin line per ACCEPT; environment and arguments as GnuCOBOL gives them; `COB_CURRENT_DATE` fixes the clock |
+| `Switches` | SET switch TO ON / OFF, switch ON / OFF STATUS conditions | GnuCOBOL's run-unit switches SWITCH-0 .. SWITCH-36, started from `COB_SWITCH_n` as libcob does |
 | `StringOps` | STRING, UNSTRING, INSPECT | COBOL's delimiter, pointer, tally and BEFORE / AFTER INITIAL rules |
 | `Functions` | intrinsic functions | GnuCOBOL's results, including zero for invalid arguments instead of an exception |
 | `CobolFile`, `RelativeFile`, `IndexedFile`, `FileBase` | OPEN, CLOSE, READ, WRITE, REWRITE, DELETE, START, declaratives | GnuCOBOL's record formats and FILE STATUS values, LINAGE, and the rules for an unhandled error status |
@@ -79,6 +80,7 @@ a handler does not cover is listed under [Unsupported](#unsupported).
 | `move_from_edited` | MOVE, numeric-edited → numeric (wins over `move_to_numeric`: more conditions) | `NumericField.move(edited.value())` | de-editing |
 | `initialize` | INITIALIZE | a `move` / `set` per elementary item | item by item: `WITH FILLER`, `ALL TO VALUE`, `REPLACING category BY`, `THEN TO DEFAULT`; REDEFINES and FILLER skipped; every occurrence of tables, the occurrences in use of an OCCURS DEPENDING ON table |
 | `set_condition` | SET, `form` true / false | a `move` / `set` of the condition's value | `SET cond TO TRUE` moves the first value; `TO FALSE` needs `WHEN SET TO FALSE` |
+| `set_switch` | SET, `form` on_off | `Switches.set` | `SET name TO ON / OFF` of a SPECIAL-NAMES `SWITCH-0` .. `SWITCH-36` name; `ON / OFF STATUS` condition-names test `Switches.get` in IF, EVALUATE and PERFORM UNTIL; each switch starts from `COB_SWITCH_n` (`1…` or `ON`), as libcob reads it |
 | `set_index` | SET, `form` to / up_by / down_by | `int` assignment, `+=`, `-=` | `SET index TO n / index / item`, `SET item TO index`, `UP / DOWN BY` (indexes and USAGE INDEX items) |
 
 ### Arithmetic
@@ -192,7 +194,7 @@ these stay pending. With `default_mappings()` there are three kinds:
 | An unset `encoding`, `collating_sequence`, `out_of_range` or `sync_alignment` | a statement depends on the setting (`dialect:<field>`, `missing_mapping`) | the field's values (`setting:ascii`, `setting:ebcdic`, …), with every statement that depends on it as evidence; the program is translated again with the chosen value. See [Dialect](#dialect-project-settings) |
 | A handler choice | only after the project changes the rules: a removed rule or `strategy="unresolved"` (`missing_mapping`), rules that tie (`ambiguous_mapping`), or a rule whose handler does not apply (`invalid_mapping`) | the verb's handlers that generate for that statement, e.g. the other MOVE handlers, or `compute` (`+ - *` only) for COMPUTE |
 
-Every default rule covers every fact value of its verb, except SET `on_off`, ACCEPT
+Every default rule covers every fact value of its verb, except ACCEPT
 `escape_key` / `message_count` / `other_date` (`TODAYS-DATE`, `YEAR`, `TIMER`, …: other dialects, which cobc rejects) and EXHIBIT `changed`. No handler generates those,
 so they are [unsupported](#unsupported) rather than handler choices.
 
@@ -225,7 +227,7 @@ the supported subset in the README and
 | STOP, GOBACK, EXIT, CONTINUE | `STOP literal` (`missing_target_api`), `STOP RUN GIVING` of a non-numeric item, exits that leave a PERFORMed range |
 | CALL | `RETURNING` / `GIVING` into a non-numeric item or together with ON EXCEPTION, `BY VALUE` (cobc 3.2 warns that its handling is unfinished and may change, so there is no stable reference), USING items whose number or sizes differ from the callee's, a CALL of the program itself, both ON OVERFLOW and ON EXCEPTION, a path or system routine with no matching program |
 | CANCEL, ENTRY | CANCEL of a library name; ENTRY that is not the first statement of a paragraph, or in a program with sections or GO TO |
-| SET | `SET switch TO ON / OFF` (`missing_mapping`), several values, `TO FALSE` without `WHEN SET TO FALSE`, pointers |
+| SET | `SET` of a mnemonic name that is not SWITCH-0 .. SWITCH-36, several values, `TO FALSE` without `WHEN SET TO FALSE`, pointers |
 | ACCEPT | `FROM ESCAPE KEY`, message count, other date forms (`missing_mapping`); other devices (`missing_target_api`); non-alphanumeric receivers; exception phrases |
 | INITIALIZE, STRING, UNSTRING, INSPECT | INITIALIZE of RENAMES groups, `TO VALUE` of OCCURS DEPENDING ON groups (GnuCOBOL 3.2 sets occurrences beyond the count unevenly) and groups with `OCCURS 0 TO`; `STRING … FOR`; UNSTRING into edited items; INSPECT REPLACING with lengths that differ |
 | SEARCH | a table without INDEXED BY; SEARCH ALL without KEY, or WHEN other than `key = value` on the first key |
@@ -246,7 +248,7 @@ proven in range (with `out_of_range` set to `decision`) make the statement
 |---|---|---|
 | An unset `dynamic_calls` or `when_compiled` | `dialect:<field>` | set the field |
 | `ASSIGN TO` name missing from `file_assignments` | `dialect:file_assignments` | add the path (it is never guessed) |
-| Declarations the subset does not cover (COMP-1 / COMP-2, POINTER, `N` pictures, SPECIAL-NAMES switches, SCREEN / REPORT sections, …) | DATA, ENVIRONMENT, IDENTIFICATION, PROCEDURE (`unsupported_construct`) | change the source |
+| Declarations the subset does not cover (COMP-1 / COMP-2, POINTER, `N` pictures, ON / OFF STATUS of names other than SWITCH-0 .. SWITCH-36, SCREEN / REPORT sections, …) | DATA, ENVIRONMENT, IDENTIFICATION, PROCEDURE (`unsupported_construct`) | change the source |
 | `USE FOR DEBUGGING`, `GLOBAL` declaratives, declaratives in dispatcher-form programs | PROCEDURE | change the source |
 | A rule with `strategy="callback"` | the verb (`callback_required`) | answer it, until callbacks are routed (see [Callbacks](#callbacks)) |
 

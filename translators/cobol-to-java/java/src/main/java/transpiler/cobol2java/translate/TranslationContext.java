@@ -104,6 +104,12 @@ public interface TranslationContext {
      */
     java.util.Optional<String> alphabet(String name);
 
+    /** The switch number (0 .. 36) of a SPECIAL-NAMES mnemonic name for SWITCH-n. */
+    java.util.OptionalInt switchNumberOf(String mnemonic);
+
+    /** The test of a switch's ON / OFF STATUS condition-name, empty for another name. */
+    java.util.Optional<Expression> switchCondition(String name);
+
     /** The file a statement names (OPEN, CLOSE, READ). */
     FileRef file(Call fileCall) throws HandlerException;
 

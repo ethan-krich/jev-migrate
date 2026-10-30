@@ -293,6 +293,9 @@ public final class ProgramTranslator implements TranslationContext {
     // SPECIAL-NAMES
     private boolean decimalComma;
     private final Map<String, String> devices = new HashMap<>();
+    /** SWITCH-n mnemonic names, and the condition-names of their ON / OFF STATUS (switch number, true for ON). */
+    private final Map<String, Integer> switches = new HashMap<>();
+    private final Map<String, Map.Entry<Integer, Boolean>> switchConditions = new HashMap<>();
     private final Map<String, CobolParser.ClassClauseContext> classes = new HashMap<>();
     /** ALPHABET names of SPECIAL-NAMES: ascii, ebcdic, or other (literals, another alphabet). */
     private final Map<String, String> alphabets = new HashMap<>();
@@ -351,6 +354,7 @@ public final class ProgramTranslator implements TranslationContext {
         cu.addImport(in.runtimePackage() + ".SortFile");
         cu.addImport(in.runtimePackage() + ".Storage");
         cu.addImport(in.runtimePackage() + ".StringOps");
+        cu.addImport(in.runtimePackage() + ".Switches");
         cu.addImport(BigDecimal.class);
 
         ClassOrInterfaceDeclaration cls = cu.addClass(in.className(), Modifier.Keyword.PUBLIC, Modifier.Keyword.FINAL);
@@ -420,14 +424,58 @@ public final class ProgramTranslator implements TranslationContext {
                     alphabets.put(a.alphabetName().getText().toUpperCase(Locale.ROOT), seq);
                 }
                 continue;
-            } else if (clause.environmentSwitchNameClause() != null
-                    && clause.environmentSwitchNameClause().environmentSwitchNameSpecialNamesStatusPhrase() == null) {
+            } else if (clause.environmentSwitchNameClause() != null && clause.environmentSwitchNameClause().environmentName() != null) {
                 var sw = clause.environmentSwitchNameClause();
-                devices.put(sw.mnemonicName().getText().toUpperCase(Locale.ROOT), sw.environmentName().getText().toUpperCase(Locale.ROOT));
+                String env = sw.environmentName().getText().toUpperCase(Locale.ROOT);
+                String mnemonic = sw.mnemonicName().getText().toUpperCase(Locale.ROOT);
+                Integer n = switchNumber(env);
+                var status = sw.environmentSwitchNameSpecialNamesStatusPhrase();
+                if (status != null && n == null) {
+                    dataDecision(clause, "ENVIRONMENT", "ON / OFF STATUS of " + env + " (only SWITCH-0 .. SWITCH-36 are switches)");
+                    continue;
+                }
+                devices.put(mnemonic, env);
+                if (n != null) {
+                    switches.put(mnemonic, n);
+                    Boolean on = null;
+                    for (var child : status == null ? List.<org.antlr.v4.runtime.tree.ParseTree>of() : status.children) {
+                        if (child instanceof org.antlr.v4.runtime.tree.TerminalNode t && (t.getSymbol().getType() == CobolParser.ON
+                                || t.getSymbol().getType() == CobolParser.OFF)) {
+                            on = t.getSymbol().getType() == CobolParser.ON;
+                        } else if (child instanceof CobolParser.ConditionContext cond) {
+                            switchConditions.put(cond.getText().toUpperCase(Locale.ROOT), Map.entry(n, on));
+                        }
+                    }
+                }
             } else {
                 dataDecision(clause, "ENVIRONMENT", "SPECIAL-NAMES clause " + clause.getText() + " is not supported");
             }
         }
+    }
+
+    /** The number of a GnuCOBOL switch name, SWITCH-0 .. SWITCH-36, or null. */
+    private static Integer switchNumber(String environmentName) {
+        var m = java.util.regex.Pattern.compile("SWITCH-(\\d{1,2})").matcher(environmentName);
+        if (!m.matches() || Integer.parseInt(m.group(1)) > 36) {
+            return null;
+        }
+        return Integer.parseInt(m.group(1));
+    }
+
+    @Override
+    public java.util.OptionalInt switchNumberOf(String mnemonic) {
+        Integer n = switches.get(mnemonic.toUpperCase(Locale.ROOT));
+        return n == null ? java.util.OptionalInt.empty() : java.util.OptionalInt.of(n);
+    }
+
+    @Override
+    public java.util.Optional<Expression> switchCondition(String name) {
+        var sw = switchConditions.get(name.toUpperCase(Locale.ROOT));
+        if (sw == null) {
+            return java.util.Optional.empty();
+        }
+        Expression on = staticCall("Switches", "get", integer(sw.getKey()));
+        return java.util.Optional.of(sw.getValue() ? on : new UnaryExpr(on, UnaryExpr.Operator.LOGICAL_COMPLEMENT));
     }
 
     private void objectComputer(CobolParser.ObjectComputerParagraphContext ctx) {
@@ -4109,6 +4157,10 @@ public final class ProgramTranslator implements TranslationContext {
             case CLASS_CONDITION -> classCondition(sc.getClassCondition());
             case CONDITION_NAME_REFERENCE -> {
                 ConditionNameReference ref = sc.getConditionNameReference();
+                var sw = switchCondition(ref.getCtx().getText());
+                if (sw.isPresent()) {
+                    yield sw.get();
+                }
                 Operand.Field f = conditionReference(ref);
                 yield conditionName(f, ref.getCtx());
             }

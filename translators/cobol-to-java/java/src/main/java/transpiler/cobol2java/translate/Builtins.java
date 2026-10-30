@@ -161,6 +161,7 @@ public final class Builtins implements MappingRegistry.Catalog {
                 "MOVE into a group item: the sending bytes as alphanumeric data, space-padded or cut", Builtins::moveToGroup));
         register(Handler.of("initialize", "INITIALIZE",
                 "INITIALIZE [WITH FILLER] [ALL TO VALUE] [REPLACING ...] [THEN TO DEFAULT] item by item", Builtins::initialize));
+        register(Handler.of("set_switch", "SET", "SET switch-name TO ON / OFF (SPECIAL-NAMES SWITCH-0 .. SWITCH-36)", Builtins::setSwitch));
         register(Handler.of("set_index", "SET", "SET index TO / UP BY / DOWN BY, SET item TO index", Builtins::setIndex));
         register(Handler.of("search", "SEARCH", "Serial SEARCH [VARYING] with AT END and WHEN", Builtins::search));
         register(Handler.of("search_all", "SEARCH",
@@ -971,6 +972,33 @@ public final class Builtins implements MappingRegistry.Catalog {
         return out;
     }
 
+    /** SET switch TO ON / OFF: libcob's cob_set_switch on the SWITCH-n the mnemonic name stands for. */
+    private static List<Statement> setSwitch(OpUnit u, TranslationContext c) throws HandlerException {
+        SetStatement set = (SetStatement) u.statement();
+        if (set.getSetType() != SetStatement.SetType.TO) {
+            throw HandlerException.notApplicable("SET ... UP / DOWN BY is not a switch SET");
+        }
+        List<Statement> out = new ArrayList<>();
+        for (var setTo : set.getSetTos()) {
+            if (setTo.getValues().size() != 1) {
+                throw HandlerException.unsupported("SET with several values is not supported");
+            }
+            var type = setTo.getValues().getFirst().getValueType();
+            if (type != io.proleap.cobol.asg.metamodel.procedure.set.Value.ValueType.ON
+                    && type != io.proleap.cobol.asg.metamodel.procedure.set.Value.ValueType.OFF) {
+                throw HandlerException.notApplicable("SET ... TO a value other than ON / OFF");
+            }
+            boolean on = type == io.proleap.cobol.asg.metamodel.procedure.set.Value.ValueType.ON;
+            for (var to : setTo.getTos()) {
+                String name = to.getToCall().getCtx().getText();
+                int n = c.switchNumberOf(name).orElseThrow(() -> HandlerException.unsupported(
+                        "SET " + name + " TO ON / OFF: not a mnemonic name of SWITCH-0 .. SWITCH-36"));
+                out.add(stmt(staticCall("Switches", "set", integer(n), bool(on))));
+            }
+        }
+        return out;
+    }
+
     /** TRUE / FALSE as a value statement, or null. */
     static Boolean booleanValue(ValueStmt v) {
         if (v instanceof LiteralValueStmt lit && lit.getLiteral().getLiteralType() == Literal.LiteralType.BOOLEAN) {
@@ -1005,6 +1033,10 @@ public final class Builtins implements MappingRegistry.Catalog {
         if (v instanceof ConditionValueStmt cond) {
             return new Subject(null, null, c.condition(cond));
         }
+        var sw = c.switchCondition(v.getCtx().getText());
+        if (sw.isPresent()) {
+            return new Subject(null, null, sw.get());
+        }
         Operand o = c.operand(v);
         if (o instanceof Operand.Field f && f.item().isCondition()) {
             return new Subject(null, null, c.conditionName(f, where));
@@ -1023,6 +1055,10 @@ public final class Builtins implements MappingRegistry.Catalog {
                 if (literal != null && object.getThrough() == null) {
                     // ProLeap parses WHEN TRUE / FALSE as a value.
                     yield booleanObject(subject, literal, where);
+                }
+                var sw = c.switchCondition(object.getValue().getValueStmt().getCtx().getText());
+                if (sw.isPresent() && subject.value() == null && subject.bool() != null && object.getThrough() == null) {
+                    yield subject.bool() ? sw.get() : not(sw.get());
                 }
                 Operand value = c.operand(object.getValue().getValueStmt());
                 if (subject.value() == null) {

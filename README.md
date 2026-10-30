@@ -177,7 +177,7 @@ equivalence fixtures.
 | ✅ | Level 88 (values, `THRU`, `WHEN SET TO FALSE`) on elementary items and groups; `SET cond TO TRUE / FALSE` | a group's values are nonnumeric literals or figuratives |
 | ✅ | Level 66 `RENAMES [THRU]`, the `TALLY` register | RENAMES of a single COMP / COMP-3 item is a decision (GnuCOBOL 3.2 reads it as DISPLAY) |
 | ✅ | Figuratives ZERO, SPACE, QUOTE, HIGH-/LOW-VALUE (need `Dialect.encoding`), `ALL "lit"` | |
-| ✅ | Identification paragraphs, SOURCE-/OBJECT-COMPUTER, SPECIAL-NAMES `DECIMAL-POINT IS COMMA`, `CLASS`, `ALPHABET`, mnemonic names | other clauses are decisions |
+| ✅ | Identification paragraphs, SOURCE-/OBJECT-COMPUTER, SPECIAL-NAMES `DECIMAL-POINT IS COMMA`, `CLASS`, `ALPHABET`, mnemonic names, `SWITCH-n … ON / OFF STATUS` with `SET switch TO ON / OFF` | switches start from `COB_SWITCH_n`; other clauses are decisions |
 | ✅ | `MOVE` (alphanumeric pad/truncate; numeric decimal alignment, high-/low-order truncation, sign drop; integer numeric → alphanumeric digits; alphanumeric → numeric as libcob converts it; `MOVE ALL`; figurative ZERO/SPACE) | per receiver |
 | ✅ | `ADD`, `SUBTRACT`, `MULTIPLY`, `DIVIDE` (TO/FROM/BY/INTO/GIVING), `ROUNDED`, `[NOT] ON SIZE ERROR` | exact `BigDecimal`; divide by zero is a size error |
 | ✅ | `COMPUTE` with `+ - * /`, integer `**`, unary minus, parentheses | GnuCOBOL 3.2 quotient scaling, checked by a dense fixture; non-integer or negative exponents are decisions |
