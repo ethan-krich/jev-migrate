@@ -213,7 +213,7 @@ the supported subset in the README and
 | DISPLAY | `UPON` printer or other devices (`missing_target_api`), AT / exception phrases |
 | EXHIBIT | `CHANGED` (`missing_mapping`; GnuCOBOL 3.2 does not implement it) |
 | IF, EVALUATE | nested parenthesised abbreviations, WHEN objects that do not match the subjects |
-| PERFORM | overlapping or recursive ranges, a PERFORM inside its own range, TIMES of a non-integer, `WITH TEST AFTER VARYING … AFTER` |
+| PERFORM | overlapping or recursive ranges, a PERFORM inside its own range, TIMES of a non-integer (invalid COBOL: cobc rejects it) |
 | GO TO, ALTER | GO TO out of a PERFORMed range, `GO TO.` with no target, ALTER of a paragraph that holds more than a GO TO |
 | STOP, GOBACK, EXIT, CONTINUE | `STOP literal` (`missing_target_api`), `STOP RUN GIVING`, exits that leave a PERFORMed range |
 | CALL | `RETURNING` / `GIVING`, `BY VALUE`, USING items whose number or sizes differ from the callee's, a CALL of the program itself, both ON OVERFLOW and ON EXCEPTION, a path or system routine with no matching program |

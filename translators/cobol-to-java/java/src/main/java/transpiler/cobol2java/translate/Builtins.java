@@ -1107,7 +1107,7 @@ public final class Builtins implements MappingRegistry.Catalog {
                 boolean integral = times instanceof Operand.NumericLiteral n && n.isInteger()
                         || times instanceof Operand.Field f && f.integer();
                 if (!integral) {
-                    throw HandlerException.unsupported("PERFORM ... TIMES requires an integer literal or integer item");
+                    throw HandlerException.unsupported("PERFORM ... TIMES of a non-integer is invalid COBOL (cobc rejects it)");
                 }
                 String i = c.fresh("i");
                 String n = c.fresh("times");
@@ -1127,13 +1127,10 @@ public final class Builtins implements MappingRegistry.Catalog {
             case VARYING -> {
                 var varying = type.getVarying();
                 if (!varying.getVaryingClause().getAfters().isEmpty()) {
-                    if (testAfter(varying.getTestClause())) {
-                        throw HandlerException.unsupported("PERFORM WITH TEST AFTER VARYING ... AFTER is not supported");
-                    }
                     List<VaryingPhrase> phrases = new ArrayList<>();
                     phrases.add(varying.getVaryingClause().getVaryingPhrase());
                     varying.getVaryingClause().getAfters().forEach(a -> phrases.add(a.getVaryingPhrase()));
-                    yield varyingAfter(phrases, body, c);
+                    yield testAfter(varying.getTestClause()) ? varyingAfterTestAfter(phrases, body, c) : varyingAfter(phrases, body, c);
                 }
                 VaryingPhrase phrase = varying.getVaryingClause().getVaryingPhrase();
                 Operand var = c.operand(phrase.getVaryingValueStmt());
@@ -1221,6 +1218,33 @@ public final class Builtins implements MappingRegistry.Catalog {
             loop = new WhileStmt(not(parts.get(k).until()), levelBody);
         }
         out.add(loop);
+        return out;
+    }
+
+    /**
+     * WITH TEST AFTER VARYING ... AFTER ...: every variable starts at its FROM and the body runs;
+     * then the innermost level whose condition is false steps, and every level inside it restarts
+     * from its FROM. When all conditions hold, the PERFORM ends.
+     */
+    private static List<Statement> varyingAfterTestAfter(List<VaryingPhrase> phrases, BlockStmt body, TranslationContext c)
+            throws HandlerException {
+        List<Varying> parts = new ArrayList<>();
+        for (VaryingPhrase p : phrases) {
+            parts.add(varyingParts(p, c));
+        }
+        List<Statement> out = new ArrayList<>();
+        parts.forEach(v -> out.add(v.init()));
+        Statement next = new BreakStmt();
+        for (int k = 0; k < parts.size(); k++) {
+            BlockStmt step = new BlockStmt(NodeList.nodeList(parts.get(k).step().clone()));
+            for (int j = k + 1; j < parts.size(); j++) {
+                step.addStatement(parts.get(j).init().clone());
+            }
+            next = new IfStmt(not(parts.get(k).until()), step, next);
+        }
+        // Not a clone: pending decisions hold references to placeholders inside body.
+        body.addStatement(next);
+        out.add(new WhileStmt(bool(true), body));
         return out;
     }
 
