@@ -2571,7 +2571,28 @@ public final class Builtins implements MappingRegistry.Catalog {
         return stmt(thisCall(c.procedureMethod(from)));
     }
 
+    /**
+     * The sequence of a SORT / MERGE COLLATING SEQUENCE phrase (one alphabet, NATIVE / STANDARD-1 /
+     * ASCII or EBCDIC), or null without the phrase.
+     */
+    private static String collating(List<io.proleap.cobol.CobolParser.AlphabetNameContext> names, Object alphanumeric, Object national,
+            String verb, TranslationContext c) throws HandlerException {
+        if (names == null) {
+            return null;
+        }
+        if (names.size() != 1 || alphanumeric != null || national != null) {
+            throw HandlerException.unsupported(verb + " COLLATING SEQUENCE with several alphabets or FOR ALPHANUMERIC / NATIONAL");
+        }
+        String name = names.getFirst().getText();
+        return c.alphabet(name).orElseThrow(() -> HandlerException.unsupported(verb + " COLLATING SEQUENCE " + name
+                + ": only alphabets declared NATIVE, STANDARD-1, ASCII or EBCDIC are supported"));
+    }
+
     private static List<Statement> sortKeys(Expression sortFile, List<?> onKeys, TranslationContext c) throws HandlerException {
+        return sortKeys(sortFile, onKeys, null, c);
+    }
+
+    private static List<Statement> sortKeys(Expression sortFile, List<?> onKeys, String collating, TranslationContext c) throws HandlerException {
         List<Statement> out = new ArrayList<>();
         out.add(stmt(call(sortFile, "begin")));
         for (Object k : onKeys) {
@@ -2586,7 +2607,7 @@ public final class Builtins implements MappingRegistry.Catalog {
                 calls = mk.getKeyCalls();
             }
             for (Call key : calls) {
-                out.add(stmt(call(sortFile.clone(), "key", c.sortKey(c.dataItem(key), key.getCtx()), bool(ascending))));
+                out.add(stmt(call(sortFile.clone(), "key", c.sortKey(c.dataItem(key), key.getCtx(), collating), bool(ascending))));
             }
         }
         return out;
@@ -2600,10 +2621,14 @@ public final class Builtins implements MappingRegistry.Catalog {
         return name(f.javaName());
     }
 
+    /** A USING / GIVING file: sequential, or RELATIVE / INDEXED read and written in their order (not ACCESS RANDOM). */
     private static Expression plainFile(Call call, TranslationContext c) throws HandlerException {
         var f = c.file(call);
-        if (f.sort() || f.keyed()) {
-            throw HandlerException.unsupported(call.getName() + " is a " + f.organization() + " file (USING / GIVING take sequential files)");
+        if (f.sort()) {
+            throw HandlerException.unsupported(call.getName() + " is an SD file");
+        }
+        if (f.keyed() && f.access() == TranslationContext.Access.RANDOM) {
+            throw HandlerException.unsupported(call.getName() + ": USING / GIVING of a " + f.organization() + " file in ACCESS RANDOM");
         }
         return name(f.javaName());
     }
@@ -2615,11 +2640,11 @@ public final class Builtins implements MappingRegistry.Catalog {
      */
     private static List<Statement> sort(OpUnit u, TranslationContext c) throws HandlerException {
         var s = (io.proleap.cobol.asg.metamodel.procedure.sort.SortStatement) u.statement();
-        if (s.getCollatingSequence() != null) {
-            throw HandlerException.unsupported("SORT ... COLLATING SEQUENCE is not supported");
-        }
+        var phrase = ((io.proleap.cobol.CobolParser.SortStatementContext) s.getCtx()).sortCollatingSequencePhrase();
+        String collating = phrase == null ? null : collating(phrase.alphabetName(), phrase.sortCollatingAlphanumeric(),
+                phrase.sortCollatingNational(), "SORT", c);
         Expression sf = sortFile(s.getFileCall(), c);
-        List<Statement> out = new ArrayList<>(sortKeys(sf, s.getOnKeys(), c));
+        List<Statement> out = new ArrayList<>(sortKeys(sf, s.getOnKeys(), collating, c));
         if (s.getInputProcedure() != null) {
             var p = s.getInputProcedure();
             out.add(performProcedure(p.getProcedureCall(), p.getInputThrough() == null ? null : p.getInputThrough().getProcedureCall(), c));
@@ -2644,19 +2669,20 @@ public final class Builtins implements MappingRegistry.Catalog {
             out.add(performProcedure(procedure, thru, c));
             return;
         }
-        if (givings.size() != 1) {
-            throw HandlerException.unsupported("GIVING more than one file is not supported");
+        NodeList<Expression> files = new NodeList<>();
+        for (Call g : givings) {
+            files.add(plainFile(g, c));
         }
-        out.add(stmt(call(sf.clone(), "giving", plainFile(givings.getFirst(), c))));
+        out.add(stmt(new com.github.javaparser.ast.expr.MethodCallExpr(sf.clone(), "giving", files)));
     }
 
     private static List<Statement> merge(OpUnit u, TranslationContext c) throws HandlerException {
         var m = (io.proleap.cobol.asg.metamodel.procedure.merge.MergeStatement) u.statement();
-        if (m.getCollatingSequencePhrase() != null) {
-            throw HandlerException.unsupported("MERGE ... COLLATING SEQUENCE is not supported");
-        }
+        var phrase = ((io.proleap.cobol.CobolParser.MergeStatementContext) m.getCtx()).mergeCollatingSequencePhrase();
+        String collating = phrase == null ? null : collating(phrase.alphabetName(), phrase.mergeCollatingAlphanumeric(),
+                phrase.mergeCollatingNational(), "MERGE", c);
         Expression sf = sortFile(m.getFileCall(), c);
-        List<Statement> out = new ArrayList<>(sortKeys(sf, m.getOnKeys(), c));
+        List<Statement> out = new ArrayList<>(sortKeys(sf, m.getOnKeys(), collating, c));
         NodeList<Expression> inputs = new NodeList<>();
         for (var using : m.getUsingPhrases()) {
             for (Call f : using.getFileCalls()) {

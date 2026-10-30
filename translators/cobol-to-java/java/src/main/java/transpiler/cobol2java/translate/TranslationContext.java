@@ -91,6 +91,19 @@ public interface TranslationContext {
     /** A SORT / MERGE key: a lambda reading it from a record's bytes ({@code s -> view(s).get()}). */
     Expression sortKey(DataItem key, ParserRuleContext where) throws HandlerException;
 
+    /**
+     * A SORT / MERGE key compared in {@code sequence} ({@code ascii} or {@code ebcdic}, from a
+     * COLLATING SEQUENCE phrase) instead of the program's collating sequence.
+     */
+    Expression sortKey(DataItem key, ParserRuleContext where, String sequence) throws HandlerException;
+
+    /**
+     * The collating sequence an ALPHABET name of SPECIAL-NAMES stands for: {@code ascii}
+     * (NATIVE, STANDARD-1, ASCII) or {@code ebcdic}; empty for an alphabet of literals or an
+     * unknown name.
+     */
+    java.util.Optional<String> alphabet(String name);
+
     /** The file a statement names (OPEN, CLOSE, READ). */
     FileRef file(Call fileCall) throws HandlerException;
 

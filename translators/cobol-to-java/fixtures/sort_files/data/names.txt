@@ -1,0 +1,6 @@
+delta  07 
+alpha  42 
+Zulu   07 
+bravo  13 
+1stOne 99 
+Alpha  05 

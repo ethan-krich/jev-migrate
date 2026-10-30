@@ -137,8 +137,8 @@ a handler does not cover is listed under [Unsupported](#unsupported).
 | `read_file` | READ | `file.read(…)` returning a `boolean` for AT END / INVALID KEY | `READ [NEXT / PREVIOUS] [INTO] [AT END] [NOT AT END]`, and for RELATIVE / INDEXED files in ACCESS RANDOM / DYNAMIC `READ [KEY IS key] [INVALID KEY] [NOT INVALID KEY]`; GnuCOBOL FILE STATUS values (00, 06 long line split, 10, 14, 21–24, 35, 41, 42, 46, 47, …); an unhandled error status ends the run unit (status 1) unless the file has FILE STATUS; the NOT phrase runs only after a successful READ |
 | `write_file`, `rewrite_file` | WRITE, REWRITE | `file.write / rewrite` | `[FROM]`, `[NOT] INVALID KEY` for RELATIVE / INDEXED files; LINE SEQUENTIAL strips trailing spaces and refuses control characters (status 71); `BEFORE / AFTER ADVANCING n LINES / PAGE / channel mnemonic` writes GnuCOBOL's newline / carriage return / form feed bytes (a file last written AFTER ADVANCING gets a newline at CLOSE); with `LINAGE` (files become LINE SEQUENTIAL, as in GnuCOBOL) pages are laid out with `LINAGE-COUNTER`, footing, top and bottom lines, and `[NOT] AT END-OF-PAGE` runs at the footing or page overflow |
 | `delete_file`, `start_file` | DELETE, START | `RelativeFile`, `IndexedFile` | RELATIVE / INDEXED files: `DELETE file [RECORD]`, `START file [KEY IS = > >= < <= NOT < NOT > item]` (an INDEXED key or a leading part of one), `[NOT] INVALID KEY` |
-| `sort` | SORT | `SortFile` | a stable sort with or without `WITH DUPLICATES IN ORDER` (GnuCOBOL 3.2 returns equal keys in release order either way); `USING` / `INPUT PROCEDURE`, `GIVING` / `OUTPUT PROCEDURE` |
-| `merge` | MERGE | `SortFile` | `USING` files in key order (ties in file order), `GIVING` / `OUTPUT PROCEDURE` |
+| `sort` | SORT | `SortFile` | a stable sort with or without `WITH DUPLICATES IN ORDER` (GnuCOBOL 3.2 returns equal keys in release order either way); `USING` / `INPUT PROCEDURE`, `GIVING` (several files: each record written to each in turn) / `OUTPUT PROCEDURE`; USING / GIVING files may be RELATIVE or INDEXED (sequential or dynamic access); `COLLATING SEQUENCE` of an alphabet declared `NATIVE`, `STANDARD-1`, `ASCII` or `EBCDIC` orders alphanumeric keys |
+| `merge` | MERGE | `SortFile` | as libcob: the `USING` files' records sorted stably (files in key order merge, ties in file order), `GIVING` / `OUTPUT PROCEDURE`, `COLLATING SEQUENCE` as for SORT |
 | `release`, `return_record` | RELEASE, RETURN | `SortFile` | `RELEASE rec [FROM]`, `RETURN file [INTO] AT END` |
 
 The running worker announces this list (with facts) in its `ready` event. A test keeps it equal
@@ -230,7 +230,7 @@ the supported subset in the README and
 | INITIALIZE, STRING, UNSTRING, INSPECT | INITIALIZE of RENAMES groups, `TO VALUE` of OCCURS DEPENDING ON groups (GnuCOBOL 3.2 sets occurrences beyond the count unevenly) and groups with `OCCURS 0 TO`; `STRING … FOR`; UNSTRING into edited items; INSPECT REPLACING with lengths that differ |
 | SEARCH | a table without INDEXED BY; SEARCH ALL without KEY, or WHEN other than `key = value` on the first key |
 | OPEN, CLOSE, READ, WRITE, REWRITE, DELETE, START | LOCK phrases, `NO REWIND`, I-O of LINE SEQUENTIAL, READ PREVIOUS of a sequential file, REWRITE of an INDEXED file with alternate keys in ACCESS SEQUENTIAL (GnuCOBOL's result depends on its internal state) |
-| SORT, MERGE, RELEASE, RETURN | `COLLATING SEQUENCE` phrase, GIVING several files, USING / GIVING of RELATIVE or INDEXED files |
+| SORT, MERGE, RELEASE, RETURN | `COLLATING SEQUENCE` of an alphabet of literals or several alphabets, USING / GIVING of a RELATIVE or INDEXED file in ACCESS RANDOM |
 | ENABLE, DISABLE, SEND, RECEIVE, PURGE, GENERATE, INITIATE, TERMINATE, EXEC SQL / CICS / SQLIMS | everything: no handler (`missing_mapping`) |
 
 Operands are checked the same way in every statement: floating-point literals and functions

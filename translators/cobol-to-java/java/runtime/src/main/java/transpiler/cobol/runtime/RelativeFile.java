@@ -443,4 +443,15 @@ public final class RelativeFile extends FileBase {
         file.write(b);
         position += b.length;
     }
+
+    @Override
+    boolean sortRead() {
+        return readNext(false, true) || !succeeded();
+    }
+
+    @Override
+    void sortWrite(String data) {
+        record.set(data);
+        write(record, true);
+    }
 }

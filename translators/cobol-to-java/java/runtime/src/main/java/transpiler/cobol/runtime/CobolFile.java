@@ -372,6 +372,16 @@ public final class CobolFile extends FileBase {
         write(record);
     }
 
+    @Override
+    boolean sortRead() {
+        return read(true);
+    }
+
+    @Override
+    void sortWrite(String data) {
+        writeRecord(data);
+    }
+
     /** REWRITE of the record last read (SEQUENTIAL files opened I-O). */
     public void rewrite(AlphanumericField data) {
         if (mode != IO) {

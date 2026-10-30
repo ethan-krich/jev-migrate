@@ -9,8 +9,8 @@ import java.util.function.Function;
  * An SD sort file: SORT collects records (USING files or RELEASE in an INPUT PROCEDURE), orders
  * them by their keys and hands them out (GIVING files or RETURN in an OUTPUT PROCEDURE). The
  * sort is stable, so records with equal keys keep their release order, as in GnuCOBOL (with or
- * without WITH DUPLICATES IN ORDER). MERGE combines files already in key order, taking equal
- * keys in the order the files are named.
+ * without WITH DUPLICATES IN ORDER). MERGE, as in libcob, sorts the records of all its files
+ * stably, which for files in key order takes equal keys in the order the files are named.
  */
 public final class SortFile {
     private final String name;
@@ -47,9 +47,9 @@ public final class SortFile {
     }
 
     /** USING: every record of {@code file}, which is opened INPUT for this and closed after. */
-    public void using(CobolFile file) {
+    public void using(FileBase file) {
         file.open(CobolFile.INPUT);
-        while (!file.read(true)) {
+        while (!file.sortRead()) {
             record.set(file.data());
             release();
         }
@@ -75,35 +75,17 @@ public final class SortFile {
         next = 0;
     }
 
-    /** MERGE ... USING: the files' records merged by key; equal keys come in the order of {@code files}. */
-    public void merge(CobolFile... files) {
-        List<List<byte[]>> inputs = new ArrayList<>();
-        for (CobolFile f : files) {
-            records = new ArrayList<>();
+    /**
+     * MERGE ... USING: as libcob does, the records of every file (in the order the files are
+     * named) are released and sorted, stably. For files in key order that is the merge; equal keys
+     * come in the order of {@code files}; files out of order come out sorted all the same.
+     */
+    public void merge(FileBase... files) {
+        records = new ArrayList<>();
+        for (FileBase f : files) {
             using(f);
-            inputs.add(records);
         }
-        List<byte[]> merged = new ArrayList<>();
-        int[] at = new int[inputs.size()];
-        while (true) {
-            int best = -1;
-            Comparable<?>[] bestKeys = null;
-            for (int i = 0; i < inputs.size(); i++) {
-                if (at[i] < inputs.get(i).size()) {
-                    Comparable<?>[] k = keysOf(inputs.get(i).get(at[i]));
-                    if (best < 0 || compare(k, bestKeys) < 0) {
-                        best = i;
-                        bestKeys = k;
-                    }
-                }
-            }
-            if (best < 0) {
-                break;
-            }
-            merged.add(inputs.get(best).get(at[best]++));
-        }
-        records = merged;
-        next = 0;
+        sort();
     }
 
     /** RETURN: the next record into the record area; true at end (which ends the run unit without AT END). */
@@ -120,12 +102,19 @@ public final class SortFile {
     }
 
     /** GIVING: the remaining records into {@code file}, which is opened OUTPUT for this and closed after. */
-    public void giving(CobolFile file) {
-        file.open(CobolFile.OUTPUT);
-        while (!returnRecord(true)) {
-            file.writeRecord(record.get());
+    /** GIVING: every GIVING file is opened OUTPUT, each record is written to each in turn, then all are closed (libcob). */
+    public void giving(FileBase... files) {
+        for (FileBase f : files) {
+            f.open(CobolFile.OUTPUT);
         }
-        file.close();
+        while (!returnRecord(true)) {
+            for (FileBase f : files) {
+                f.sortWrite(record.get());
+            }
+        }
+        for (FileBase f : files) {
+            f.close();
+        }
     }
 
     private Comparable<?>[] keysOf(byte[] r) {

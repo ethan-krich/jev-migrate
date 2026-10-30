@@ -679,4 +679,15 @@ public final class IndexedFile extends FileBase {
         b.put(bytes);
         file.write(b.array());
     }
+
+    @Override
+    boolean sortRead() {
+        return readNext(false, true) || !succeeded();
+    }
+
+    @Override
+    void sortWrite(String data) {
+        record.set(data);
+        write(record, true);
+    }
 }

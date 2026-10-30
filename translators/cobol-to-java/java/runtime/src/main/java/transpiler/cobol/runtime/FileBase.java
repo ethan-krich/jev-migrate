@@ -7,7 +7,7 @@ package transpiler.cobol.runtime;
  * the mode of its last OPEN); otherwise it ends the run unit with status 1, unless the file has a
  * FILE STATUS item.
  */
-abstract class FileBase {
+public abstract class FileBase {
     static final int CLOSED = -1;
     /** Files open in the run unit, closed implicitly when it ends (as GnuCOBOL does at STOP RUN). */
     private static final java.util.Set<FileBase> OPEN = new java.util.LinkedHashSet<>();
@@ -41,6 +41,25 @@ abstract class FileBase {
     public void onError(java.util.function.IntPredicate procedure) {
         this.errorProcedure = procedure;
     }
+
+    public abstract void open(int openMode);
+
+    public abstract void close();
+
+    /** The record last read. */
+    public abstract String data();
+
+    /**
+     * SORT / MERGE USING: the next record in the file's order (libcob's cob_read_next); true when
+     * there is none. An unsuccessful status ends the input without running USE procedures.
+     */
+    abstract boolean sortRead();
+
+    /**
+     * SORT / MERGE GIVING: WRITE of {@code data} moved into the record area (libcob's cob_write);
+     * an unsuccessful status is recorded without running USE procedures or ending the run unit.
+     */
+    abstract void sortWrite(String data);
 
     /** The implicit CLOSE of every file still open when the run unit ends (no FILE STATUS is set). */
     static void closeAll() {

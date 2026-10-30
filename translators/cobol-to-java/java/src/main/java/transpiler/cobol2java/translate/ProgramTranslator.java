@@ -294,6 +294,8 @@ public final class ProgramTranslator implements TranslationContext {
     private boolean decimalComma;
     private final Map<String, String> devices = new HashMap<>();
     private final Map<String, CobolParser.ClassClauseContext> classes = new HashMap<>();
+    /** ALPHABET names of SPECIAL-NAMES: ascii, ebcdic, or other (literals, another alphabet). */
+    private final Map<String, String> alphabets = new HashMap<>();
     // Procedure structure and jumps
     private final Map<Scope, List<ParserRuleContext>> nextSentences = new IdentityHashMap<>();
     private final Set<ParserRuleContext> placedNextSentences = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -409,7 +411,14 @@ public final class ProgramTranslator implements TranslationContext {
             } else if (clause.classClause() != null) {
                 classes.put(clause.classClause().className().getText().toUpperCase(Locale.ROOT), clause.classClause());
             } else if (clause.alphabetClause() != null) {
-                // An alphabet only matters where it is used (PROGRAM COLLATING SEQUENCE, CODE-SET), which are decisions.
+                // An alphabet only matters where it is used: SORT / MERGE COLLATING SEQUENCE (for the
+                // native and EBCDIC sequences); PROGRAM COLLATING SEQUENCE and CODE-SET are decisions.
+                var a = clause.alphabetClause().alphabetClauseFormat1();
+                if (a != null) {
+                    String seq = a.EBCDIC() != null ? "ebcdic"
+                            : a.ASCII() != null || a.STANDARD_1() != null || a.NATIVE() != null ? "ascii" : "other";
+                    alphabets.put(a.alphabetName().getText().toUpperCase(Locale.ROOT), seq);
+                }
                 continue;
             } else if (clause.environmentSwitchNameClause() != null
                     && clause.environmentSwitchNameClause().environmentSwitchNameSpecialNamesStatusPhrase() == null) {
@@ -4482,11 +4491,23 @@ public final class ProgramTranslator implements TranslationContext {
 
     @Override
     public Expression sortKey(DataItem key, ParserRuleContext where) throws HandlerException {
+        return sortKey(key, where, null);
+    }
+
+    @Override
+    public java.util.Optional<String> alphabet(String name) {
+        String seq = alphabets.get(name.toUpperCase(Locale.ROOT));
+        return seq == null || seq.equals("other") ? java.util.Optional.empty() : java.util.Optional.of(seq);
+    }
+
+    @Override
+    public Expression sortKey(DataItem key, ParserRuleContext where, String collating) throws HandlerException {
         if (!key.fileRecord() || key.hasAccessor() || key.kind() == DataItem.Kind.UNSUPPORTED || key.isCondition()) {
             throw HandlerException.unsupported("KEY " + key.cobolName() + " must be an item of the sort record outside any table");
         }
         boolean numeric = key.isNumeric();
-        String sequence = numeric ? "ascii" : requireCollatingSequence(RelationalOperatorType.GREATER, where);
+        // Numeric keys compare by value; alphanumeric ones in the COLLATING SEQUENCE, else the program's.
+        String sequence = numeric ? "ascii" : collating != null ? collating : requireCollatingSequence(RelationalOperatorType.GREATER, where);
         Expression view = key.isGroup() ? create("AlphanumericField", name("s"), integer(key.offset()), integer(key.size()))
                 : viewConstructor(key, name("s"), integer(key.offset()));
         Expression value = call(view, "get");
