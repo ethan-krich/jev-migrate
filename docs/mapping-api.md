@@ -119,7 +119,7 @@ a handler does not cover is listed under [Unsupported](#unsupported).
 | `exhibit` | EXHIBIT, `changed` false | `Display` | `[NAMED]`: `NAME = value` with the name as written |
 | `accept_stdin` | ACCEPT, `from` stdin / device | `Accept.line` | one stdin line into a PIC X item (spaces at end of input); `FROM SYSIN / CONSOLE` |
 | `accept_environment` | ACCEPT, `from` environment / argument / command line | `Environment` | `FROM ENVIRONMENT-VALUE` (the variable named by `DISPLAY ... UPON ENVIRONMENT-NAME`), `FROM ENVIRONMENT "name"`, `ARGUMENT-NUMBER`, `ARGUMENT-VALUE`, `COMMAND-LINE` into alphanumeric items (ARGUMENT-NUMBER into numeric ones); an unset variable moves spaces and, like a missing argument, raises `ON EXCEPTION`; `DISPLAY ... UPON ENVIRONMENT-VALUE` sets a variable for the rest of the run |
-| `accept_datetime` | ACCEPT, `from` a date or time | `Clock` | `FROM DATE [YYYYMMDD]`, `DAY [YYYYDDD]`, `DAY-OF-WEEK`, `TIME` (`COB_CURRENT_DATE` fixes it, as in GnuCOBOL) |
+| `accept_datetime` | ACCEPT, `from` a date or time | `Clock` | `FROM DATE [YYYYMMDD]`, `DAY [YYYYDDD]`, `DAY-OF-WEEK`, `TIME`, `MICROSECOND-TIME` (`COB_CURRENT_DATE` fixes it, as in GnuCOBOL; without a fraction of a second the microseconds stay those of the system clock) |
 
 ### Strings
 
@@ -193,7 +193,7 @@ these stay pending. With `default_mappings()` there are three kinds:
 | A handler choice | only after the project changes the rules: a removed rule or `strategy="unresolved"` (`missing_mapping`), rules that tie (`ambiguous_mapping`), or a rule whose handler does not apply (`invalid_mapping`) | the verb's handlers that generate for that statement, e.g. the other MOVE handlers, or `compute` (`+ - *` only) for COMPUTE |
 
 Every default rule covers every fact value of its verb, except SET `on_off`, ACCEPT
-`escape_key` / `message_count` / `other_date` and EXHIBIT `changed`. No handler generates those,
+`escape_key` / `message_count` / `other_date` (`TODAYS-DATE`, `YEAR`, `TIMER`, …: other dialects, which cobc rejects) and EXHIBIT `changed`. No handler generates those,
 so they are [unsupported](#unsupported) rather than handler choices.
 
 A decision's [importance](#importance) tier does not change who answers it. It only sets the
@@ -308,7 +308,7 @@ Only plain JSON crosses process boundaries: no callables, AST objects or Python 
 | CANCEL | (none) |
 | SET | `form` (`true`, `false`, `to`, `on_off`, `up_by`, `down_by`) |
 | EVALUATE | `subjects`, `has_other`, `has_thru` |
-| ACCEPT | `from` (`stdin`, `device`, `environment`, `argument_number`, `argument_value`, `command_line`, `date`, `date_yyyymmdd`, `day`, `day_yyyyddd`, `day_of_week`, `time`, `other_date`, `escape_key`, `message_count`) |
+| ACCEPT | `from` (`stdin`, `device`, `environment`, `argument_number`, `argument_value`, `command_line`, `date`, `date_yyyymmdd`, `day`, `day_yyyyddd`, `day_of_week`, `time`, `microsecond_time`, `other_date`, `escape_key`, `message_count`) |
 | EXHIBIT | `named`, `changed` |
 | INITIALIZE | `replacing`, `to_value`, `with_filler`, `then_default` |
 | SEARCH | `all`, `varying`, `at_end` |

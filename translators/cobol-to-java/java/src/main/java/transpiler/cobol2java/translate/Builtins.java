@@ -120,7 +120,7 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("accept_stdin", "ACCEPT",
                 "ACCEPT an alphanumeric item from standard input (one line; spaces at end of input)", Builtins::acceptStdin));
         register(Handler.of("accept_datetime", "ACCEPT",
-                "ACCEPT FROM DATE [YYYYMMDD] / DAY [YYYYDDD] / DAY-OF-WEEK / TIME via the runtime Clock", Builtins::acceptDatetime));
+                "ACCEPT FROM DATE [YYYYMMDD] / DAY [YYYYDDD] / DAY-OF-WEEK / TIME / MICROSECOND-TIME via the runtime Clock", Builtins::acceptDatetime));
         register(Handler.of("accept_environment", "ACCEPT",
                 "ACCEPT FROM ENVIRONMENT-VALUE / ENVIRONMENT name / ARGUMENT-NUMBER / ARGUMENT-VALUE / COMMAND-LINE [ON EXCEPTION]",
                 Builtins::acceptEnvironment));
@@ -803,10 +803,14 @@ public final class Builtins implements MappingRegistry.Catalog {
     private static List<Statement> acceptDatetime(OpUnit u, TranslationContext c) throws HandlerException {
         AcceptStatement a = (AcceptStatement) u.statement();
         rejectAcceptExceptions(a);
-        if (a.getAcceptType() != AcceptStatement.AcceptType.DATE) {
-            throw HandlerException.notApplicable("not ACCEPT FROM DATE / DAY / DAY-OF-WEEK / TIME");
+        boolean micro = a.getAcceptType() == AcceptStatement.AcceptType.MNEMONIC
+                && c.device(deviceName(a.getAcceptFromMnemonicStatement())).equals("MICROSECOND-TIME");
+        String from = micro ? "microsecond_time" : Facts.acceptFrom(a);
+        if (a.getAcceptType() != AcceptStatement.AcceptType.DATE && !micro) {
+            throw HandlerException.notApplicable("not ACCEPT FROM DATE / DAY / DAY-OF-WEEK / TIME / MICROSECOND-TIME");
         }
-        String method = switch (Facts.acceptFrom(a)) {
+        String method = switch (from) {
+            case "microsecond_time" -> "microsecondTime";
             case "date" -> "date";
             case "date_yyyymmdd" -> "dateYyyymmdd";
             case "day" -> "day";

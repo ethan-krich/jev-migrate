@@ -65,6 +65,18 @@ public final class Clock {
         return Integer.toString(now().getDayOfWeek().getValue());
     }
 
+    /**
+     * ACCEPT FROM MICROSECOND-TIME: hhmmssuuuuuu. As in GnuCOBOL, a fixed clock without a
+     * fraction of a second keeps the system clock's microseconds.
+     */
+    public static String microsecondTime() {
+        LocalDateTime system = LocalDateTime.now();
+        String fixed = System.getenv(VARIABLE);
+        LocalDateTime t = fixed == null || fixed.isEmpty() ? system : now();
+        int micros = system.getNano() / 1000;
+        return digits(t.getHour(), 2) + digits(t.getMinute(), 2) + digits(t.getSecond(), 2) + digits(micros, 6);
+    }
+
     /** ACCEPT FROM TIME: hhmmssff (hundredths). */
     public static String time() {
         String fixed = System.getenv(VARIABLE);
