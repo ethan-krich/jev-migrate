@@ -25,7 +25,7 @@ itself (operands and comparisons inside them may still use [runtime helpers](#ru
 
 | COBOL | Java |
 |---|---|
-| `IF … ELSE` | `if / else`; `AND`, `OR`, `NOT` as `&&`, `\|\|`, `!` (AND before OR); `NEXT SENTENCE` jumps to the end of the sentence |
+| `IF … ELSE` | `if / else`; `AND`, `OR`, `NOT` as `&&`, `\|\|`, `!` (AND before OR, also inside `A = (B OR C AND D)`); condition-names with subscripts test their subscripted variable; `NEXT SENTENCE` jumps to the end of the sentence |
 | `EVALUATE` | an `if / else if` chain |
 | `PERFORM p` (no GO TO / THRU / ALTER in the program) | a method call; paragraphs are methods |
 | `PERFORM … TIMES / UNTIL / VARYING`, `WITH TEST AFTER` | `for`, `while`, `do / while`, `while (true) { … break; }` |
@@ -212,7 +212,7 @@ the supported subset in the README and
 | COMPUTE | `**` with a non-integer or negative exponent, floating-point intrinsic functions |
 | DISPLAY | `UPON` printer or other devices (`missing_target_api`), AT / exception phrases |
 | EXHIBIT | `CHANGED` (`missing_mapping`; GnuCOBOL 3.2 does not implement it) |
-| IF, EVALUATE | combined comparisons mixing AND and OR, subscripted condition-names, WHEN objects that do not match the subjects |
+| IF, EVALUATE | nested parenthesised abbreviations, WHEN objects that do not match the subjects |
 | PERFORM | overlapping or recursive ranges, a PERFORM inside its own range, TIMES of a non-integer, `WITH TEST AFTER VARYING … AFTER` |
 | GO TO, ALTER | GO TO out of a PERFORMed range, `GO TO.` with no target, ALTER of a paragraph that holds more than a GO TO |
 | STOP, GOBACK, EXIT, CONTINUE | `STOP literal` (`missing_target_api`), `STOP RUN GIVING`, exits that leave a PERFORMed range |

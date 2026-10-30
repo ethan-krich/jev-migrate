@@ -898,7 +898,7 @@ public final class Builtins implements MappingRegistry.Catalog {
                 } else {
                     throw HandlerException.unsupported("SET " + cond.cobolName() + " TO FALSE needs VALUE ... WHEN SET TO FALSE");
                 }
-                Operand parent = new Operand.Field(cond.parent());
+                Operand parent = new Operand.Field(cond.parent(), f.subscripts(), null);
                 if (cond.parent().isGroup()) {
                     Expression field = c.receiving(parent);
                     out.add(v instanceof Operand.Figurative fig ? stmt(call(field, "fill", fig.isSingle() ? chr(fig.fill()) : str(fig.pattern())))
@@ -948,7 +948,7 @@ public final class Builtins implements MappingRegistry.Catalog {
         }
         Operand o = c.operand(v);
         if (o instanceof Operand.Field f && f.item().isCondition()) {
-            return new Subject(null, null, c.conditionName(f.item(), where));
+            return new Subject(null, null, c.conditionName(f, where));
         }
         return new Subject(o, null, null);
     }
@@ -969,7 +969,7 @@ public final class Builtins implements MappingRegistry.Catalog {
                 if (subject.value() == null) {
                     // TRUE / FALSE / condition subject with a condition-name object.
                     if (subject.bool() != null && value instanceof Operand.Field f && f.item().isCondition() && object.getThrough() == null) {
-                        Expression e = c.conditionName(f.item(), where);
+                        Expression e = c.conditionName(f, where);
                         yield subject.bool() ? e : not(e);
                     }
                     throw HandlerException.unsupported("WHEN " + where.getText() + " does not match a TRUE/FALSE or condition subject");

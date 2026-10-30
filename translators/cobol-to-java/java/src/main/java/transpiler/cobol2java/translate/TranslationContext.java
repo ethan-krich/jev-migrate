@@ -31,8 +31,8 @@ public interface TranslationContext {
     /** A Java boolean expression for {@code left op right} under COBOL comparison rules. */
     Expression compare(Operand left, Operand right, RelationalOperatorType op, ParserRuleContext where) throws HandlerException;
 
-    /** A Java boolean expression testing a level-88 condition-name. */
-    Expression conditionName(DataItem condition, ParserRuleContext where) throws HandlerException;
+    /** A Java boolean expression testing a level-88 condition-name (with its subscripts, if any). */
+    Expression conditionName(Operand.Field condition, ParserRuleContext where) throws HandlerException;
 
     /** The Java expression naming a data item's field (or RETURN-CODE). */
     Expression field(Operand operand) throws HandlerException;

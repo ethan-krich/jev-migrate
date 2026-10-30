@@ -1,0 +1,8 @@
+{
+  "description": "Subscripted condition-names (IF, SET TO TRUE / FALSE, EVALUATE TRUE, PERFORM UNTIL; two dimensions; index and literal subscripts) and combined comparisons mixing AND and OR",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "out_of_range": "fail"},
+  "equivalence": {"programs": ["CONDTAB.cbl"], "main_class": "fixtures.condition_tables.Condtab",
+                  "cobc_flags": ["-fec=EC-BOUND-SUBSCRIPT"]},
+  "layout": {"base_package": "fixtures.condition_tables"}
+}

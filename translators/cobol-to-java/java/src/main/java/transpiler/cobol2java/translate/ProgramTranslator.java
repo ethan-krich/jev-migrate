@@ -3606,12 +3606,39 @@ public final class ProgramTranslator implements TranslationContext {
                         rm.length() == null ? null : position(rm.length().arithmeticExpression()));
             }
         }
+        return reference(item, subscripts, refmod, ctx);
+    }
+
+    /**
+     * A subscripted condition-name: {@code IF FLAG-ON (I)}. ProLeap keeps its subscripts beside
+     * the name rather than in a table call, so they are read from the parse tree here.
+     */
+    private Operand.Field conditionReference(ConditionNameReference ref) throws HandlerException {
+        var ctx = (CobolParser.ConditionNameReferenceContext) ref.getCtx();
+        if (ctx.inFile() != null || !ctx.inMnemonic().isEmpty()) {
+            throw HandlerException.unsupported(ctx.getText() + " cannot be resolved");
+        }
+        Operand named = resolveName(ctx.conditionName().getText(), ctx.inData().stream().map(x -> x.dataName().getText()).toList(),
+                ctx.getText());
+        DataItem item = named instanceof Operand.Field f ? f.item() : null;
+        if (item == null || !item.isCondition()) {
+            throw HandlerException.unsupported(ctx.getText() + " is not a condition-name");
+        }
+        List<Operand.Subscript> subscripts = new ArrayList<>();
+        for (var group : ctx.conditionNameSubscriptReference()) {
+            for (var sc : group.subscript()) {
+                subscripts.add(subscript(sc));
+            }
+        }
+        return (Operand.Field) reference(item, subscripts, null, ctx);
+    }
+
+    /** A reference to {@code item} with its subscripts and reference modification, checked against its tables. */
+    private Operand reference(DataItem item, List<Operand.Subscript> subscripts, Operand.RefMod refmod, ParserRuleContext ctx)
+            throws HandlerException {
         List<DataItem> dims = item.dimensions();
         if (subscripts.size() != dims.size()) {
             throw HandlerException.unsupported(item.cobolName() + " needs " + dims.size() + " subscript(s), not " + subscripts.size());
-        }
-        if (item.isCondition() && !subscripts.isEmpty()) {
-            throw HandlerException.unsupported("subscripted condition-names are not supported");
         }
         for (int i = 0; i < dims.size(); i++) {
             DataItem t = dims.get(i);
@@ -3734,6 +3761,11 @@ public final class ProgramTranslator implements TranslationContext {
         }
         String name = (q.dataName() != null ? q.dataName() : q.conditionName()).getText();
         List<String> qualifiers = q.qualifiedInData().stream().map(x -> x.inData().dataName().getText()).toList();
+        return resolveName(name, qualifiers, ctx.getText());
+    }
+
+    /** The item named {@code name} within the containers {@code qualifiers} (innermost first), an index, or null. */
+    private Operand resolveName(String name, List<String> qualifiers, String text) throws HandlerException {
         DataItem found = null;
         for (DataItem item : items.values()) {
             if (!item.cobolName().equalsIgnoreCase(name)) {
@@ -3748,7 +3780,7 @@ public final class ProgramTranslator implements TranslationContext {
             if (next == qualifiers.size()) {
                 // A program's own item hides a GLOBAL one of the same name; nearer containers hide farther ones.
                 if (found != null && found.globalDepth() == item.globalDepth()) {
-                    throw HandlerException.unsupported(ctx.getText() + " is ambiguous");
+                    throw HandlerException.unsupported(text + " is ambiguous");
                 }
                 if (found == null || item.globalDepth() < found.globalDepth()) {
                     found = item;
@@ -4008,14 +4040,8 @@ public final class ProgramTranslator implements TranslationContext {
             case CLASS_CONDITION -> classCondition(sc.getClassCondition());
             case CONDITION_NAME_REFERENCE -> {
                 ConditionNameReference ref = sc.getConditionNameReference();
-                if (!ref.getConditionNameSubscriptReferences().isEmpty()) {
-                    throw HandlerException.unsupported("subscripted condition-names are not supported");
-                }
-                Operand o = operand(ref.getConditionCall());
-                if (!(o instanceof Operand.Field f) || !f.item().isCondition()) {
-                    throw HandlerException.unsupported(ref.getCtx().getText() + " is not a condition-name");
-                }
-                yield conditionName(f.item(), ref.getCtx());
+                Operand.Field f = conditionReference(ref);
+                yield conditionName(f, ref.getCtx());
             }
         };
     }
@@ -4053,8 +4079,10 @@ public final class ProgramTranslator implements TranslationContext {
     }
 
     @Override
-    public Expression conditionName(DataItem condition, ParserRuleContext where) throws HandlerException {
-        Operand parent = new Operand.Field(condition.parent());
+    public Expression conditionName(Operand.Field reference, ParserRuleContext where) throws HandlerException {
+        DataItem condition = reference.item();
+        // A condition-name is in the same tables as its conditional variable: the subscripts carry over.
+        Operand parent = new Operand.Field(condition.parent(), reference.subscripts(), null);
         Expression test = null;
         for (DataItem.ConditionValue v : condition.conditionValues()) {
             Expression one = v.thru() == null
@@ -4088,19 +4116,32 @@ public final class ProgramTranslator implements TranslationContext {
                 yield Facts.hasDirectToken(s.getCtx(), "NOT") ? new UnaryExpr(new EnclosedExpr(e), UnaryExpr.Operator.LOGICAL_COMPLEMENT) : e;
             }
             case COMBINED -> {
-                // A = (B OR C) is A = B OR A = C; the connective is the same throughout.
+                // A = (B OR C AND D) is A = B OR (A = C AND A = D): AND binds tighter, as in any condition.
                 var cc = r.getCombinedComparison();
                 Operand subject = operand(cc.getArithmeticExpression());
                 RelationalOperatorType op = cc.getOperator().getRelationalOperatorType();
-                var combined = cc.getCombinedCondition();
-                boolean and = combined.getCombinedConditionType() == io.proleap.cobol.asg.metamodel.valuestmt.relation.CombinedCondition.CombinedConditionType.AND;
-                if (Facts.hasDirectToken(combined.getCtx(), and ? "OR" : "AND")) {
-                    throw HandlerException.unsupported("combined comparison mixing AND and OR is not supported");
+                var operands = cc.getCombinedCondition().getArithmeticExpressions();
+                var combined = (CobolParser.RelationCombinedConditionContext) cc.getCombinedCondition().getCtx();
+                int next = 0;
+                List<Expression> disjuncts = new ArrayList<>();
+                Expression conjunction = null;
+                boolean or = false;
+                for (var child : combined.children) {
+                    if (child instanceof org.antlr.v4.runtime.tree.TerminalNode t) {
+                        or = t.getSymbol().getType() == CobolParser.OR;
+                        continue;
+                    }
+                    Expression one = comparison(subject, operand(operands.get(next++)), op, r.getCtx());
+                    if (conjunction != null && or) {
+                        disjuncts.add(conjunction);
+                        conjunction = null;
+                    }
+                    conjunction = conjunction == null ? one : new BinaryExpr(conjunction, one, BinaryExpr.Operator.AND);
                 }
-                Expression e = null;
-                for (var operandExpr : combined.getArithmeticExpressions()) {
-                    Expression one = comparison(subject, operand(operandExpr), op, r.getCtx());
-                    e = e == null ? one : new BinaryExpr(e, one, and ? BinaryExpr.Operator.AND : BinaryExpr.Operator.OR);
+                disjuncts.add(conjunction);
+                Expression e = disjuncts.getFirst();
+                for (int i = 1; i < disjuncts.size(); i++) {
+                    e = new BinaryExpr(e, disjuncts.get(i), BinaryExpr.Operator.OR);
                 }
                 yield new EnclosedExpr(e);
             }
