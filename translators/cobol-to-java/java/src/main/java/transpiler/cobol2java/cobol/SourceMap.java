@@ -32,14 +32,26 @@ public final class SourceMap {
 
     private final List<Expansion> expansions;
     private final boolean exact;
+    private final SourceComments comments;
 
-    private SourceMap(List<Expansion> expansions, boolean exact) {
+    private SourceMap(List<Expansion> expansions, boolean exact, SourceComments comments) {
         this.expansions = expansions;
         this.exact = exact;
+        this.comments = comments;
     }
 
     public static SourceMap identity() {
-        return new SourceMap(List.of(), true);
+        return new SourceMap(List.of(), true, SourceComments.NONE);
+    }
+
+    /** This map with the comments of the original source. */
+    SourceMap withComments(SourceComments comments) {
+        return new SourceMap(expansions, exact, comments);
+    }
+
+    /** The original source's comments, by original line (none when lines cannot be mapped exactly). */
+    public SourceComments comments() {
+        return exact ? comments : SourceComments.NONE;
     }
 
     public boolean exact() {
@@ -122,7 +134,7 @@ public final class SourceMap {
             predicted += e.added() - (e.end() - e.start());
         }
         boolean exact = resolvable[0] && Math.abs(predicted - preprocessedLineCount) <= 1;
-        return new SourceMap(List.copyOf(expansions), exact);
+        return new SourceMap(List.copyOf(expansions), exact, SourceComments.NONE);
     }
 
     /** Every copybook a source includes, directly or through other copybooks, as ProLeap resolves them. */

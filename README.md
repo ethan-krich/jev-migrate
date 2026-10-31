@@ -50,6 +50,10 @@ suite; arguments after `--` go to pytest.
 scripts in a slim Debian image with every tool version pinned, including GnuCOBOL 3.2. That is the
 reference environment for equivalence results.
 
+The command-line report uses colors on interactive terminals; redirected output stays plain text.
+Use `--verbose` for the worker log on stderr, or `--json` for a machine-readable report on stdout.
+Set `NO_COLOR` to disable colors.
+
 ## A first translation
 
 ```python
@@ -133,7 +137,8 @@ translated again with that value (see [setting decisions](docs/worker-protocol.m
 [`examples/cobol-to-java-jev`](examples/cobol-to-java-jev/projects.py) against the live API and
 says whether Jev's pick matches the setting each program was written for
 (`OPENROUTER_API_KEY=... ./scripts/jev-smoke.sh`, or `TYPESAFE_API_KEY=...`; it also reads them
-from a git-ignored `.env`, see `.env.example`). It is not part of any test suite.
+from a git-ignored `.env`, see `.env.example`). Set `JEV_VERBOSE=1` to include the worker log.
+The script builds the project before running and is not part of any test suite.
 
 Settings the source does not determine (character set, out-of-range policy, file paths, …) go
 in a [`Dialect`](docs/mapping-api.md#dialect-project-settings):

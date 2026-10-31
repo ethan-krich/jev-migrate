@@ -81,7 +81,8 @@ SETTING_TASK = (
     "the program that depends on the setting, and the context shows the data they use. Look for logic that only "
     "makes sense under one value, such as a range check, an ordering or a comparison whose outcome the program "
     "relies on (for example `>= \"A\" AND <= \"9\"` covers letters and digits only in EBCDIC order, where digits "
-    "sort after letters). Comments and names may also say where the code came from. Abstain only if the evidence "
+    "sort after letters). Comments (program.comments, a node's comments), the IDENTIFICATION DIVISION paragraphs "
+    "(program.identification) and names may also say where the code came from. Abstain only if the evidence "
     "does not favour any value."
 )
 SETTING_ABSTAIN_CRITERION = "The evidence does not favour any value: the statements behave the same under each."
@@ -374,6 +375,7 @@ class JevProvider(DecisionProvider):
                              "program_id": request.context.get("program_id"), "file": request.source.file},
                 "candidates": [{"id": c.id, "value": values.get(c.id), "means": c.description} for c in request.candidates],
                 "context": list(refs),
+                "program": request.context.get("program", {}),
                 "expansions": expansions,
             }
         reason = str(request.reason)
@@ -384,8 +386,10 @@ class JevProvider(DecisionProvider):
                          "why_asked": f"{WHY_ASKED.get(reason, reason)} {request.message}",
                          "program_id": request.context.get("program_id"),
                          "file": request.source.file, "line": request.source.line},
-            "candidates": [{"id": c.id, "description": c.description, "java": c.preview} for c in request.candidates],
+            "candidates": [{"id": c.id, "description": c.description, "java": c.preview, **({"docs": list(c.docs)} if c.docs else {})}
+                           for c in request.candidates],
             "context": list(refs),
+            "program": request.context.get("program", {}),
             "expansions": expansions,
         }
 
@@ -399,6 +403,8 @@ class JevProvider(DecisionProvider):
             option: dict[str, Any] = {"covers": c.description}
             if c.preview is not None:
                 option["java"] = c.preview
+            if c.docs:
+                option["docs"] = list(c.docs)
             if c.slots:
                 option["then_asks"] = [f"{s.name}: {s.description}" for s in c.slots]
             criteria[c.id] = option

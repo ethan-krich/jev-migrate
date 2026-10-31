@@ -37,7 +37,15 @@
             "rule_id": {"type": "string"},
             "facts": {"type": "object"},
             "refs": {"type": "array", "items": {"$ref": "#/$defs/context_ref"}, "description": "Budgeted context graph, breadth-first from the operands (depth 0); not part of the fingerprint"},
-            "budget": {"$ref": "#/$defs/context_budget"}
+            "budget": {"$ref": "#/$defs/context_budget"},
+            "program": {
+              "type": "object",
+              "description": "The decision's program: its header comments and IDENTIFICATION DIVISION paragraphs; not part of the fingerprint",
+              "properties": {
+                "identification": {"type": "object", "additionalProperties": {"type": ["string", "null"]}, "description": "author, installation, date_written, security, remarks"},
+                "comments": {"type": "array", "items": {"type": "string"}, "description": "Comments before the DATA DIVISION (or PROCEDURE DIVISION)"}
+              }
+            }
           }
         },
         "candidates": {"type": "array", "items": {"$ref": "#/$defs/candidate"}},
@@ -65,6 +73,15 @@
         "handler": {"type": "string"},
         "description": {"type": "string"},
         "preview": {"type": "string", "description": "Target code the candidate generates"},
+        "docs": {
+          "type": "array",
+          "description": "The Java methods the preview calls: signature and the first paragraph of their Javadoc; advisory, not part of the fingerprint",
+          "items": {
+            "type": "object",
+            "required": ["signature", "summary"],
+            "properties": {"signature": {"type": "string"}, "summary": {"type": "string"}}
+          }
+        },
         "slots": {
           "type": "array",
           "description": "Applying the candidate raises one follow-up decision per slot, each with its own validated candidates",
@@ -93,7 +110,8 @@
         "line": {"type": "integer", "minimum": 1},
         "parent": {"type": "string", "description": "The ref this node was reached from"},
         "truncated": {"type": "boolean", "description": "The budget left out its text; expand_context returns it"},
-        "items": {"type": "array", "items": {"type": "string"}, "description": "Names of a group's subordinate items"}
+        "items": {"type": "array", "items": {"type": "string"}, "description": "Names of a group's subordinate items"},
+        "comments": {"type": "array", "items": {"type": "string"}, "description": "A paragraph's or data item's comments (the block above it, then its own lines); with text only"}
       }
     },
     "context_budget": {

@@ -210,6 +210,29 @@ line comment such as `// Decided by jev (confidence 0.87): builtin:stop_literal_
 a provider chose is noted at the top of each class (`// Dialect.move_overlap = "ibm" decided by jev
 (confidence 0.91)`).
 
+Each candidate also carries `docs`: the signature and first Javadoc paragraph of every runtime
+method its preview calls (`Compare`, `StringOps`, `Functions`, …), read from the runtime's own
+sources. A provider reads them alongside the description; they never change what is generated.
+
+### Method candidates
+
+`MethodChoice` (worker) builds candidates from a Java method's declaration instead of a handler:
+one per way of binding the statement's operands to the parameters that `JavaTypes` passes
+exactly, each generated as JavaParser nodes with the method's docs. Its id is
+`method:Scope.name(Types)`, plus `#i,j` (the operand each parameter takes) when several bindings
+fit. A pair outside the table has no binding, so there is no approximate candidate:
+
+| Java | COBOL argument | Result stored by |
+|---|---|---|
+| `String` | alphanumeric item, group, reference modification; alphanumeric literal | MOVE to an alphanumeric item |
+| `int` | integer item of up to 9 digits (no `P`); integer literal in range | MOVE to a numeric item |
+| `long` | integer item of up to 18 digits (no `P`); integer literal in range | MOVE to a numeric item |
+| `BigDecimal` | any numeric item, numeric literal, `ZERO`, `RETURN-CODE` | MOVE to a numeric item |
+| `boolean` | level-88 condition-name | (no receiver) |
+
+No default rule raises method candidates yet; they are the building block for mapping library
+calls.
+
 A decision's [importance](#importance) tier does not change who answers it. It only sets the
 confidence floor when `JevProvider` runs with a `Gate`.
 

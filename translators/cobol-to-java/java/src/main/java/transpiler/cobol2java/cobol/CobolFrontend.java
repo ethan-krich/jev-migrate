@@ -78,6 +78,7 @@ public final class CobolFrontend {
         } catch (java.io.IOException e) {
             throw new ParseFailure("syntax_error", "cannot read " + file + ": " + e.getMessage(), e);
         }
+        SourceComments comments = SourceComments.of(source, options.format(), options.free());
         if (options.free()) {
             try {
                 source = FreeFormat.toVariable(source);
@@ -112,7 +113,7 @@ public final class CobolFrontend {
         } catch (RuntimeException e) {
             map = SourceMap.identity();
         }
-        return new Parsed(program, map);
+        return new Parsed(program, map.withComments(comments));
     }
 
     private String readCopybook(java.io.File copybook) throws ParseFailure {

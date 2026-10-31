@@ -5,11 +5,13 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.proleap.cobol.CobolParser;
 import io.proleap.cobol.asg.metamodel.ASGElement;
 import io.proleap.cobol.asg.metamodel.Program;
+import io.proleap.cobol.asg.metamodel.ProgramUnit;
 import io.proleap.cobol.asg.metamodel.call.Call;
 import io.proleap.cobol.asg.metamodel.call.DataDescriptionEntryCall;
 import io.proleap.cobol.asg.metamodel.call.ProcedureCall;
 import io.proleap.cobol.asg.metamodel.data.datadescription.DataDescriptionEntry;
 import io.proleap.cobol.asg.metamodel.data.datadescription.DataDescriptionEntryGroup;
+import io.proleap.cobol.asg.metamodel.identification.IdentificationDivision;
 import io.proleap.cobol.asg.metamodel.procedure.Paragraph;
 import io.proleap.cobol.asg.metamodel.procedure.Statement;
 import io.proleap.cobol.asg.metamodel.procedure.StatementTypeEnum;
@@ -24,6 +26,7 @@ import java.util.Set;
 import org.antlr.v4.runtime.ParserRuleContext;
 import org.antlr.v4.runtime.misc.Interval;
 import org.antlr.v4.runtime.tree.ParseTree;
+import transpiler.cobol2java.cobol.SourceComments;
 import transpiler.cobol2java.cobol.SourceMap;
 import transpiler.cobol2java.protocol.Json;
 
@@ -36,6 +39,9 @@ import transpiler.cobol2java.protocol.Json;
  * {@code usage}); a statement to its paragraph and its operands; a paragraph to the statements
  * that PERFORM it. The traversal is breadth-first in source order, so the same source always
  * gives the same nodes. Refs are derived from source positions and stay stable for the session.
+ * Paragraphs and data items carry their source comments (the block above them and those inside),
+ * which count towards the budget; {@code program} holds the program's header comments and
+ * IDENTIFICATION DIVISION paragraphs, capped separately.
  *
  * <p>This is advisory context only: it never influences what is generated or the fingerprint.
  */
@@ -50,6 +56,9 @@ public final class ContextGraph {
     /** Nodes listed per rendering; the rest are counted as omitted. */
     static final int MAX_NODES = 60;
     static final int SUMMARY_LENGTH = 120;
+    /** Comment characters listed per node, and for the program header. */
+    static final int NODE_COMMENT_CHARS = 400;
+    static final int PROGRAM_COMMENT_CHARS = 1000;
 
     /** Grammar rules whose identifier receives a value (the rest of a statement's operands are read). */
     private static final Set<Class<?>> RECEIVING = Set.of(CobolParser.AddToContext.class, CobolParser.AddGivingContext.class,
@@ -124,9 +133,10 @@ public final class ContextGraph {
                 continue;
             }
             String text = text(p.entity());
-            boolean full = p.depth() <= budget.maxDepth() && used + text.length() <= budget.maxChars();
+            int size = size(p.entity(), text);
+            boolean full = p.depth() <= budget.maxDepth() && used + size <= budget.maxChars();
             if (full) {
-                used += text.length();
+                used += size;
             } else {
                 truncated++;
             }
@@ -139,6 +149,10 @@ public final class ContextGraph {
         b.put("used_chars", used);
         b.put("truncated", truncated);
         b.put("omitted", omitted);
+        ObjectNode header = programHeader();
+        if (header != null) {
+            out.set("program", header);
+        }
         return out;
     }
 
@@ -158,9 +172,10 @@ public final class ContextGraph {
         for (String ref : refs) {
             Placed p = known.get(ref);
             String text = text(p.entity());
-            boolean full = out.isEmpty() || used + text.length() <= maxChars;
+            int size = size(p.entity(), text);
+            boolean full = out.isEmpty() || used + size <= maxChars;
             if (full) {
-                used += text.length();
+                used += size;
             }
             out.add(node(p, full ? text : null));
             for (Edge e : edges(p.entity())) {
@@ -366,6 +381,10 @@ public final class ContextGraph {
         n.put("depth", p.depth());
         if (text != null) {
             n.put("text", text);
+            List<String> comments = comments(entity);
+            if (!comments.isEmpty()) {
+                comments.forEach(n.putArray("comments")::add);
+            }
         } else {
             n.put("truncated", true);
         }
@@ -394,6 +413,94 @@ public final class ContextGraph {
         }
         var copy = sourceMap.copyLine(line);
         return copy.isPresent() ? s + " (from the COPY at line " + copy.getAsInt() + ")" : s;
+    }
+
+    private int size(Object entity, String text) {
+        return text.length() + comments(entity).stream().mapToInt(String::length).sum();
+    }
+
+    /** A paragraph's or data item's comments: the block above it, then those on its own lines. */
+    private List<String> comments(Object entity) {
+        if (!(entity instanceof Paragraph || entity instanceof DataDescriptionEntry)) {
+            return List.of();
+        }
+        ParserRuleContext ctx = ctx(entity);
+        int start = ctx.getStart().getLine();
+        if (sourceMap.copyLine(start).isPresent()) {
+            return List.of();
+        }
+        int from = sourceMap.originalLine(start);
+        int to = sourceMap.originalLine(ctx.getStop() == null ? start : ctx.getStop().getLine());
+        SourceComments source = sourceMap.comments();
+        List<String> all = source.above(from);
+        all.addAll(source.between(from, to));
+        return capped(all, NODE_COMMENT_CHARS);
+    }
+
+    /** {@code {identification?, comments?}} of the origin's program, or null when it has neither. */
+    private ObjectNode programHeader() {
+        ParserRuleContext unitCtx = origin;
+        while (unitCtx != null && !(unitCtx instanceof CobolParser.ProgramUnitContext)) {
+            unitCtx = unitCtx.getParent();
+        }
+        if (unitCtx == null || !(program.getASGElementRegistry().getASGElement(unitCtx) instanceof ProgramUnit unit)) {
+            return null;
+        }
+        ObjectNode header = Json.object();
+        IdentificationDivision id = unit.getIdentificationDivision();
+        if (id != null) {
+            ObjectNode paragraphs = Json.object();
+            if (id.getAuthorParagraph() != null) {
+                paragraphs.put("author", id.getAuthorParagraph().getAuthor());
+            }
+            if (id.getInstallationParagraph() != null) {
+                paragraphs.put("installation", id.getInstallationParagraph().getInstallation());
+            }
+            if (id.getDateWrittenParagraph() != null) {
+                paragraphs.put("date_written", id.getDateWrittenParagraph().getDateWritten());
+            }
+            if (id.getSecurityParagraph() != null) {
+                paragraphs.put("security", id.getSecurityParagraph().getSecurity());
+            }
+            if (id.getRemarksParagraph() != null) {
+                paragraphs.put("remarks", id.getRemarksParagraph().getRemarks());
+            }
+            if (!paragraphs.isEmpty()) {
+                header.set("identification", paragraphs);
+            }
+        }
+        // The comments before the DATA DIVISION (or the PROCEDURE DIVISION): what the program is for.
+        int start = unitCtx.getStart().getLine();
+        int stop = unitCtx.getStop() == null ? start : unitCtx.getStop().getLine();
+        if (unit.getDataDivision() != null) {
+            stop = unit.getDataDivision().getCtx().getStart().getLine() - 1;
+        } else if (unit.getProcedureDivision() != null) {
+            stop = unit.getProcedureDivision().getCtx().getStart().getLine() - 1;
+        }
+        if (sourceMap.copyLine(start).isEmpty()) {
+            SourceComments source = sourceMap.comments();
+            int from = sourceMap.originalLine(start);
+            List<String> all = source.above(from);
+            all.addAll(source.between(from, sourceMap.originalLine(stop)));
+            List<String> comments = capped(all, PROGRAM_COMMENT_CHARS);
+            if (!comments.isEmpty()) {
+                comments.forEach(header.putArray("comments")::add);
+            }
+        }
+        return header.isEmpty() ? null : header;
+    }
+
+    private static List<String> capped(List<String> comments, int maxChars) {
+        List<String> out = new ArrayList<>();
+        int used = 0;
+        for (String c : comments) {
+            if (used + c.length() > maxChars) {
+                break;
+            }
+            out.add(c);
+            used += c.length();
+        }
+        return out;
     }
 
     private static String ref(Object entity) {

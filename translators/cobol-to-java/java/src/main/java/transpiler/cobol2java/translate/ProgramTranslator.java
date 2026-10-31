@@ -2962,7 +2962,9 @@ public final class ProgramTranslator implements TranslationContext {
             try {
                 List<Statement> stmts = generate(h, unit, nested);
                 String preview = String.join("\n", stmts.stream().map(Statement::toString).toList());
-                out.add(new Generated(new Candidate("builtin:" + h.id(), h.id(), h.description(), preview), stmts, nested));
+                Candidate candidate = new Candidate("builtin:" + h.id(), h.id(), h.description(), preview)
+                        .withDocs(JavaDocs.runtime().calledBy(stmts));
+                out.add(new Generated(candidate, stmts, nested));
             } catch (HandlerException e) {
                 // Not a viable candidate for this instance.
             } finally {

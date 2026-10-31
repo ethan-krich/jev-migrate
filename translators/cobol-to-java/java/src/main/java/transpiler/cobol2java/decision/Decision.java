@@ -226,6 +226,9 @@ public final class Decision {
         if (renderedContext != null) {
             ctx.set("refs", renderedContext.get("refs"));
             ctx.set("budget", renderedContext.get("budget"));
+            if (renderedContext.has("program")) {
+                ctx.set("program", renderedContext.get("program"));
+            }
         }
         var cands = n.putArray("candidates");
         for (Candidate c : candidates) {
@@ -235,6 +238,12 @@ public final class Decision {
             cn.put("description", c.description());
             if (c.preview() != null) {
                 cn.put("preview", c.preview());
+            }
+            if (!c.docs().isEmpty()) {
+                var docs = cn.putArray("docs");
+                for (Candidate.Doc d : c.docs()) {
+                    docs.addObject().put("signature", d.signature()).put("summary", d.summary());
+                }
             }
             if (!c.slots().isEmpty()) {
                 var slots = cn.putArray("slots");

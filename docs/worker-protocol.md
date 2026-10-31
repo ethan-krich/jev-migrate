@@ -71,8 +71,19 @@ and `ref` ids are stable for the session.
 Nodes up to `max_depth` keep their `text` until `max_chars` is used up. Every node after that,
 and the nodes one level below `max_depth`, are listed with `truncated: true` and a one-line
 `summary` only. `context.budget` reports `{max_depth, max_chars, used_chars, truncated,
-omitted}`. Context is never part of the fingerprint. `expand_context` returns a truncated node's
+omitted}`. A paragraph or data node with `text` also has `comments`: the source comments
+directly above it and on its own lines (ProLeap drops comments, so the worker reads them from the
+original file; none for copybook text), counted towards `max_chars`. `context.program` holds the
+program's header comments (those before the DATA DIVISION) and its IDENTIFICATION DIVISION
+paragraphs (`identification: {author, installation, date_written, security, remarks}`), capped
+separately. Context is never part of the fingerprint. `expand_context` returns a truncated node's
 text, so a provider can ask for exactly the part it needs.
+
+### Candidate docs
+
+A candidate may carry `docs: [{signature, summary}]`: each Java method its preview calls, with
+the first paragraph of its Javadoc (inline tags reduced to text). Overloads are not resolved, so
+a call lists every overload of its arity. Docs are advisory and never part of the fingerprint.
 
 ### Candidate slots
 

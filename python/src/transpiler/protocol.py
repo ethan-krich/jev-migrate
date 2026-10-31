@@ -66,6 +66,8 @@ class Candidate:
     handler: str | None = None
     preview: str | None = None
     slots: tuple[Slot, ...] = ()
+    # The Java methods the preview calls: {signature, summary} (first Javadoc paragraph). Advisory.
+    docs: tuple[dict[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -107,7 +109,8 @@ class DecisionRequest:
             state=d.get("state", "pending"),
             candidates=tuple(
                 Candidate(c["id"], c.get("description", ""), c.get("handler"), c.get("preview"),
-                          tuple(Slot(s["name"], s.get("description", "")) for s in c.get("slots", [])))
+                          tuple(Slot(s["name"], s.get("description", "")) for s in c.get("slots", [])),
+                          tuple(c.get("docs", [])))
                 for c in d.get("candidates", [])
             ),
             context=d.get("context", {}),
