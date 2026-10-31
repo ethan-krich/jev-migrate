@@ -360,8 +360,7 @@ public final class ProgramTranslator implements TranslationContext {
 
         ClassOrInterfaceDeclaration cls = cu.addClass(in.className(), Modifier.Keyword.PUBLIC, Modifier.Keyword.FINAL);
         cls.addImplementedType("CobolProgram");
-        cls.setJavadocComment("Translated from " + in.sourceFile() + " (PROGRAM-ID " + in.programId() + ") by cobol-to-java.\n"
-                + "Do not edit: regenerate from the COBOL source.");
+        cls.setJavadocComment("Translated from " + in.sourceFile() + " (PROGRAM-ID " + in.programId() + ") by cobol-to-java.");
 
         checkUnsupportedDivisions();
         buildDataModel();
