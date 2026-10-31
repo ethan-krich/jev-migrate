@@ -40,7 +40,7 @@ git clone --recurse-submodules <repo> && cd jev-migrate
 ./scripts/setup.sh     # checks tools, inits submodule, uv sync, fetches Gradle deps
 ./scripts/build.sh     # CMake (core), Gradle installDist (worker), uv sync
 ./scripts/test.sh      # GoogleTest via CTest, JUnit 5, pytest (unit, integration, equivalence)
-./scripts/run.sh       # translates, compiles and runs examples/cobol-to-java
+./scripts/run.sh legacy -o generated   # translates the COBOL under legacy/ (CLI)
 ```
 
 The scripts work from any directory. `./scripts/test.sh java` (or `cpp`, `python`) runs a single
@@ -65,7 +65,7 @@ mappings.remove("DISPLAY")               # every DISPLAY now becomes a decision
 mappings.add("CALL", strategy="unresolved", when={"using": True}, priority=200)
 
 result = transpile(
-    "examples/cobol-to-java/input",      # directory, file, glob ("src/**/*.cbl") or list
+    "legacy",                            # directory, file, glob ("src/**/*.cbl") or list
     target="java",
     output="generated",
     mappings=mappings,
@@ -76,9 +76,9 @@ print(result.summary())
 
 ```
 status: incomplete (2 program(s), 0 file(s) written)
-  payroll/PAYROLL.cbl: incomplete -> src/main/java/com/example/legacy/payroll/Payroll.java
+  billing/PAY-CALC.cbl: incomplete -> src/main/java/com/example/legacy/billing/PayCalc.java
   ...
-  decision-1 [missing_mapping] payroll/PAYROLL.cbl:21 DISPLAY: no mapping rule matches DISPLAY ...
+  decision-1 [missing_mapping] billing/PAY-CALC.cbl:21 DISPLAY: no mapping rule matches DISPLAY ...
       candidate builtin:display
 ```
 
@@ -88,7 +88,7 @@ always written. To resolve decisions offline, pass validated selections:
 ```python
 from transpiler import DecisionResponse, StaticProvider
 answers = [DecisionResponse("builtin:display", fingerprint=d.fingerprint) for d in result.pending_decisions]
-result = transpile("examples/cobol-to-java/input", output="generated", mappings=mappings,
+result = transpile("legacy", output="generated", mappings=mappings,
                    layout=Layout(base_package="com.example.legacy"), provider=StaticProvider(answers))
 assert result.ok   # generated/src/main/java/com/example/legacy/... compiles with plain javac
 ```
@@ -113,7 +113,7 @@ jev = JevProvider(
     context=ContextBudget(max_chars=4000, max_depth=2, max_expansions=2),
     api_key_env="TYPESAFE_API_KEY",
 )
-result = transpile("examples/cobol-to-java/input", output="generated", mappings=mappings, provider=jev)
+result = transpile("legacy", output="generated", mappings=mappings, provider=jev)
 for r in sorted(result.resolutions.applied, key=lambda r: r.confidence):   # least confident first
     print(r.decision_id, r.importance, r.confidence, r.candidate_id, r.rationale)
 print((result.output / "review.md").read_text())   # the review queue, also result.review_queue()
@@ -146,7 +146,7 @@ in a [`Dialect`](docs/mapping-api.md#dialect-project-settings):
 an unset one gets a single `dialect:<field>` decision, which a provider can answer for the
 fields with a fixed set of values.
 
-From the shell: `./scripts/run.sh examples/cobol-to-java/input -o generated --base-package com.acme`
+From the shell: `./scripts/run.sh legacy -o generated --base-package com.acme`
 (`--mappings file.py` loads a `configure(mappings)` hook).
 
 ## Output layout
