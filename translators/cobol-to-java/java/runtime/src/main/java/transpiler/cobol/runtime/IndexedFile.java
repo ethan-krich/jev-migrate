@@ -688,12 +688,12 @@ public final class IndexedFile extends FileBase {
 
     @Override
     boolean sortRead() {
-        return readNext(false, true) || !succeeded();
+        return sortQuietly(() -> readNext(false, true)) || !succeeded();
     }
 
     @Override
     void sortWrite(String data) {
         record.set(data);
-        write(record, true);
+        sortQuietly(() -> write(record, true));
     }
 }

@@ -388,12 +388,15 @@ public final class CobolFile extends FileBase {
 
     @Override
     boolean sortRead() {
-        return read(true);
+        return sortQuietly(() -> read(true)) || !succeeded();
     }
 
     @Override
     void sortWrite(String data) {
-        writeRecord(data);
+        sortQuietly(() -> {
+            writeRecord(data);
+            return true;
+        });
     }
 
     /** REWRITE of the record last read (SEQUENTIAL files opened I-O). */

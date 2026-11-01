@@ -108,13 +108,27 @@ public abstract class FileBase {
         return lastStatus.charAt(0) == '0';
     }
 
+    /** True while a SORT/MERGE USING/GIVING transfer runs: unsuccessful statuses are recorded without USE procedures or run-unit termination. */
+    private boolean sortIo;
+
+    /** Runs {@code body} with error dispatch suppressed for every unsuccessful status. */
+    final boolean sortQuietly(java.util.function.BooleanSupplier body) {
+        boolean saved = sortIo;
+        sortIo = true;
+        try {
+            return body.getAsBoolean();
+        } finally {
+            sortIo = saved;
+        }
+    }
+
     /** Records {@code code}; {@code handled}: the statement has the phrase for this condition. */
     final void finish(String code, boolean handled) {
         lastStatus = code;
         if (status != null) {
             status.set(code);
         }
-        if (code.charAt(0) != '0' && !handled) {
+        if (code.charAt(0) != '0' && !handled && !sortIo) {
             if (errorProcedure != null && errorProcedure.test(lastOpenMode)) {
                 // The statement's NOT phrase depends on its own status, not on what the procedure did.
                 lastStatus = code;

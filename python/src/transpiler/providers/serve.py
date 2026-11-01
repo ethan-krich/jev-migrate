@@ -62,7 +62,7 @@ def handle(provider: DecisionProvider, line: str) -> tuple[dict[str, Any], bool]
     try:
         batch = [DecisionRequest.from_json(d) for d in params["decisions"]]
         extra = {e.decision_id: e for e in (ExtraContext.from_json(x) for x in params.get("extra_context", []))}
-    except (KeyError, TypeError, ValueError) as e:
+    except (KeyError, TypeError, ValueError, AttributeError) as e:
         return _error(id_, "invalid_params", f"malformed decide params: {e!r}"), True
     try:
         answers = provider.decide(batch, extra)
