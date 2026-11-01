@@ -24,6 +24,7 @@ import transpiler.cobol2java.cobol.CobolFrontend;
 import transpiler.cobol2java.context.ContextGraph;
 import transpiler.cobol2java.decision.Decision;
 import transpiler.cobol2java.decision.Importance;
+import transpiler.cobol2java.library.Libraries;
 import transpiler.cobol2java.mapping.MappingRegistry;
 import transpiler.cobol2java.protocol.ErrorCode;
 import transpiler.cobol2java.protocol.Json;
@@ -91,6 +92,8 @@ public final class Session {
     private final Dialect dialect;
     private final Importance importance;
     private final ContextGraph.Budget contextBudget;
+    /** initialize.libraries: COBOL parts mapped to installed Java libraries (none by default). */
+    private Libraries libraries = Libraries.NONE;
     private final Map<String, ProgramState> programs = new LinkedHashMap<>();
     private final List<String> copybooks = new ArrayList<>();
     private final Map<String, String> programDirectory = new HashMap<>();
@@ -129,6 +132,8 @@ public final class Session {
         Dialect dialect = Dialect.parse(options);
         Importance importance = Importance.parse(params.get("importance"));
         ContextGraph.Budget contextBudget = contextBudget(params.get("context"));
+        // Indexes each library's Java source up front: an unavailable one fails initialize (library_unavailable).
+        Libraries libraries = Libraries.parse(params.get("libraries"), sourceRoot);
         CobolFrontend frontend;
         try {
             frontend = new CobolFrontend(CobolFrontend.Options.of(dialect.sourceFormat(),
@@ -147,6 +152,7 @@ public final class Session {
         }
 
         Session session = new Session(id, sourceRoot, outputRoot, layout, registry, builtins, dialect, importance, contextBudget);
+        session.libraries = libraries;
         session.settingNotes.addAll(settingNotes(params.get("settings"), params.get("setting_provenance")));
         ArrayNode files = Json.requireArray(params, "files");
         List<ProgramState> toParse = new ArrayList<>();
@@ -182,7 +188,43 @@ public final class Session {
             progress.accept(event);
         }
         session.checkNameCollisions();
+        session.checkLibraries();
         return session;
+    }
+
+    /** The COBOL side of the libraries, checked against the parsed programs (invalid_library lists every problem). */
+    private void checkLibraries() throws ProtocolException {
+        if (libraries.isEmpty()) {
+            return;
+        }
+        Map<String, String> files = new LinkedHashMap<>();
+        Map<String, Set<String>> paragraphs = new HashMap<>();
+        for (ProgramState ps : programs.values()) {
+            if (ps.failed || ps.unit == null) {
+                continue;
+            }
+            files.put(ps.relativePath, ps.entryName);
+            List<ProgramUnit> units = new ArrayList<>(List.of(ps.unit));
+            ps.nested.forEach(n -> units.add(n.unit()));
+            for (int i = 0; i < units.size(); i++) {
+                var pd = units.get(i).getProcedureDivision();
+                String pid = i == 0 ? ps.programId : ps.nested.get(i - 1).programId();
+                Set<String> names = paragraphs.computeIfAbsent(pid, k -> new HashSet<>());
+                if (pd != null) {
+                    pd.getParagraphs().forEach(p -> names.add(p.getName().toUpperCase(Locale.ROOT)));
+                    for (var section : pd.getSections()) {
+                        names.add(section.getName().toUpperCase(Locale.ROOT));
+                        section.getParagraphs().forEach(p -> names.add(p.getName().toUpperCase(Locale.ROOT)));
+                    }
+                }
+            }
+        }
+        Set<String> copybookNames = new HashSet<>();
+        for (String c : copybooks) {
+            String file = c.substring(c.lastIndexOf('/') + 1);
+            copybookNames.add((file.contains(".") ? file.substring(0, file.lastIndexOf('.')) : file).toUpperCase(Locale.ROOT));
+        }
+        libraries.check(files, copybookNames, paragraphs);
     }
 
     /** {@code initialize.context}: {max_depth, max_chars}, each a non-negative integer (defaults 2 and 4000). */
@@ -435,6 +477,19 @@ public final class Session {
         copybooks.forEach(cbs::add);
         r.put("mapping_rules", registry.rules().size());
         r.set("dialect", dialect.toJson());
+        if (!libraries.isEmpty()) {
+            ArrayNode libs = r.putArray("libraries");
+            for (Libraries.Library lib : libraries.all()) {
+                ObjectNode l = libs.addObject();
+                l.put("id", lib.id());
+                l.put("java", lib.java());
+                l.put("source", lib.target());
+                l.put("hash", lib.index().hash());
+                l.put("classes", lib.index().classes());
+                l.put("members", lib.index().members().size());
+                lib.index().skipped().forEach(l.putArray("skipped")::add);
+            }
+        }
         return r;
     }
 

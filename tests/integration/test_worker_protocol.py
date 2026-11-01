@@ -304,3 +304,59 @@ def test_shutdown_exits_cleanly(built):
     w = Worker()
     assert w.close() == 0
     assert w.proc.stdout.read() == ""
+
+
+LIBRARY_CALLS = FIXTURES / "library_calls"
+LIBRARY_DIALECT = {"encoding": "ascii", "collating_sequence": "native", "out_of_range": "fail"}
+
+
+def library_params(tmp_path: Path, libraries: list[dict], caches: dict | None = None) -> dict:
+    src = LIBRARY_CALLS / "src"
+    params = init_params(tmp_path, sorted(src.rglob("*.cbl")), src)
+    params["options"] = LIBRARY_DIALECT
+    params["libraries"] = {"version": 1, "libraries": libraries,
+                           "caches": caches or {"maven": str(tmp_path / "m2"), "gradle": str(tmp_path / "gradle")}}
+    return params
+
+
+def acme_dates(**extra) -> dict:
+    return {"id": "acme.dates", "source": [{"kind": "path", "pattern": "common/dates/"}],
+            "target": {"kind": "path", "path": str(LIBRARY_CALLS / "lib")}, **extra}
+
+
+def test_initialize_indexes_libraries(worker, tmp_path):
+    r = worker.call("initialize", library_params(tmp_path, [acme_dates()]))
+    assert r["status"] == "ok", r
+    [lib] = r["result"]["libraries"]
+    assert lib["id"] == "acme.dates" and lib["classes"] == 3 and lib["hash"].startswith("sha256:")
+
+
+def test_uninstalled_or_sourceless_dependencies_are_unavailable(worker, tmp_path):
+    jar = tmp_path / "m2/com/acme/acme-dates/1.0/acme-dates-1.0.jar"
+    jar.parent.mkdir(parents=True)
+    jar.write_bytes(b"")
+    r = worker.call("initialize", library_params(tmp_path, [
+        {"id": "a", "source": [{"kind": "program", "names": ["DATEADD"]}], "target": {"kind": "maven", "coordinates": "com.acme:acme-dates:1.0"}},
+        {"id": "b", "source": [{"kind": "program", "names": ["WEEKDAY"]}], "target": {"kind": "maven", "coordinates": "com.acme:nope:1.0"}}]))
+    assert r["status"] == "error" and r["error"]["code"] == "library_unavailable"
+    a, b = r["error"]["details"]["problems"]
+    assert "without its sources jar" in a and "mvn dependency:sources" in a
+    assert "not installed in the local caches" in b
+
+
+def test_the_cobol_side_is_checked_against_the_parse(worker, tmp_path):
+    r = worker.call("initialize", library_params(tmp_path, [acme_dates(
+        source=[{"kind": "path", "pattern": "nowhere/"}, {"kind": "paragraph", "names": ["NOPE"]},
+                {"kind": "copybook", "names": ["NOREC"]}, {"kind": "operation", "names": ["FUNCTION integer-of-date!"]}],
+        hints={"DATEADD": ["Dates.addDays(int,int)"], "BILLING": ["Dates.nothing()"]})]))
+    assert r["status"] == "error" and r["error"]["code"] == "invalid_library"
+    problems = r["error"]["details"]["problems"]
+    assert any("Dates.nothing()" in p for p in problems)  # checked against the Java index
+    r = worker.call("initialize", library_params(tmp_path, [acme_dates(
+        source=[{"kind": "path", "pattern": "nowhere/"}, {"kind": "paragraph", "names": ["NOPE"]},
+                {"kind": "copybook", "names": ["NOREC"]}, {"kind": "operation", "names": ["FUNCTION integer-of-date!"]}],
+        hints={"BILLING": ["Dates.addDays(int,int)"]})]), session="s2")
+    problems = r["error"]["details"]["problems"]
+    assert len(problems) == 5, problems
+    assert "matches no program" in problems[0] and "paragraph NOPE" in problems[1] and "copybook NOREC" in problems[2]
+    assert "not a COBOL verb" in problems[3] and "does not claim" in problems[4]

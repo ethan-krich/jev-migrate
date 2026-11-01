@@ -13,6 +13,10 @@ public enum ErrorCode {
     INVALID_STATE,
     INVALID_PARAMS,
     INVALID_MAPPING,
+    /** initialize.libraries names COBOL parts or Java members that do not exist (details.problems lists them all). */
+    INVALID_LIBRARY,
+    /** A library's Java source cannot be read: not installed in the local caches, or without its sources jar. */
+    LIBRARY_UNAVAILABLE,
     INTERNAL_ERROR;
 
     public String wire() {

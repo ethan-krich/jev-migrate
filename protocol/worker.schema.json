@@ -106,7 +106,7 @@
           "type": "object",
           "required": ["code", "message"],
           "properties": {
-            "code": {"enum": ["malformed_json", "invalid_request", "unsupported_protocol", "unknown_method", "unknown_session", "session_exists", "invalid_state", "invalid_params", "invalid_mapping", "internal_error"]},
+            "code": {"enum": ["malformed_json", "invalid_request", "unsupported_protocol", "unknown_method", "unknown_session", "session_exists", "invalid_state", "invalid_params", "invalid_mapping", "invalid_library", "library_unavailable", "internal_error"]},
             "message": {"type": "string"},
             "details": {}
           }
