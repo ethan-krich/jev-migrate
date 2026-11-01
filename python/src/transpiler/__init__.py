@@ -23,6 +23,7 @@ from .api import (
     transpile,
 )
 from .callbacks import CallbackRef, CallbackRequest, CallbackResponse
+from .libraries import LibraryError, LibraryRegistry
 from .protocol import Candidate, DecisionRequest, DecisionResponse, Reason, ReviewPriority, SourceLocation
 from .providers import (
     OPENROUTER_BASE_URL,
@@ -49,6 +50,8 @@ __all__ = [
     "HandlerCatalog",
     "JevProvider",
     "LanguagePair",
+    "LibraryError",
+    "LibraryRegistry",
     "Mapping",
     "MappingError",
     "MappingRegistry",

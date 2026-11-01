@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://transpiler.local/protocol/library.schema.json",
+  "title": "Library set",
+  "description": "Parts of the source mapped to libraries already installed in the target project (initialize.params.libraries). Passed from Python through the orchestrator, which never reads it. Each use of a claimed part is a library_call decision; library uses are not equivalence-checked and are always flagged.",
+  "type": "object",
+  "required": ["version", "libraries"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {"const": 1},
+    "libraries": {"type": "array", "items": {"$ref": "#/$defs/library"}},
+    "caches": {
+      "type": "object",
+      "description": "Where installed packages are looked up (never downloaded): the Maven local repository and Gradle's files-2.1 module cache",
+      "additionalProperties": false,
+      "properties": {"maven": {"type": "string"}, "gradle": {"type": "string"}}
+    },
+    "target_project": {"type": "string", "description": "Absolute path of the project the output goes into; its pom.xml / gradle.lockfile is checked for each library used"}
+  },
+  "$defs": {
+    "library": {
+      "type": "object",
+      "required": ["id", "source", "target"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "description": "Unique within the set"},
+        "source": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/selector"}},
+        "target": {"$ref": "#/$defs/target"},
+        "expose": {"type": "array", "items": {"type": "string"}, "description": "Classes offered (a.b.C or a.b.*); all public classes when absent"},
+        "hints": {"type": "object", "additionalProperties": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+                  "description": "A claimed part's name to the method ids it is steered to (Owner.name(Types))"},
+        "max_chain": {"type": "integer", "minimum": 1, "maximum": 8, "description": "Most calls one use may chain (default 4)"}
+      }
+    },
+    "selector": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"enum": ["program", "path", "operation", "copybook", "paragraph"]},
+        "names": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "pattern": {"type": "string", "minLength": 1, "description": "path: a directory, file or glob relative to the source root"},
+        "program": {"type": "string", "description": "paragraph: the PROGRAM-ID it belongs to"}
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "path"}}}, "then": {"required": ["pattern"]}, "else": {"required": ["names"]}}
+      ]
+    },
+    "target": {
+      "oneOf": [
+        {"type": "object", "required": ["kind", "coordinates"], "additionalProperties": false,
+         "properties": {"kind": {"const": "maven"}, "coordinates": {"type": "string", "pattern": "^[^:]+:[^:]+:[^:]+$"}}},
+        {"type": "object", "required": ["kind", "path"], "additionalProperties": false,
+         "properties": {"kind": {"enum": ["path", "jar"]}, "path": {"type": "string", "minLength": 1}}}
+      ]
+    }
+  }
+}

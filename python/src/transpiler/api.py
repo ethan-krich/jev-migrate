@@ -19,6 +19,7 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any, Protocol
 
+from .libraries import LibraryRegistry
 from .protocol import IMPORTANCE_TIERS, JOB_VERSION, DecisionRequest, ReviewPriority, importance_table
 from .providers import DecisionProvider, DeterministicProvider
 from .registry import HandlerCatalog, MappingRegistry
@@ -308,6 +309,8 @@ def transpile(
     provider: DecisionProvider | None = None,
     options: dict[str, Any] | None = None,
     copybook_paths: Sequence[str | os.PathLike[str]] = (),
+    libraries: LibraryRegistry | None = None,
+    target_project: str | os.PathLike[str] | None = None,
     source_language: str | None = None,
     core: str | os.PathLike[str] | None = None,
     timeout: float | None = None,
@@ -327,6 +330,13 @@ def transpile(
     ``importance`` maps ``(reason, operation)`` (``*`` matches anything) to a decision's tier,
     ``low``, ``normal``, ``high`` or ``critical``; without it the language pair's default table
     is used (``cobol_to_java.DEFAULT_IMPORTANCE``).
+
+    ``libraries`` (``cobol_to_java.libraries()``) maps parts of the source to libraries already
+    installed in the target project. Each use of such a part is a ``library_call`` decision whose
+    candidates call the library, next to the exact translation; a library use is **not**
+    equivalence-checked and is flagged in the output, the report, ``review.md`` and
+    ``result.libraries_used``. ``target_project`` is the project the output goes into: the worker
+    checks that each library used is declared in its ``pom.xml`` or ``gradle.lockfile``.
     """
     if mappings is not None:
         pair = find_language_pair(target, source_language, mappings.language_pair)
@@ -357,6 +367,17 @@ def transpile(
         "mappings": mappings.to_dict(),
         "provider": provider.to_config(),
     }
+    if libraries is not None:
+        if libraries.language_pair != pair.name:
+            raise TranspilerError(f"libraries are for {libraries.language_pair!r}, not {pair.name!r}")
+        job["translator_params"]["libraries"] = libraries.to_dict()  # raises LibraryError
+        if target_project is not None:
+            project = Path(target_project).resolve()
+            if not project.is_dir():
+                raise TranspilerError(f"target_project {str(project)!r} is not a directory")
+            job["translator_params"]["libraries"]["target_project"] = str(project)
+    elif target_project is not None:
+        raise TranspilerError("target_project= is only used with libraries=")
     if (budget := provider.context_budget()) is not None:
         job["translator_params"]["context"] = budget
     if importance is None and pair.default_importance is not None:
