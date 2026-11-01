@@ -37,7 +37,7 @@ public record JavaMethod(String scope, String name, List<Param> params, String r
      * The first paragraph of a Javadoc description as plain text: up to the first blank line or
      * {@code <p>}, with inline tags reduced to their text and HTML removed.
      */
-    static String summary(String description) {
+    public static String summary(String description) {
         String first = description.strip().split("\\n\\s*\\n|<p>|<P>", 2)[0];
         String text = first.replaceAll("\\{@(?:code|literal)\\s+([^}]*)}", "$1")
                 .replaceAll("\\{@link(?:plain)?\\s+(?:[^}\\s]+\\s+)?([^}]*)}", "$1")
