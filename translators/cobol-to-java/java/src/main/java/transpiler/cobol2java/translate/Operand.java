@@ -94,9 +94,16 @@ public sealed interface Operand {
      * A value computed at run time (an intrinsic function): a BigDecimal expression when
      * {@code numeric}, else a String one. {@code display} is how DISPLAY shows it (null when
      * the form GnuCOBOL uses is not reproduced): {@code text}, {@code integer} (nine digits, minus
-     * sign when negative) or {@code digitsN} (N unsigned digits).
+     * sign when negative), {@code digitsN} (N unsigned digits) or {@code decimal} (the field
+     * GnuCOBOL allocates for the value, {@code Functions.decimalDisplay}). {@code shown}, when not
+     * null, is a String expression DISPLAY uses instead (a result in the picture of an argument).
      */
-    record Computed(com.github.javaparser.ast.expr.Expression value, boolean numeric, String display) implements Operand {}
+    record Computed(com.github.javaparser.ast.expr.Expression value, boolean numeric, String display,
+            com.github.javaparser.ast.expr.Expression shown) implements Operand {
+        public Computed(com.github.javaparser.ast.expr.Expression value, boolean numeric, String display) {
+            this(value, numeric, display, null);
+        }
+    }
 
     /** A numeric special register held in a Java int field of the program (NUMBER-OF-CALL-PARAMETERS). */
     record Register(String javaName) implements Operand {}

@@ -23,7 +23,8 @@
 ## Commands
 
 `./scripts/setup.sh`, `build.sh`, `test.sh [cpp|java|python]`, `run.sh`.
-`./scripts/docker.sh test` runs everything in the pinned toolchain.
+`./scripts/docker.sh test` runs everything in the pinned toolchain. `./scripts/jev-smoke.sh` is
+an opt-in live run against the TypeSafe API; it is never part of a test suite.
 
 ## Where things are documented
 

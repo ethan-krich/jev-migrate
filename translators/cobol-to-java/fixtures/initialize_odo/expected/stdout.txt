@@ -1,0 +1,5 @@
+[      abab] [  0 0 0a7a7] [   f   f   fbccfbccf]
+[  4 4 0a7a7]
+[zz zzz zzz zzz zbccf]
+[      abab]
+[  4 4 0a7 0]

@@ -1,0 +1,11 @@
+{
+  "description": "Output devices: cobc's aliases for standard output and error (SYSLST, STDOUT, PRINT, TERMINAL, STDERR), DISPLAY UPON PRINTER and STOP literal answered with GnuCOBOL's own behaviour (the print file COB_DISPLAY_PRINT_FILE; the literal shown, then one reply line read from standard input)",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "file_assignments": {"print.txt": "print.txt"}},
+  "answers": [{"decision": "decision-1", "candidate": "builtin:display_printer"},
+              {"decision": "decision-2", "candidate": "builtin:display_printer"},
+              {"decision": "decision-3", "candidate": "builtin:stop_literal_accept"}],
+  "equivalence": {"programs": ["DEVICES.cbl"], "main_class": "fixtures.devices.Devices",
+                  "env": {"COB_DISPLAY_PRINT_FILE": "print.txt"}},
+  "layout": {"base_package": "fixtures.devices"}
+}

@@ -31,8 +31,8 @@ public interface TranslationContext {
     /** A Java boolean expression for {@code left op right} under COBOL comparison rules. */
     Expression compare(Operand left, Operand right, RelationalOperatorType op, ParserRuleContext where) throws HandlerException;
 
-    /** A Java boolean expression testing a level-88 condition-name. */
-    Expression conditionName(DataItem condition, ParserRuleContext where) throws HandlerException;
+    /** A Java boolean expression testing a level-88 condition-name (with its subscripts, if any). */
+    Expression conditionName(Operand.Field condition, ParserRuleContext where) throws HandlerException;
 
     /** The Java expression naming a data item's field (or RETURN-CODE). */
     Expression field(Operand operand) throws HandlerException;
@@ -90,6 +90,31 @@ public interface TranslationContext {
 
     /** A SORT / MERGE key: a lambda reading it from a record's bytes ({@code s -> view(s).get()}). */
     Expression sortKey(DataItem key, ParserRuleContext where) throws HandlerException;
+
+    /**
+     * A SORT / MERGE key compared in {@code sequence} ({@code ascii} or {@code ebcdic}, from a
+     * COLLATING SEQUENCE phrase) instead of the program's collating sequence.
+     */
+    Expression sortKey(DataItem key, ParserRuleContext where, String sequence) throws HandlerException;
+
+    /**
+     * The collating sequence an ALPHABET name of SPECIAL-NAMES stands for: {@code ascii}
+     * (NATIVE, STANDARD-1, ASCII) or {@code ebcdic}; empty for an alphabet of literals or an
+     * unknown name.
+     */
+    java.util.Optional<String> alphabet(String name);
+
+    /** Whether the receiver of a MOVE may start inside its sender (after the sender's first byte). */
+    boolean receiverInsideSender(Operand src, Operand dst);
+
+    /** The size of a reference known at translation time (no variable length or reference modification). */
+    java.util.OptionalInt fixedSize(Operand.Field f);
+
+    /** The switch number (0 .. 36) of a SPECIAL-NAMES mnemonic name for SWITCH-n. */
+    java.util.OptionalInt switchNumberOf(String mnemonic);
+
+    /** The test of a switch's ON / OFF STATUS condition-name, empty for another name. */
+    java.util.Optional<Expression> switchCondition(String name);
 
     /** The file a statement names (OPEN, CLOSE, READ). */
     FileRef file(Call fileCall) throws HandlerException;

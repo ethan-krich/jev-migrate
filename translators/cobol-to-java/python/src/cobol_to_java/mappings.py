@@ -21,13 +21,19 @@ BUILTIN_HANDLERS = MappingProxyType({
     "compute": "COMPUTE",
     "compute_gnucobol": "COMPUTE",
     "display": "DISPLAY",
+    "display_printer": "DISPLAY",
+    "display_device_stdout": "DISPLAY",
+    "display_device_stderr": "DISPLAY",
     "if": "IF",
     "perform": "PERFORM",
     "stop_run": "STOP",
+    "stop_literal_accept": "STOP",
+    "stop_literal_continue": "STOP",
     "goback": "GOBACK",
     "exit": "EXIT",
     "continue": "CONTINUE",
     "call_program": "CALL",
+    "call_external": "CALL",
     "cancel_program": "CANCEL",
     "entry": "ENTRY",
     "set_condition": "SET",
@@ -45,30 +51,31 @@ BUILTIN_HANDLERS = MappingProxyType({
     "open_file": "OPEN",
     "close_file": "CLOSE",
     "read_file": "READ",
+    "read_file_unlocked": "READ",
     "write_file": "WRITE",
     "rewrite_file": "REWRITE",
     "delete_file": "DELETE",
     "start_file": "START",
     "sort": "SORT",
-    "sort_stable": "SORT",
     "merge": "MERGE",
     "release": "RELEASE",
     "return_record": "RETURN",
     "alter": "ALTER",
-    "alter_goto": "ALTER",
     "unstring": "UNSTRING",
     "inspect": "INSPECT",
+    "set_switch": "SET",
     "set_index": "SET",
     "search": "SEARCH",
     "search_all": "SEARCH",
-    "search_all_binary": "SEARCH",
-    "search_all_linear": "SEARCH",
 })
 
 # Handlers that no default rule selects: the worker offers them as candidates on a decision
-# (they are correct only under conditions it cannot prove, e.g. SEARCH ALL key order).
-CANDIDATE_HANDLERS = frozenset({"search_all_binary", "search_all_linear", "alter_goto", "sort_stable",
-                                "compute"})
+# (compute when a rule is missing, call_external for a CALL outside the project, the STOP literal
+# and DISPLAY UPON PRINTER / SYSPCH ones for a console or device the target system decides).
+CANDIDATE_HANDLERS = frozenset({
+    "compute", "call_external", "stop_literal_accept", "stop_literal_continue",
+    "display_printer", "display_device_stdout", "display_device_stderr", "read_file_unlocked",
+})
 
 # Facts the worker computes per operation instance; usable as `when` condition keys.
 FACTS = MappingProxyType({
@@ -123,6 +130,41 @@ OPERATIONS = frozenset({
 
 PRIORITY = 100
 
+# (decision reason, operation) -> importance tier, "*" matching anything. The worker puts the
+# tier of the most specific entry on every decision: (reason, operation), then (*, operation),
+# then (reason, *), then (*, *). The tier selects a provider's confidence floor and is part of
+# the fingerprint. Override it with transpile(importance=...).
+DEFAULT_IMPORTANCE = MappingProxyType({
+    ("*", "*"): "normal",
+    ("unsupported_construct", "*"): "high",
+    ("missing_target_api", "*"): "high",
+    ("callback_required", "*"): "high",
+    # Declarations shape every statement that uses the data.
+    ("*", "DATA"): "critical",
+    # Arithmetic and data conversion: wrong digits are wrong amounts.
+    ("*", "ADD"): "critical",
+    ("*", "SUBTRACT"): "critical",
+    ("*", "MULTIPLY"): "critical",
+    ("*", "DIVIDE"): "critical",
+    ("*", "COMPUTE"): "critical",
+    ("*", "MOVE"): "high",
+    ("*", "INITIALIZE"): "high",
+    # Records written, ordered or looked up.
+    ("*", "WRITE"): "high",
+    ("*", "REWRITE"): "high",
+    ("*", "DELETE"): "high",
+    ("*", "SORT"): "high",
+    ("*", "MERGE"): "high",
+    ("*", "SEARCH"): "high",
+    # Control flow and program linkage.
+    ("*", "CALL"): "high",
+    ("*", "GO_TO"): "high",
+    ("*", "ALTER"): "high",
+    # Console output.
+    ("*", "DISPLAY"): "low",
+    ("*", "EXHIBIT"): "low",
+})
+
 # (id, source, handler, when, description)
 DEFAULT_RULES: tuple[tuple[str, str, str, dict, str], ...] = (
     ("cobol.move.to_alphanumeric", "MOVE", "move_to_alphanumeric", {"target_category": "alphanumeric"},
@@ -152,7 +194,8 @@ DEFAULT_RULES: tuple[tuple[str, str, str, dict, str], ...] = (
      {"from": ("environment", "argument_number", "argument_value", "command_line")},
      "ACCEPT FROM ENVIRONMENT-VALUE / ENVIRONMENT / ARGUMENT-NUMBER / ARGUMENT-VALUE / COMMAND-LINE"),
     ("cobol.accept.datetime", "ACCEPT", "accept_datetime",
-     {"from": ("date", "date_yyyymmdd", "day", "day_yyyyddd", "day_of_week", "time")}, "ACCEPT FROM DATE / DAY / TIME"),
+     {"from": ("date", "date_yyyymmdd", "day", "day_yyyyddd", "day_of_week", "time", "microsecond_time")},
+     "ACCEPT FROM DATE / DAY / TIME / MICROSECOND-TIME"),
     ("cobol.exhibit", "EXHIBIT", "exhibit", {"changed": False}, "EXHIBIT [NAMED]"),
     ("cobol.move.to_group", "MOVE", "move_group", {"target_category": "group"},
      "MOVE into a group: bytes as alphanumeric data"),
@@ -171,14 +214,15 @@ DEFAULT_RULES: tuple[tuple[str, str, str, dict, str], ...] = (
     ("cobol.rewrite", "REWRITE", "rewrite_file", {}, "REWRITE"),
     ("cobol.delete", "DELETE", "delete_file", {}, "DELETE of a RELATIVE / INDEXED record"),
     ("cobol.start", "START", "start_file", {}, "START of a RELATIVE / INDEXED file"),
-    ("cobol.sort", "SORT", "sort", {}, "SORT (a decision without WITH DUPLICATES IN ORDER; sort_stable candidate)"),
+    ("cobol.sort", "SORT", "sort", {}, "SORT as a stable sort (GnuCOBOL's tie order)"),
     ("cobol.merge", "MERGE", "merge", {}, "MERGE of files in key order"),
     ("cobol.release", "RELEASE", "release", {}, "RELEASE to a sort file"),
     ("cobol.return", "RETURN", "return_record", {}, "RETURN from a sort file"),
     ("cobol.go_to", "GO_TO", "go_to", {}, "GO TO / GO TO DEPENDING ON (procedure dispatcher)"),
-    ("cobol.alter", "ALTER", "alter", {}, "ALTER (a decision; the alter_goto candidate needs review)"),
+    ("cobol.alter", "ALTER", "alter", {}, "ALTER as an assignment of the GO TO target"),
+    ("cobol.set.switch", "SET", "set_switch", {"form": "on_off"}, "SET switch TO ON / OFF (SWITCH-0 .. SWITCH-36)"),
     ("cobol.set.index", "SET", "set_index", {"form": ("to", "up_by", "down_by")}, "SET index TO / UP BY / DOWN BY"),
     ("cobol.search", "SEARCH", "search", {"all": False}, "serial SEARCH"),
     ("cobol.search_all", "SEARCH", "search_all", {"all": True},
-     "SEARCH ALL (a decision unless key order is proven; binary and serial candidates)"),
+     "SEARCH ALL as GnuCOBOL's binary search"),
 )

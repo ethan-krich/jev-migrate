@@ -59,7 +59,7 @@ def test_dialect_defaults_leave_site_settings_unset():
     assert options == {
         "encoding": None, "collating_sequence": None, "out_of_range": None, "binary_truncate": True,
         "sync_alignment": None, "debugging_lines": False, "source_format": "fixed", "file_assignments": {},
-        "when_compiled": None, "dynamic_calls": None,
+        "when_compiled": None, "dynamic_calls": None, "move_overlap": None,
     }
     assert language_pair().default_dialect() == Dialect()
 
@@ -80,4 +80,4 @@ def test_dialect_is_validated_and_frozen():
     with pytest.raises(ValueError, match="when_compiled"):
         Dialect(when_compiled="yesterday")
     with pytest.raises(ValueError, match="source_format"):
-        Dialect(source_format="free")
+        Dialect(source_format="punched")

@@ -24,6 +24,7 @@ add_library(transpiler_core_lib
   src/orchestrator.cpp
   src/process.cpp
   src/protocol.cpp
+  src/review.cpp
   src/translator_registry.cpp
   src/worker_client.cpp)
 target_include_directories(transpiler_core_lib PUBLIC include)

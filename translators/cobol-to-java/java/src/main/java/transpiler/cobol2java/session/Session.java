@@ -21,7 +21,9 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 import transpiler.cobol2java.cobol.CobolFrontend;
+import transpiler.cobol2java.context.ContextGraph;
 import transpiler.cobol2java.decision.Decision;
+import transpiler.cobol2java.decision.Importance;
 import transpiler.cobol2java.mapping.MappingRegistry;
 import transpiler.cobol2java.protocol.ErrorCode;
 import transpiler.cobol2java.protocol.Json;
@@ -87,17 +89,23 @@ public final class Session {
     private final MappingRegistry registry;
     private final Builtins builtins;
     private final Dialect dialect;
+    private final Importance importance;
+    private final ContextGraph.Budget contextBudget;
     private final Map<String, ProgramState> programs = new LinkedHashMap<>();
     private final List<String> copybooks = new ArrayList<>();
     private final Map<String, String> programDirectory = new HashMap<>();
     private final List<Decision> decisions = new ArrayList<>();
     private final Map<String, Decision> decisionsById = new HashMap<>();
+    /** One note per setting a provider chose (initialize.setting_provenance), written at the top of each class. */
+    private final List<String> settingNotes = new ArrayList<>();
     private State state = State.ACTIVE;
 
     private Session(String id, Path sourceRoot, Path outputRoot, Layout layout, MappingRegistry registry, Builtins builtins,
-            Dialect dialect) {
+            Dialect dialect, Importance importance, ContextGraph.Budget contextBudget) {
         this.id = id;
         this.dialect = dialect;
+        this.importance = importance;
+        this.contextBudget = contextBudget;
         this.sourceRoot = sourceRoot;
         this.outputRoot = outputRoot;
         this.layout = layout;
@@ -117,12 +125,13 @@ public final class Session {
         Path outputRoot = absolute(Json.requireText(params, "output_root"), "output_root");
         Layout layout = Layout.parse(params.get("layout"));
         MappingRegistry registry = MappingRegistry.parse(params.get("mappings"), builtins);
-        JsonNode options = params.path("options");
+        JsonNode options = Dialect.withSettings(params.path("options"), params.get("settings"));
         Dialect dialect = Dialect.parse(options);
+        Importance importance = Importance.parse(params.get("importance"));
+        ContextGraph.Budget contextBudget = contextBudget(params.get("context"));
         CobolFrontend frontend;
         try {
-            frontend = new CobolFrontend(new CobolFrontend.Options(
-                    CobolFrontend.Options.parseFormat(dialect.sourceFormat()),
+            frontend = new CobolFrontend(CobolFrontend.Options.of(dialect.sourceFormat(),
                     Charset.forName(options.path("source_encoding").asText("ISO-8859-1")),
                     dialect.debuggingLines()));
         } catch (IllegalArgumentException e) {
@@ -137,7 +146,8 @@ public final class Session {
             extraCopybookPaths.add(absolute(p.asText(), "copybook_paths[]"));
         }
 
-        Session session = new Session(id, sourceRoot, outputRoot, layout, registry, builtins, dialect);
+        Session session = new Session(id, sourceRoot, outputRoot, layout, registry, builtins, dialect, importance, contextBudget);
+        session.settingNotes.addAll(settingNotes(params.get("settings"), params.get("setting_provenance")));
         ArrayNode files = Json.requireArray(params, "files");
         List<ProgramState> toParse = new ArrayList<>();
         for (JsonNode f : files) {
@@ -173,6 +183,35 @@ public final class Session {
         }
         session.checkNameCollisions();
         return session;
+    }
+
+    /** {@code initialize.context}: {max_depth, max_chars}, each a non-negative integer (defaults 2 and 4000). */
+    private static ContextGraph.Budget contextBudget(JsonNode node) throws ProtocolException {
+        if (node == null || node.isNull()) {
+            return ContextGraph.Budget.DEFAULT;
+        }
+        if (!node.isObject()) {
+            throw new ProtocolException(ErrorCode.INVALID_PARAMS, "'context' must be an object {max_depth, max_chars}");
+        }
+        for (var it = node.fieldNames(); it.hasNext(); ) {
+            String key = it.next();
+            if (!key.equals("max_depth") && !key.equals("max_chars")) {
+                throw new ProtocolException(ErrorCode.INVALID_PARAMS, "unknown context key '" + key + "'");
+            }
+        }
+        return new ContextGraph.Budget(nonNegative(node, "max_depth", ContextGraph.Budget.DEFAULT.maxDepth()),
+                nonNegative(node, "max_chars", ContextGraph.Budget.DEFAULT.maxChars()));
+    }
+
+    private static int nonNegative(JsonNode node, String field, int fallback) throws ProtocolException {
+        JsonNode v = node.get(field);
+        if (v == null || v.isNull()) {
+            return fallback;
+        }
+        if (!v.isInt() || v.asInt() < 0) {
+            throw new ProtocolException(ErrorCode.INVALID_PARAMS, "'" + field + "' must be a non-negative integer");
+        }
+        return v.asInt();
     }
 
     private static Path absolute(String value, String field) throws ProtocolException {
@@ -461,6 +500,13 @@ public final class Session {
             if (!ps.failed) {
                 var out = translateUnit(ps, ps.unit, ps.programId, ps.className);
                 ps.java = out.compilationUnit();
+                // Settings a provider chose shape the whole program: say so once, at the top of its class.
+                var type = ps.java.getType(0);
+                if (!type.getMembers().isEmpty() && !settingNotes.isEmpty()) {
+                    var first = type.getMember(0);
+                    String existing = first.getComment().map(c -> " | " + c.getContent().strip()).orElse("");
+                    first.setComment(new com.github.javaparser.ast.comments.LineComment(" " + String.join(" | ", settingNotes) + existing));
+                }
                 ps.statements = out.statements();
                 ps.translatedStatements = out.translated();
                 List<Decision> all = new ArrayList<>(out.decisions());
@@ -524,7 +570,7 @@ public final class Session {
     }
 
     private void register(Decision d) {
-        d.register("decision-" + (decisions.size() + 1), TARGET_LANGUAGE, dialect.hash());
+        d.register("decision-" + (decisions.size() + 1), TARGET_LANGUAGE, dialect.hash(), importance, contextBudget);
         decisions.add(d);
         decisionsById.put(d.id(), d);
     }
@@ -563,6 +609,9 @@ public final class Session {
             } else if (d.candidates().isEmpty()) {
                 code = "no_candidates";
                 problem = "decision has no candidates; it cannot be resolved by selection";
+            } else if (d.setting() != null) {
+                code = "setting";
+                problem = "a setting decision is applied by translating again with initialize.settings, not by resolve";
             } else if (!d.hasCandidate(selection.path("candidate_id").asText())) {
                 code = "unknown_candidate";
                 problem = "candidate '" + selection.path("candidate_id").asText() + "' is not offered by this decision";
@@ -574,19 +623,59 @@ public final class Session {
                 rej.put("message", problem);
                 continue;
             }
-            List<Decision> nested = d.resolve(selection.get("candidate_id").asText());
+            List<Decision> nested = d.resolve(selection.get("candidate_id").asText(), decidedBy(r));
             ProgramState owner = ownerOf(d);
             for (Decision n : nested) {
                 register(n);
                 owner.decisions.add(n);
                 raised.add(n.toJson(TARGET_LANGUAGE));
             }
-            owner.translatedStatements++;
+            if (d.statementTranslated()) {
+                owner.translatedStatements++;
+            }
             applied.add(decisionId);
         }
         ArrayNode pending = result.putArray("pending");
         decisions.stream().filter(x -> x.state() == Decision.State.PENDING).forEach(x -> pending.add(x.id()));
         return new Outcome(pending.isEmpty() ? Protocol.STATUS_OK : Protocol.STATUS_INCOMPLETE, result);
+    }
+
+    /**
+     * The comment for a resolution, written into the generated code: who decided, with the
+     * provider's confidence when it reports one ({@code Decided by jev (confidence 0.87): <candidate>}).
+     */
+    public static String decidedBy(JsonNode resolution) {
+        String provider = resolution.path("provider").asText("");
+        StringBuilder sb = new StringBuilder("Decided by ").append(provider.isEmpty() ? "a provider" : provider);
+        if (resolution.path("confidence").isNumber()) {
+            sb.append(String.format(java.util.Locale.ROOT, " (confidence %.2f)", resolution.get("confidence").asDouble()));
+        }
+        return sb.append(": ").append(resolution.path("selection").path("candidate_id").asText()).toString();
+    }
+
+    /**
+     * The notes for settings a provider chose: {@code Dialect.move_overlap = "ibm" decided by jev
+     * (confidence 0.91)}. Settings set by the project itself have no provenance and no note.
+     */
+    static List<String> settingNotes(JsonNode settings, JsonNode provenance) {
+        List<String> notes = new ArrayList<>();
+        if (provenance == null || !provenance.isObject() || settings == null || !settings.isObject()) {
+            return notes;
+        }
+        for (var e : provenance.properties()) {
+            JsonNode value = settings.get(e.getKey());
+            if (value == null) {
+                continue;
+            }
+            String provider = e.getValue().path("provider").asText("");
+            StringBuilder sb = new StringBuilder("Dialect.").append(e.getKey()).append(" = ").append(value)
+                    .append(" decided by ").append(provider.isEmpty() ? "a provider" : provider);
+            if (e.getValue().path("confidence").isNumber()) {
+                sb.append(String.format(java.util.Locale.ROOT, " (confidence %.2f)", e.getValue().get("confidence").asDouble()));
+            }
+            notes.add(sb.toString());
+        }
+        return notes;
     }
 
     private ProgramState ownerOf(Decision d) {
@@ -596,6 +685,45 @@ public final class Session {
             }
         }
         throw new IllegalStateException("decision " + d.id() + " has no owning program");
+    }
+
+    // ---------------------------------------------------------- expand_context
+
+    /** The text of truncated context nodes of a decision, and their neighbours one level deeper. */
+    Outcome expandContext(JsonNode params) throws ProtocolException {
+        requireActive();
+        String decisionId = Json.requireText(params, "decision_id");
+        Decision d = decisionsById.get(decisionId);
+        if (d == null) {
+            throw new ProtocolException(ErrorCode.INVALID_PARAMS, "no decision '" + decisionId + "' in session " + id);
+        }
+        ArrayNode refs = Json.requireArray(params, "refs");
+        if (refs.isEmpty()) {
+            throw new ProtocolException(ErrorCode.INVALID_PARAMS, "'refs' must name at least one ref");
+        }
+        int maxChars = nonNegative(params, "max_chars", contextBudget.maxChars());
+        ObjectNode result = Json.object();
+        result.put("decision_id", decisionId);
+        ArrayNode nodes = result.putArray("refs");
+        ArrayNode rejected = result.putArray("rejected");
+        List<String> wanted = new ArrayList<>();
+        for (JsonNode r : refs) {
+            String ref = r.isTextual() ? r.asText() : r.toString();
+            if (r.isTextual() && d.context() != null && d.context().knows(ref)) {
+                if (!wanted.contains(ref)) {
+                    wanted.add(ref);
+                }
+            } else {
+                ObjectNode rej = rejected.addObject();
+                rej.put("ref", ref);
+                rej.put("code", "unknown_ref");
+                rej.put("message", "decision " + decisionId + " has no context node '" + ref + "'");
+            }
+        }
+        if (!wanted.isEmpty()) {
+            d.context().expand(wanted, maxChars).forEach(nodes::add);
+        }
+        return new Outcome(Protocol.STATUS_OK, result);
     }
 
     // ---------------------------------------------------------------- finalize

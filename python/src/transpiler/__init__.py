@@ -12,6 +12,10 @@
 from .api import (
     LanguagePair,
     ProgramResult,
+    Resolution,
+    Resolutions,
+    ReviewItem,
+    SettingChoice,
     TranspileResult,
     TranspilerError,
     find_language_pair,
@@ -19,8 +23,16 @@ from .api import (
     transpile,
 )
 from .callbacks import CallbackRef, CallbackRequest, CallbackResponse
-from .protocol import Candidate, DecisionRequest, DecisionResponse, Reason, SourceLocation
-from .providers import DecisionProvider, DeterministicProvider, StaticProvider
+from .protocol import Candidate, DecisionRequest, DecisionResponse, Reason, ReviewPriority, SourceLocation
+from .providers import (
+    OPENROUTER_BASE_URL,
+    ContextBudget,
+    DecisionProvider,
+    DeterministicProvider,
+    Gate,
+    JevProvider,
+    StaticProvider,
+)
 from .registry import HandlerCatalog, Mapping, MappingError, MappingRegistry, Strategy
 
 __all__ = [
@@ -28,17 +40,26 @@ __all__ = [
     "CallbackRequest",
     "CallbackResponse",
     "Candidate",
+    "ContextBudget",
     "DecisionProvider",
     "DecisionRequest",
     "DecisionResponse",
     "DeterministicProvider",
+    "Gate",
     "HandlerCatalog",
+    "JevProvider",
     "LanguagePair",
     "Mapping",
     "MappingError",
     "MappingRegistry",
+    "OPENROUTER_BASE_URL",
     "ProgramResult",
     "Reason",
+    "Resolution",
+    "Resolutions",
+    "ReviewItem",
+    "ReviewPriority",
+    "SettingChoice",
     "SourceLocation",
     "StaticProvider",
     "Strategy",

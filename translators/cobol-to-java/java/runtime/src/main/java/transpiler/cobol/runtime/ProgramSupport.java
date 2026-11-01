@@ -204,6 +204,11 @@ public final class ProgramSupport {
         }
     }
 
+    /** STOP RUN GIVING / RETURNING status: ends the run unit with that exit status (cob_stop_run). */
+    public static void stopRun(int status) {
+        throw new StopRun(status);
+    }
+
     public static void stopRun(CobolProgram self) {
         throw new StopRun(self.returnCode().intValue());
     }

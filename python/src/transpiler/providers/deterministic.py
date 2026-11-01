@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
-from ..protocol import DecisionRequest, DecisionResponse
+from ..protocol import DecisionRequest, DecisionResponse, ExtraContext
 from .base import DecisionProvider
 
 
@@ -15,7 +15,9 @@ class DeterministicProvider(DecisionProvider):
     def to_config(self) -> dict[str, Any]:
         return {"kind": "deterministic"}
 
-    def decide(self, batch: Sequence[DecisionRequest]) -> list[DecisionResponse]:
+    def decide(
+        self, batch: Sequence[DecisionRequest], extra_context: Mapping[str, ExtraContext] | None = None
+    ) -> list[DecisionResponse]:
         return []
 
 
@@ -34,7 +36,9 @@ class StaticProvider(DecisionProvider):
     def to_config(self) -> dict[str, Any]:
         return {"kind": "static", "decisions": [d.to_json() for d in self.decisions]}
 
-    def decide(self, batch: Sequence[DecisionRequest]) -> list[DecisionResponse]:
+    def decide(
+        self, batch: Sequence[DecisionRequest], extra_context: Mapping[str, ExtraContext] | None = None
+    ) -> list[DecisionResponse]:
         out = []
         for request in batch:
             for d in self.decisions:

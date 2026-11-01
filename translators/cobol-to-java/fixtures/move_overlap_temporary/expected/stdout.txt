@@ -1,0 +1,6 @@
+shift right [AABCDEFGHI]
+propagate   [**BCDEFGHI]
+shift left  [CDEFGFGHIJ]
+group       [abcdebcdef]
+elementary  [ababcdehij]
+shorter     [AABCD    J]

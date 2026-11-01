@@ -1,0 +1,6 @@
+{
+  "description": "ALTER: changing a GO TO target several times, falling through into the altered paragraph, ALTER state kept across CALLs and reset by CANCEL",
+  "expect": {"status": "ok"},
+  "equivalence": {"programs": ["ALTERS.cbl", "ALTSUB.cbl"], "main_class": "fixtures.alter.Alters"},
+  "layout": {"base_package": "fixtures.alter"}
+}

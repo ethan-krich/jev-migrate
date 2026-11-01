@@ -1,0 +1,8 @@
+{
+  "description": "SEARCH ALL as GnuCOBOL's binary search: ascending and descending KEY, AT END, duplicate keys (the occurrence its probes reach) and keys out of order (a present value can be missed)",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "out_of_range": "fail"},
+  "equivalence": {"programs": ["SRCHALL.cbl"], "main_class": "fixtures.search_all.Srchall",
+                  "cobc_flags": ["-fec=EC-BOUND-SUBSCRIPT"]},
+  "layout": {"base_package": "fixtures.search_all"}
+}

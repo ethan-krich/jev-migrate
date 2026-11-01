@@ -1,0 +1,7 @@
+{
+  "description": "DISPLAY of numeric function results in GnuCOBOL's forms: ABS / MAX / MIN in the picture of their argument (DISPLAY, COMP-3, BINARY, SIGN SEPARATE items and literals), SUM / NUMVAL / NUMVAL-C / MOD / REM / INTEGER in the field sized from the value (9 or 20 digits, trailing zeros dropped, high digits cut); hexadecimal and Z literals",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "out_of_range": "fail"},
+  "equivalence": {"programs": ["FNDISP.cbl"], "main_class": "fixtures.function_display.Fndisp"},
+  "layout": {"base_package": "fixtures.function_display"}
+}

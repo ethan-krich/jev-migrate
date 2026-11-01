@@ -1,0 +1,7 @@
+{
+  "description": "MOVE of alphanumeric data into numeric items (libcob's cob_move_alphanum_to_display: signs, decimal points, separators, spaces, invalid bytes, truncation; DISPLAY, SIGN SEPARATE, COMP-3 and BINARY receivers; reference modification), alphanumeric literals (cobc's compile-time copy), MOVE ALL digits, UNSTRING into numeric receivers",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "out_of_range": "fail"},
+  "equivalence": {"programs": ["ALPHNUM.cbl"], "main_class": "fixtures.alphanumeric_to_numeric.Alphnum"},
+  "layout": {"base_package": "fixtures.alphanumeric_to_numeric"}
+}

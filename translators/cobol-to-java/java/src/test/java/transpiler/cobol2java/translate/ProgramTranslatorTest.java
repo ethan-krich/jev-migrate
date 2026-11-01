@@ -14,7 +14,10 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import transpiler.cobol2java.TestSupport;
+import transpiler.cobol2java.context.ContextGraph;
+import transpiler.cobol2java.decision.Candidate;
 import transpiler.cobol2java.decision.Decision;
+import transpiler.cobol2java.decision.Importance;
 import transpiler.cobol2java.decision.Reason;
 
 class ProgramTranslatorTest {
@@ -129,20 +132,68 @@ class ProgramTranslatorTest {
     }
 
     @Test
+    void externalCallBindsThroughSlotDecisions() throws Exception {
+        String src = program("01 A PIC X(4).", "CALL 'EXTPROG' USING A ON EXCEPTION DISPLAY 'none' END-CALL.", "STOP RUN.");
+        var r = translate(dir, src, defaultRules(), Map.of("OTHER", "test.gen.Other"));
+        Decision d = r.decisions().getFirst();
+        assertEquals(Reason.MISSING_TARGET_API, d.reason());
+        Candidate external = d.candidates().getFirst();
+        assertEquals("builtin:call_external", external.id());
+        assertEquals(List.of("target", "args"), external.slots().stream().map(Candidate.Slot::name).toList());
+        List<Decision> slots = d.resolve(external.id(), null);
+        assertFalse(d.statementTranslated(), "the statement waits for its slots");
+        assertEquals(List.of("target", "args"), slots.stream().map(Decision::slotName).toList());
+        // OTHER's USING items are unknown (it is not parsed here), so only "not found" is offered.
+        assertEquals(List.of("target:not_found"), slots.get(0).candidates().stream().map(Candidate::id).toList());
+        assertEquals(List.of("args:as_written", "args:by_content"), slots.get(1).candidates().stream().map(Candidate::id).toList());
+        assertTrue(r.compilationUnit().toString().contains("UNRESOLVED CALL"));
+        assertTrue(slots.get(0).resolve("target:not_found", null).isEmpty());
+        assertFalse(slots.get(0).statementTranslated());
+        assertTrue(slots.get(1).resolve("args:as_written", null).isEmpty());
+        assertTrue(slots.get(1).statementTranslated());
+        String out = java(r);
+        assertFalse(out.contains("UNRESOLVED"), out);
+        assertTrue(out.contains("ProgramSupport.callNamed(this, \"EXTPROG\", name -> null, true, a.view())"), out);
+        assertEquals("", compile("test.gen.T", out));
+    }
+
+    @Test
+    void acceptFromEnvironmentIsNotOfferedAsStandardInput() throws Exception {
+        var rules = defaultRules();
+        rules.removeIf(n -> n.get("source").asText().equals("ACCEPT"));
+        var r = translate(dir, program("01 V PIC X(10).", "ACCEPT V FROM ENVIRONMENT 'MYVAR'."), rules);
+        Decision d = r.decisions().getFirst();
+        assertEquals(List.of("builtin:accept_environment"), d.candidates().stream().map(Candidate::id).toList());
+    }
+
+    @Test
     void removedMappingOffersValidatedCandidatesAndApplies() throws Exception {
         var rules = defaultRules();
         rules.removeIf(n -> n.get("source").asText().equals("DISPLAY"));
         var r = translate(dir, program("01 A PIC 9 VALUE 1.", "IF A = 1 DISPLAY 'one' END-IF."), rules);
         Decision d = r.decisions().getFirst();
-        d.register("decision-1", "java", "sha256:0");
+        d.register("decision-1", "java", "sha256:0", Importance.empty(), ContextGraph.Budget.DEFAULT);
         assertEquals(Reason.MISSING_MAPPING, d.reason());
         assertEquals(List.of("builtin:display"), d.candidates().stream().map(c -> c.id()).toList());
         assertTrue(d.candidates().getFirst().preview().contains("Display.line(\"one\")"));
         assertTrue(d.fingerprint().startsWith("sha256:"));
-        assertTrue(d.resolve("builtin:display").isEmpty());
+        assertTrue(d.resolve("builtin:display", null).isEmpty());
         String src = java(r);
         assertFalse(src.contains("UNRESOLVED"), src);
         assertTrue(src.contains("Display.line(\"one\");"), src);
+        assertEquals("", compile("test.gen.T", src));
+    }
+
+    @Test
+    void anAppliedDecisionSaysWhoDecidedInALineComment() throws Exception {
+        var r = translate(dir, program("", "STOP 'mount tape'."), defaultRules());
+        Decision d = r.decisions().getFirst();
+        var resolution = transpiler.cobol2java.protocol.Json.MAPPER.readTree(
+                "{\"provider\": \"jev\", \"confidence\": 0.8734, \"selection\": {\"kind\": \"candidate\", "
+                        + "\"candidate_id\": \"builtin:stop_literal_accept\"}}");
+        d.resolve("builtin:stop_literal_accept", transpiler.cobol2java.session.Session.decidedBy(resolution));
+        String src = java(r);
+        assertTrue(src.contains("// Decided by jev (confidence 0.87): builtin:stop_literal_accept\n"), src);
         assertEquals("", compile("test.gen.T", src));
     }
 
@@ -152,10 +203,10 @@ class ProgramTranslatorTest {
         rules.removeIf(n -> n.get("source").asText().equals("IF") || n.get("source").asText().equals("DISPLAY"));
         var r = translate(dir, program("01 A PIC 9.", "IF A = 1 DISPLAY 'one' END-IF."), rules);
         assertEquals(1, r.decisions().size(), "the nested DISPLAY is only raised once IF is resolved");
-        List<Decision> nested = r.decisions().getFirst().resolve("builtin:if");
+        List<Decision> nested = r.decisions().getFirst().resolve("builtin:if", null);
         assertEquals(1, nested.size());
         assertEquals("DISPLAY", nested.getFirst().operation());
-        nested.getFirst().resolve("builtin:display");
+        nested.getFirst().resolve("builtin:display", null);
         assertFalse(java(r).contains("UNRESOLVED"));
     }
 
@@ -182,7 +233,7 @@ class ProgramTranslatorTest {
         assertEquals(List.of("dialect:encoding"), operations(unset));
         Decision d = unset.decisions().getFirst();
         assertEquals(Reason.MISSING_MAPPING, d.reason());
-        assertTrue(d.candidates().isEmpty());
+        assertEquals(List.of("setting:ascii", "setting:ebcdic"), d.candidates().stream().map(Candidate::id).toList());
         var set = translate(dir, src, defaultRules(), Map.of(), TestSupport.dialect("{\"encoding\": \"ascii\"}"));
         assertTrue(set.decisions().isEmpty(), () -> set.decisions().toString());
         assertEquals("", compile("test.gen.T", java(set)));
@@ -198,14 +249,32 @@ class ProgramTranslatorTest {
     }
 
     @Test
-    void exitsThatLeaveAPerformedRangeAreDecisions() throws Exception {
+    void aSettingDecisionOffersTheValuesWithEveryUseAsEvidence() throws Exception {
+        String src = program("01 C PIC X.", "IF C >= 'A' AND C <= '9' DISPLAY 'code' END-IF.",
+                "IF C < 'a' DISPLAY 'x' END-IF.");
+        Decision d = translate(dir, src, defaultRules()).decisions().getFirst();
+        d.register("decision-1", "java", "sha256:0", Importance.empty(), ContextGraph.Budget.DEFAULT);
+        var json = d.toJson("java");
+        assertEquals("collating_sequence", json.at("/setting/field").asText());
+        assertEquals("ebcdic", json.at("/setting/values/setting:ebcdic").asText());
+        assertEquals(List.of("setting:native", "setting:ascii", "setting:ebcdic"), d.candidates().stream().map(Candidate::id).toList());
+        assertTrue(d.candidates().get(2).description().contains("lower-case letters < upper-case letters < digits"));
+        var usages = json.at("/context/facts/usages");
+        assertEquals(2, usages.size(), usages::toString);
+        assertTrue(usages.get(0).asText().matches("line \\d+: IF C >= 'A' AND C <= '9' DISPLAY 'code' END-IF"), usages::toString);
+        assertTrue(usages.get(1).asText().endsWith("IF C < 'a' DISPLAY 'x' END-IF"), usages::toString);
+    }
+
+    @Test
+    void exitPerformOutsideAnInlinePerformIsADecisionAndExitSectionUsesTheDispatcher() throws Exception {
         String src = program("01 N PIC 9.",
                 "MAIN SECTION.", "P1.", "    PERFORM P2.", "    EXIT PERFORM.", "    STOP RUN.",
                 "P2.", "    EXIT SECTION.");
         var r = translate(dir, src, defaultRules());
-        assertEquals(List.of("EXIT", "EXIT"), operations(r));
+        assertEquals(List.of("EXIT"), operations(r));
         assertTrue(r.decisions().get(0).toJson("java").get("message").asText().contains("outside an inline PERFORM"));
-        assertTrue(r.decisions().get(1).toJson("java").get("message").asText().contains("PERFORMed on its own"));
+        // P2 is PERFORMed on its own and left by EXIT SECTION: the procedure dispatcher keeps the PERFORM waiting.
+        assertTrue(java(r).contains("PerformStack"));
     }
 
     @Test
@@ -228,11 +297,11 @@ class ProgramTranslatorTest {
                 "A.", "    DISPLAY 'a'.", "B.", "    DISPLAY 'b'.", "C.", "    PERFORM E.",
                 "D.", "    GO TO A.", "E.", "    PERFORM E."), defaultRules());
         List<String> got = r.decisions().stream().map(d -> d.operation() + ":" + d.message()).toList();
-        assertEquals(4, got.size(), got.toString());
+        // GO TO A out of PERFORM D's range is translated: the PERFORM waits for D's end, as in GnuCOBOL.
+        assertEquals(3, got.size(), got.toString());
         assertTrue(got.get(0).startsWith("PERFORM:PERFORM range overlaps"), got.toString());
         assertTrue(got.get(1).startsWith("PERFORM:PERFORM range overlaps"), got.toString());
-        assertTrue(got.get(2).startsWith("GO_TO:GO TO out of a PERFORMed range"), got.toString());
-        assertTrue(got.get(3).startsWith("PERFORM:recursive PERFORM"), got.toString());
+        assertTrue(got.get(2).startsWith("PERFORM:recursive PERFORM"), got.toString());
     }
 
     @Test

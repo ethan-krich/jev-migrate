@@ -13,3 +13,16 @@ returned [c 3       ]
 returned [c 3       ]   
 returned [d 4       ]   
 returned [e 5       ]   
+by age [jones  25 ]
+by age [baker  25 ]
+by age [smith  30 ]
+by age [adams  30 ]
+by age [clark  40 ]
+returned [r6     08 ] 08
+returned [r1     05 ] 05
+returned [r3     05 ] 05
+returned [r5     05 ] 05
+returned [r8     05 ] 05
+returned [r2     03 ] 03
+returned [r4     03 ] 03
+returned [r7     03 ] 03

@@ -7,6 +7,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -32,20 +33,81 @@ public record Dialect(
         String sourceFormat,
         Map<String, String> fileAssignments,
         Optional<String> whenCompiled,
-        Optional<String> dynamicCalls) {
+        Optional<String> dynamicCalls,
+        Optional<String> moveOverlap) {
 
     /** Option keys of {@code initialize} that are not dialect settings. */
     static final Set<String> OTHER_OPTIONS = Set.of("source_encoding");
 
     static final Set<String> KEYS = Set.of("encoding", "collating_sequence", "out_of_range", "binary_truncate",
             "sync_alignment", "debugging_lines", "source_format", "file_assignments", "when_compiled",
-            "dynamic_calls");
+            "dynamic_calls", "move_overlap");
 
     private static final Pattern WHEN_COMPILED = Pattern.compile("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}");
 
+    /**
+     * The settings a {@code dialect:<field>} decision offers as candidates: each value with what it
+     * means for the translated program. A chosen value comes back in {@code initialize.settings}.
+     */
+    public static final Map<String, Map<Object, String>> SETTINGS = settings();
+
+    private static Map<String, Map<Object, String>> settings() {
+        Map<String, Map<Object, String>> s = new LinkedHashMap<>();
+        Map<Object, String> encoding = new LinkedHashMap<>();
+        encoding.put("ascii", "the programs ran with ASCII data (GnuCOBOL and most compilers off the mainframe): "
+                + "the bytes of HIGH-VALUES / LOW-VALUES and of class tests are ASCII");
+        encoding.put("ebcdic", "the programs ran with EBCDIC data (IBM mainframe compilers): "
+                + "the bytes of HIGH-VALUES / LOW-VALUES and of class tests are EBCDIC");
+        s.put("encoding", encoding);
+        Map<Object, String> collating = new LinkedHashMap<>();
+        collating.put("native", "ordered alphanumeric comparisons and SORT keys follow the encoding's own byte order");
+        collating.put("ascii", "ordered alphanumeric comparisons and SORT keys use ASCII order: "
+                + "space < digits < upper-case letters < lower-case letters");
+        collating.put("ebcdic", "ordered alphanumeric comparisons and SORT keys use EBCDIC order, as on an IBM mainframe: "
+                + "space < lower-case letters < upper-case letters < digits");
+        s.put("collating_sequence", collating);
+        Map<Object, String> range = new LinkedHashMap<>();
+        range.put("fail", "a subscript or reference modification outside its table stops the run unit, as GnuCOBOL "
+                + "does with run-time checks (-fec=EC-BOUND-SUBSCRIPT)");
+        range.put("decision", "every access that cannot be proven in range becomes a decision instead of being translated");
+        s.put("out_of_range", range);
+        Map<Object, String> sync = new LinkedHashMap<>();
+        sync.put(true, "SYNCHRONIZED inserts slack bytes before binary items");
+        sync.put(false, "SYNCHRONIZED is ignored: no slack bytes");
+        s.put("sync_alignment", sync);
+        Map<Object, String> overlap = new LinkedHashMap<>();
+        overlap.put("temporary", "a MOVE between alphanumeric items that share bytes copies as if through a temporary item "
+                + "(GnuCOBOL's default: memmove)");
+        overlap.put("ibm", "such a MOVE copies byte by byte from left to right, so a receiver that starts inside the sender "
+                + "repeats its first bytes (IBM mainframe MVC; GnuCOBOL with -fmove-ibm)");
+        s.put("move_overlap", overlap);
+        return java.util.Collections.unmodifiableMap(s);
+    }
+
+    /**
+     * {@code options} with {@code settings} (chosen values of {@link #SETTINGS}) written over it.
+     * Only settings fields may be overridden this way.
+     */
+    public static JsonNode withSettings(JsonNode options, JsonNode settings) throws ProtocolException {
+        if (settings == null || settings.isNull() || settings.isMissingNode()) {
+            return options;
+        }
+        if (!settings.isObject()) {
+            throw invalid("'settings' must be an object");
+        }
+        ObjectNode merged = options != null && options.isObject() ? ((ObjectNode) options).deepCopy() : Json.object();
+        for (var e : settings.properties()) {
+            if (!SETTINGS.containsKey(e.getKey())) {
+                throw invalid("settings." + e.getKey() + " is not a setting a decision offers (" + SETTINGS.keySet() + ")");
+            }
+            merged.set(e.getKey(), e.getValue());
+        }
+        return merged;
+    }
+
     public static Dialect defaults() {
         return new Dialect(Optional.empty(), Optional.empty(), Optional.empty(), true, Optional.empty(), false, "fixed",
-                Map.of(), Optional.empty(), Optional.empty());
+                Map.of(), Optional.empty(), Optional.empty(), Optional.empty());
     }
 
     /** Parses {@code initialize.params.options}; unknown keys and malformed values are INVALID_PARAMS. */
@@ -87,10 +149,11 @@ public record Dialect(
                 bool(options, "binary_truncate").orElse(true),
                 bool(options, "sync_alignment"),
                 bool(options, "debugging_lines").orElse(false),
-                text(options, "source_format", Set.of("fixed", "variable", "tandem")).orElse("fixed"),
+                text(options, "source_format", Set.of("fixed", "variable", "tandem", "free")).orElse("fixed"),
                 Map.copyOf(files),
                 whenCompiled,
-                text(options, "dynamic_calls", Set.of("project")));
+                text(options, "dynamic_calls", Set.of("project")),
+                text(options, "move_overlap", Set.of("temporary", "ibm")));
     }
 
     private static Optional<String> text(JsonNode options, String key, Set<String> allowed) throws ProtocolException {
@@ -138,6 +201,7 @@ public record Dialect(
         new TreeMap<>(fileAssignments).forEach(files::put);
         n.put("when_compiled", whenCompiled.orElse(null));
         n.put("dynamic_calls", dynamicCalls.orElse(null));
+        n.put("move_overlap", moveOverlap.orElse(null));
         return n;
     }
 

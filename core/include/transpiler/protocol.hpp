@@ -14,6 +14,8 @@ namespace transpiler::protocol {
 using json = nlohmann::json;
 
 inline constexpr std::string_view kVersion = "transpiler-worker/1";
+// Out-of-process decision providers speak the same envelope under their own version.
+inline constexpr std::string_view kProviderVersion = "transpiler-provider/1";
 
 enum class Status { ok, incomplete, error };
 
@@ -48,10 +50,11 @@ struct Event {
 using Message = std::variant<Response, Event>;
 
 // Serializes a request as a single line (no trailing newline).
-std::string encode(const Request& request);
+std::string encode(const Request& request, std::string_view version = kVersion);
 
-// Parses one line from a worker. Errors describe exactly what was malformed.
-std::expected<Message, std::string> decode(std::string_view line);
+// Parses one line from a worker (or a provider, with its version). Errors describe exactly what
+// was malformed.
+std::expected<Message, std::string> decode(std::string_view line, std::string_view version = kVersion);
 
 std::string_view to_string(Status status);
 std::optional<Status> parse_status(std::string_view text);

@@ -1,0 +1,9 @@
+{
+  "description": "SORT / MERGE COLLATING SEQUENCE (EBCDIC and NATIVE alphabets), SORT GIVING several files, SORT USING / GIVING RELATIVE and INDEXED files (sequential and dynamic access)",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native",
+              "file_assignments": {"names.txt": "names.txt", "out1.txt": "out1.txt", "out2.txt": "out2.txt",
+                                   "rel.dat": "rel.dat", "idx.dat": "idx.dat", "idx2.dat": "idx2.dat", "seq.dat": "seq.dat"}},
+  "equivalence": {"programs": ["SORTFILE.cbl"], "main_class": "fixtures.sort_files.Sortfile"},
+  "layout": {"base_package": "fixtures.sort_files"}
+}

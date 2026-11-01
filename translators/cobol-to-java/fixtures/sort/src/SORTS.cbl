@@ -51,7 +51,31 @@
            MERGE WORK ON ASCENDING KEY W-NAME
                USING ODD-F EVEN-F
                OUTPUT PROCEDURE IS SHOW-RECORDS.
+      * Without DUPLICATES IN ORDER GnuCOBOL still returns equal keys
+      * in the order they were released.
+           SORT WORK ON ASCENDING KEY W-AGE
+               USING PEOPLE GIVING SORTED.
+           MOVE "N" TO EOF.
+           OPEN INPUT SORTED.
+           PERFORM UNTIL EOF = "Y"
+               READ SORTED AT END MOVE "Y" TO EOF
+                   NOT AT END DISPLAY "by age [" S-REC "]"
+               END-READ
+           END-PERFORM.
+           CLOSE SORTED.
+           SORT WORK ON DESCENDING KEY W-AGE
+               INPUT PROCEDURE IS MAKE-TIES
+               OUTPUT PROCEDURE IS SHOW-RECORDS.
            STOP RUN.
+       MAKE-TIES.
+           MOVE "r1     05 " TO W-REC. RELEASE W-REC.
+           MOVE "r2     03 " TO W-REC. RELEASE W-REC.
+           MOVE "r3     05 " TO W-REC. RELEASE W-REC.
+           MOVE "r4     03 " TO W-REC. RELEASE W-REC.
+           MOVE "r5     05 " TO W-REC. RELEASE W-REC.
+           MOVE "r6     08 " TO W-REC. RELEASE W-REC.
+           MOVE "r7     03 " TO W-REC. RELEASE W-REC.
+           MOVE "r8     05 " TO W-REC. RELEASE W-REC.
        MAKE-RECORDS.
            MOVE "zed    09 " TO W-REC. RELEASE W-REC.
            MOVE "amy    07 " TO W-REC. RELEASE W-REC.

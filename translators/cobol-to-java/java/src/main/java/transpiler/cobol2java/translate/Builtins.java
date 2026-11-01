@@ -79,9 +79,12 @@ public final class Builtins implements MappingRegistry.Catalog {
 
     public Builtins() {
         register(Handler.of("move_to_alphanumeric", "MOVE",
-                "MOVE into a PIC X receiver: left-justify, space-pad and right-truncate", Builtins::moveToAlphanumeric));
+                "MOVE into an alphanumeric receiver (PIC X, not edited): left-justify, space-pad and right-truncate",
+                Builtins::moveToAlphanumeric));
         register(Handler.of("move_to_numeric", "MOVE",
-                "MOVE into a PIC 9 receiver: decimal alignment with high- and low-order truncation", Builtins::moveToNumeric));
+                "MOVE into a numeric receiver (PIC 9, signed or unsigned, with or without decimal places; not edited): "
+                        + "decimal alignment with high- and low-order truncation; alphanumeric data converted as libcob does",
+                Builtins::moveToNumeric));
         register(Handler.of("add", "ADD", "ADD ... TO / GIVING with exact decimal arithmetic", Builtins::add));
         register(Handler.of("subtract", "SUBTRACT", "SUBTRACT ... FROM / GIVING with exact decimal arithmetic", Builtins::subtract));
         register(Handler.of("multiply", "MULTIPLY", "MULTIPLY ... BY / GIVING with exact decimal arithmetic", Builtins::multiply));
@@ -90,9 +93,24 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("compute_gnucobol", "COMPUTE",
                 "COMPUTE with / and integer ** as GnuCOBOL 3.2 computes them (quotients keep 38 extra digits, truncated)",
                 Builtins::computeGnucobol));
-        register(Handler.of("display", "DISPLAY", "DISPLAY to standard output in GnuCOBOL format", Builtins::display));
+        register(Handler.of("display", "DISPLAY", "DISPLAY of literals and items, each item in its GnuCOBOL DISPLAY form", Builtins::display));
         register(Handler.of("if", "IF", "IF / ELSE with relation, sign and combined conditions", Builtins::ifElse));
         register(Handler.of("perform", "PERFORM", "PERFORM paragraph/section or inline; TIMES, UNTIL, single VARYING", Builtins::perform));
+        register(Handler.of("stop_literal_accept", "STOP",
+                "STOP literal as GnuCOBOL runs it: the literal is displayed on standard output, then one line of standard input "
+                        + "is read (the operator's reply) and the program continues", Builtins::stopLiteralAccept));
+        register(Handler.of("stop_literal_continue", "STOP",
+                "STOP literal shown on standard output, then the program continues without reading a reply "
+                        + "(correct only if nothing must wait for an operator)", Builtins::stopLiteralContinue));
+        register(Handler.of("display_printer", "DISPLAY",
+                "DISPLAY UPON PRINTER as GnuCOBOL runs it: appended to the file COB_DISPLAY_PRINT_FILE names, else standard output",
+                Builtins::displayPrinter));
+        register(Handler.of("display_device_stdout", "DISPLAY",
+                "DISPLAY UPON PRINTER / SYSPCH written to standard output (correct if the device is the job's output)",
+                Builtins::displayDeviceStdout));
+        register(Handler.of("display_device_stderr", "DISPLAY",
+                "DISPLAY UPON PRINTER / SYSPCH written to standard error (correct if the device is the job's error log)",
+                Builtins::displayDeviceStderr));
         register(Handler.of("stop_run", "STOP", "STOP RUN ends the run unit with RETURN-CODE as exit status", Builtins::stopRun));
         register(Handler.of("goback", "GOBACK", "GOBACK returns to the caller, or ends the run unit", (u, c) ->
                 List.of(stmt(staticCall("ProgramSupport", "goback", self())))));
@@ -101,6 +119,11 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("call_program", "CALL",
                 "CALL 'literal' of a program in the project, or CALL identifier (Dialect.dynamic_calls), [USING] [ON EXCEPTION]",
                 Builtins::callProgram));
+        register(Handler.of("call_external", "CALL",
+                "candidate only: CALL of a program outside the project, bound through its target and args slots",
+                (u, c) -> {
+                    throw HandlerException.notApplicable("call_external is offered only for a CALL of a program outside the project");
+                }));
         register(Handler.of("entry", "ENTRY", "ENTRY reached in the flow of the program (no operation; CALL starts there)",
                 (u, c) -> List.of(noOp("ENTRY"))));
         register(Handler.of("cancel_program", "CANCEL", "CANCEL 'literal' / identifier: the program's next CALL starts it afresh",
@@ -112,7 +135,7 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("accept_stdin", "ACCEPT",
                 "ACCEPT an alphanumeric item from standard input (one line; spaces at end of input)", Builtins::acceptStdin));
         register(Handler.of("accept_datetime", "ACCEPT",
-                "ACCEPT FROM DATE [YYYYMMDD] / DAY [YYYYDDD] / DAY-OF-WEEK / TIME via the runtime Clock", Builtins::acceptDatetime));
+                "ACCEPT FROM DATE [YYYYMMDD] / DAY [YYYYDDD] / DAY-OF-WEEK / TIME / MICROSECOND-TIME via the runtime Clock", Builtins::acceptDatetime));
         register(Handler.of("accept_environment", "ACCEPT",
                 "ACCEPT FROM ENVIRONMENT-VALUE / ENVIRONMENT name / ARGUMENT-NUMBER / ARGUMENT-VALUE / COMMAND-LINE [ON EXCEPTION]",
                 Builtins::acceptEnvironment));
@@ -124,15 +147,14 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("string", "STRING",
                 "STRING ... DELIMITED BY ... INTO [WITH POINTER] [ON OVERFLOW]", Builtins::stringStatement));
         register(Handler.of("unstring", "UNSTRING",
-                "UNSTRING [DELIMITED BY [ALL] ... OR ...] INTO alphanumeric items [DELIMITER IN] [COUNT IN] [POINTER] [TALLYING]",
+                "UNSTRING [DELIMITED BY [ALL] ... OR ...] INTO alphanumeric or numeric items [DELIMITER IN] [COUNT IN] [POINTER] [TALLYING]",
                 Builtins::unstring));
         register(Handler.of("inspect", "INSPECT",
                 "INSPECT TALLYING / REPLACING / CONVERTING with BEFORE / AFTER INITIAL", Builtins::inspect));
         register(Handler.of("go_to", "GO_TO", "GO TO procedure and GO TO ... DEPENDING ON (procedure dispatcher)", Builtins::goTo));
         register(Handler.of("alter", "ALTER",
-                "ALTER is a decision: it changes a GO TO at run time; the candidate below is offered for review", Builtins::alter));
-        register(Handler.of("alter_goto", "ALTER",
-                "ALTER as an assignment of the altered paragraph's GO TO target (candidate only)", Builtins::alterGoTo));
+                "ALTER paragraph TO [PROCEED TO] procedure: sets the GO TO target of the altered paragraph (procedure dispatcher)",
+                Builtins::alter));
         register(Handler.of("open_file", "OPEN", "OPEN INPUT / OUTPUT / I-O / EXTEND of SEQUENTIAL, LINE SEQUENTIAL, RELATIVE and INDEXED files",
                 Builtins::openFile));
         register(Handler.of("close_file", "CLOSE", "CLOSE files", Builtins::closeFile));
@@ -140,15 +162,16 @@ public final class Builtins implements MappingRegistry.Catalog {
                 "READ [NEXT / PREVIOUS] [INTO] [AT END], or READ by key [KEY IS] [INVALID KEY] of RELATIVE and INDEXED files", Builtins::readFile));
         register(Handler.of("write_file", "WRITE",
                 "WRITE record [FROM] [BEFORE / AFTER ADVANCING n LINES / PAGE] [AT END-OF-PAGE] [INVALID KEY]", Builtins::writeFile));
+        register(Handler.of("read_file_unlocked", "READ",
+                "READ ... WITH LOCK / NO LOCK / WAIT as a READ without the lock phrase (correct when no other process uses the file "
+                        + "at the same time: within one run unit record locks have no effect)", Builtins::readFileUnlocked));
         register(Handler.of("rewrite_file", "REWRITE", "REWRITE record [FROM] [INVALID KEY] of a file opened I-O", Builtins::rewriteFile));
         register(Handler.of("delete_file", "DELETE", "DELETE file RECORD [INVALID KEY] of RELATIVE and INDEXED files", Builtins::deleteFile));
         register(Handler.of("start_file", "START", "START file [KEY IS =, >, >=, <, <= item] [INVALID KEY] of RELATIVE and INDEXED files",
                 Builtins::startFile));
         register(Handler.of("sort", "SORT",
-                "SORT ... WITH DUPLICATES IN ORDER: stable sort, USING / INPUT PROCEDURE, GIVING / OUTPUT PROCEDURE", Builtins::sort));
-        register(Handler.of("sort_stable", "SORT",
-                "SORT without DUPLICATES IN ORDER as a stable sort (candidate only: equal keys may come out in another order)",
-                Builtins::sortStable));
+                "SORT [WITH DUPLICATES IN ORDER] as a stable sort (GnuCOBOL returns equal keys in release order either way), "
+                        + "USING / INPUT PROCEDURE, GIVING / OUTPUT PROCEDURE", Builtins::sort));
         register(Handler.of("merge", "MERGE", "MERGE ... USING files in key order, GIVING / OUTPUT PROCEDURE", Builtins::merge));
         register(Handler.of("release", "RELEASE", "RELEASE sort record [FROM]", Builtins::release));
         register(Handler.of("return_record", "RETURN", "RETURN sort file [INTO] AT END", Builtins::returnRecord));
@@ -156,14 +179,12 @@ public final class Builtins implements MappingRegistry.Catalog {
                 "MOVE into a group item: the sending bytes as alphanumeric data, space-padded or cut", Builtins::moveToGroup));
         register(Handler.of("initialize", "INITIALIZE",
                 "INITIALIZE [WITH FILLER] [ALL TO VALUE] [REPLACING ...] [THEN TO DEFAULT] item by item", Builtins::initialize));
+        register(Handler.of("set_switch", "SET", "SET switch-name TO ON / OFF (SPECIAL-NAMES SWITCH-0 .. SWITCH-36)", Builtins::setSwitch));
         register(Handler.of("set_index", "SET", "SET index TO / UP BY / DOWN BY, SET item TO index", Builtins::setIndex));
         register(Handler.of("search", "SEARCH", "Serial SEARCH [VARYING] with AT END and WHEN", Builtins::search));
         register(Handler.of("search_all", "SEARCH",
-                "SEARCH ALL where the table's keys are proven ascending/descending and unique", Builtins::searchAll));
-        register(Handler.of("search_all_binary", "SEARCH",
-                "SEARCH ALL as a binary search on the KEY (correct only if the keys are in order)", Builtins::searchAllBinary));
-        register(Handler.of("search_all_linear", "SEARCH",
-                "SEARCH ALL as a serial scan from the first occurrence (correct only if the keys are unique)", Builtins::searchAllLinear));
+                "SEARCH ALL ... WHEN key = value [AT END] as GnuCOBOL's binary search, whatever order the keys are in",
+                Builtins::searchAll));
     }
 
     private void register(Handler h) {
@@ -245,7 +266,33 @@ public final class Builtins implements MappingRegistry.Catalog {
         if (!(target instanceof Operand.Field t) || !t.alphanumeric() || (t.refmod() == null && (t.item().isGroup() || t.item().isEdited()))) {
             throw HandlerException.notApplicable("receiver " + receiverName(u, target) + " is not alphanumeric");
         }
-        return List.of(storeAlphanumeric(c.field(target), moveSource(u, c), c));
+        Operand src = moveSource(u, c);
+        Statement forward = overlappingCopy(c.field(target), t, src, u, c);
+        return List.of(forward != null ? forward : storeAlphanumeric(c.field(target), src, c));
+    }
+
+    /**
+     * A MOVE whose receiver may start inside its sender depends on the copy direction, which
+     * Dialect.move_overlap settles. With "ibm" the bytes are copied left to right where cobc's
+     * -fmove-ibm does it (cob_move_ibm: alphanumeric sender and receiver of fixed sizes, the sender
+     * at least as long, the receiver not JUSTIFIED); anything else, and "temporary", is the
+     * ordinary store, which reads the sender before it writes (GnuCOBOL's memmove). Null for the
+     * ordinary store.
+     */
+    private static Statement overlappingCopy(Expression field, Operand.Field target, Operand src, OpUnit u, TranslationContext c)
+            throws HandlerException {
+        if (!(src instanceof Operand.Field sf) || !sf.alphanumeric() || sf.edited() || !c.receiverInsideSender(src, target)) {
+            return null;
+        }
+        String mode = c.require("move_overlap", c.dialect().moveOverlap(), u.statement().getCtx(),
+                "a MOVE whose receiver may start inside its sender");
+        var srcSize = c.fixedSize(sf);
+        var dstSize = c.fixedSize(target);
+        if (!mode.equals("ibm") || srcSize.isEmpty() || dstSize.isEmpty() || srcSize.getAsInt() < dstSize.getAsInt()
+                || target.item().justified()) {
+            return null;
+        }
+        return stmt(call(field, "copyForward", c.field(src)));
     }
 
     private static List<Statement> moveToEdited(OpUnit u, TranslationContext c) throws HandlerException {
@@ -297,6 +344,10 @@ public final class Builtins implements MappingRegistry.Catalog {
         }
         Operand src = moveSource(u, c);
         Expression field = c.receiving(target);
+        Statement forward = overlappingCopy(field, (Operand.Field) target, src, u, c);
+        if (forward != null) {
+            return List.of(forward);
+        }
         Expression value = switch (src) {
             case Operand.Field f when f.numeric() -> {
                 c.requireBytes(f.item(), "MOVE of " + f.item().cobolName() + " to a group");
@@ -346,7 +397,58 @@ public final class Builtins implements MappingRegistry.Catalog {
         if (!numericTarget) {
             throw HandlerException.notApplicable("receiver " + receiverName(u, target) + " is not numeric");
         }
-        return List.of(storeNumeric(c.field(target), moveSource(u, c), c));
+        Operand src = moveSource(u, c);
+        if (target instanceof Operand.Field t && !src.isNumericValued()) {
+            Statement s = alphanumericToNumeric(c.field(target), t, src, c);
+            if (s != null) {
+                return List.of(s);
+            }
+        }
+        return List.of(storeNumeric(c.field(target), src, c));
+    }
+
+    /**
+     * MOVE of alphanumeric data into numeric item {@code target} as GnuCOBOL 3.2 compiles it, or
+     * null when that is not reproduced (the caller refuses it). An alphanumeric item or reference
+     * modification moves through libcob's cob_move_alphanum_to_display. cobc copies an
+     * alphanumeric literal into a DISPLAY item without decimals or separate sign as written,
+     * right-aligned (cb_build_move_literal); into other DISPLAY items it moves like an item.
+     * {@code ALL "digits"} moves the 38 repeated digits libcob builds (cob_move_all).
+     */
+    static Statement alphanumericToNumeric(Expression field, Operand.Field target, Operand src, TranslationContext c)
+            throws HandlerException {
+        DataItem t = target.item();
+        boolean zoned = t.usage() == DataItem.Usage.DISPLAY;
+        if (!takesAlphanumeric(target)) {
+            return null;
+        }
+        return switch (src) {
+            case Operand.Field f when f.alphanumeric() && !f.edited() && (f.refmod() != null || !f.item().isGroup()) ->
+                    moveAlphanumeric(field, call(c.field(src), "get"), c);
+            case Operand.AlphanumericLiteral a when a.value().isEmpty() || a.value().chars().allMatch(ch -> ch == ' ') -> null;
+            case Operand.AlphanumericLiteral a when zoned && t.numeric().scale() == 0 && !t.signSeparate() -> {
+                int digits = t.numeric().digits();
+                String lit = a.value();
+                String bytes = lit.length() >= digits ? lit.substring(lit.length() - digits) : "0".repeat(digits - lit.length()) + lit;
+                yield stmt(call(call(field, "view"), "set", str(bytes)));
+            }
+            case Operand.AlphanumericLiteral a when zoned -> moveAlphanumeric(field, str(a.value()), c);
+            case Operand.Figurative f when f.name().equals("ALL") && f.pattern().chars().allMatch(ch -> ch >= '0' && ch <= '9') ->
+                    stmt(call(field, "move", staticCall("NumericField", "all", str(f.pattern()))));
+            default -> null;
+        };
+    }
+
+    /** A numeric receiver of an alphanumeric MOVE: not BLANK WHEN ZERO, no P scaling in a DISPLAY item. */
+    private static boolean takesAlphanumeric(Operand.Field target) {
+        DataItem t = target.item();
+        return target.numeric() && !t.blankWhenZero() && (t.usage() != DataItem.Usage.DISPLAY
+                || (t.numeric().scale() >= 0 && t.numeric().scale() <= t.numeric().digits()));
+    }
+
+    private static Statement moveAlphanumeric(Expression field, Expression bytes, TranslationContext c) {
+        boolean comma = c.decimalPointComma();
+        return stmt(call(field, "moveAlphanumeric", bytes, chr(comma ? ',' : '.'), chr(comma ? '.' : ',')));
     }
 
     /** MOVE of {@code src} into a numeric field. */
@@ -633,31 +735,76 @@ public final class Builtins implements MappingRegistry.Catalog {
 
     // ------------------------------------------------------------- DISPLAY
 
+    /** Where a DISPLAY writes. */
+    private enum Output { STDOUT, STDERR, PRINTER }
+
     private static List<Statement> display(OpUnit u, TranslationContext c) throws HandlerException {
         DisplayStatement d = (DisplayStatement) u.statement();
+        String device = d.getUpon() == null ? "SYSOUT" : c.device(deviceName(d.getUpon()));
+        if (device.equals("ENVIRONMENT-NAME") || device.equals("ENVIRONMENT-VALUE") || device.equals("ARGUMENT-NUMBER")) {
+            return displayEnvironment(d, device, c);
+        }
+        Output output = switch (device) {
+            // cobc's device names for standard output and standard error.
+            case "CONSOLE", "SYSOUT", "SYSLIST", "SYSLST", "STDOUT", "PRINT", "TERMINAL", "ALTERNATE-CONSOLE" -> Output.STDOUT;
+            case "SYSERR", "STDERR" -> Output.STDERR;
+            // GnuCOBOL sends these to files named by the environment; the target system decides what they are.
+            case "PRINTER", "PRINTER-1", "SYSPCH", "SYSPUNCH" -> throw HandlerException.missingTarget("DISPLAY UPON " + device
+                    + ": the target system decides where the " + (device.startsWith("SYSP") ? "punch" : "printer") + " output goes", true);
+            default -> throw new HandlerException(HandlerException.Kind.MISSING_TARGET,
+                    "DISPLAY UPON " + device + " (not an output device of GnuCOBOL) has no target");
+        };
+        return displayTo(d, output, c);
+    }
+
+    /** DISPLAY written to {@code output}. */
+    private static List<Statement> displayTo(DisplayStatement d, Output output, TranslationContext c) throws HandlerException {
         if (d.getAt() != null || d.getOnExceptionClause() != null || d.getNotOnExceptionClause() != null) {
             throw HandlerException.unsupported("DISPLAY with AT or exception phrases is not supported");
-        }
-        boolean err = false;
-        if (d.getUpon() != null) {
-            String device = c.device(deviceName(d.getUpon()));
-            if (device.equals("ENVIRONMENT-NAME") || device.equals("ENVIRONMENT-VALUE") || device.equals("ARGUMENT-NUMBER")) {
-                return displayEnvironment(d, device, c);
-            }
-            switch (device) {
-                case "CONSOLE", "SYSOUT" -> err = false;
-                case "SYSERR" -> err = true;
-                default -> throw new HandlerException(HandlerException.Kind.MISSING_TARGET,
-                        "DISPLAY UPON " + device + " (a device other than CONSOLE, SYSOUT or SYSERR) has no target");
-            }
         }
         NodeList<Expression> args = new NodeList<>();
         for (var operand : d.getOperands()) {
             args.add(displayValue(c.operand(operand.getOperandValueStmt()), c));
         }
         boolean noAdvancing = d.getWith() != null;
-        String method = err ? (noAdvancing ? "errNoAdvancing" : "err") : (noAdvancing ? "noAdvancing" : "line");
+        if (output == Output.PRINTER) {
+            args.addFirst(bool(!noAdvancing));
+            return List.of(stmt(new com.github.javaparser.ast.expr.MethodCallExpr(name("Display"), "printer", args)));
+        }
+        String method = output == Output.STDERR ? (noAdvancing ? "errNoAdvancing" : "err") : (noAdvancing ? "noAdvancing" : "line");
         return List.of(stmt(new com.github.javaparser.ast.expr.MethodCallExpr(name("Display"), method, args)));
+    }
+
+    /** The device of DISPLAY UPON PRINTER / SYSPCH (candidates only), or null for another DISPLAY. */
+    private static String printDevice(OpUnit u, TranslationContext c) {
+        DisplayStatement d = (DisplayStatement) u.statement();
+        String device = d.getUpon() == null ? null : c.device(deviceName(d.getUpon()));
+        return device != null && List.of("PRINTER", "PRINTER-1", "SYSPCH", "SYSPUNCH").contains(device) ? device : null;
+    }
+
+    /** Candidate for DISPLAY UPON PRINTER: GnuCOBOL's print file (COB_DISPLAY_PRINT_FILE), else standard output. */
+    private static List<Statement> displayPrinter(OpUnit u, TranslationContext c) throws HandlerException {
+        String device = printDevice(u, c);
+        if (device == null || device.startsWith("SYSP")) {
+            throw HandlerException.notApplicable("not DISPLAY UPON PRINTER");
+        }
+        return displayTo((DisplayStatement) u.statement(), Output.PRINTER, c);
+    }
+
+    /** Candidate for DISPLAY UPON PRINTER / SYSPCH: the device is the job's standard output. */
+    private static List<Statement> displayDeviceStdout(OpUnit u, TranslationContext c) throws HandlerException {
+        if (printDevice(u, c) == null) {
+            throw HandlerException.notApplicable("not DISPLAY UPON PRINTER / SYSPCH");
+        }
+        return displayTo((DisplayStatement) u.statement(), Output.STDOUT, c);
+    }
+
+    /** Candidate for DISPLAY UPON PRINTER / SYSPCH: the device is the job's standard error. */
+    private static List<Statement> displayDeviceStderr(OpUnit u, TranslationContext c) throws HandlerException {
+        if (printDevice(u, c) == null) {
+            throw HandlerException.notApplicable("not DISPLAY UPON PRINTER / SYSPCH");
+        }
+        return displayTo((DisplayStatement) u.statement(), Output.STDERR, c);
     }
 
     /** The DISPLAY text of an operand. */
@@ -690,7 +837,10 @@ public final class Builtins implements MappingRegistry.Catalog {
             case Operand.AlphanumericLiteral a -> str(a.value());
             case Operand.NumericLiteral n -> str(n.displayText());
             case Operand.Figurative f when !f.name().equals("ALL") -> str(f.pattern());
+            case Operand.Computed v when v.shown() != null -> v.shown();
             case Operand.Computed v when "text".equals(v.display()) -> v.value();
+            case Operand.Computed v when "decimal".equals(v.display()) ->
+                    staticCall("Functions", "decimalDisplay", v.value(), chr(c.decimalPointComma() ? ',' : '.'));
             case Operand.Computed v when "integer".equals(v.display()) -> staticCall("Functions", "integerDisplay", v.value());
             case Operand.Computed v when v.display() != null && v.display().startsWith("digits") ->
                     staticCall("Functions", "digits", v.value(), integer(Integer.parseInt(v.display().substring(6))));
@@ -724,6 +874,10 @@ public final class Builtins implements MappingRegistry.Catalog {
     private static List<Statement> acceptStdin(OpUnit u, TranslationContext c) throws HandlerException {
         AcceptStatement a = (AcceptStatement) u.statement();
         rejectAcceptExceptions(a);
+        if (((io.proleap.cobol.CobolParser.AcceptStatementContext) a.getCtx()).ENVIRONMENT() != null) {
+            // ACCEPT ... FROM ENVIRONMENT "name" has no FROM type in the ASG, but it is not standard input.
+            throw HandlerException.notApplicable("ACCEPT FROM ENVIRONMENT is not standard input");
+        }
         if (a.getAcceptType() == AcceptStatement.AcceptType.MNEMONIC) {
             String device = c.device(deviceName(a.getAcceptFromMnemonicStatement()));
             if (!device.equals("SYSIN") && !device.equals("CONSOLE")) {
@@ -743,10 +897,14 @@ public final class Builtins implements MappingRegistry.Catalog {
     private static List<Statement> acceptDatetime(OpUnit u, TranslationContext c) throws HandlerException {
         AcceptStatement a = (AcceptStatement) u.statement();
         rejectAcceptExceptions(a);
-        if (a.getAcceptType() != AcceptStatement.AcceptType.DATE) {
-            throw HandlerException.notApplicable("not ACCEPT FROM DATE / DAY / DAY-OF-WEEK / TIME");
+        boolean micro = a.getAcceptType() == AcceptStatement.AcceptType.MNEMONIC
+                && c.device(deviceName(a.getAcceptFromMnemonicStatement())).equals("MICROSECOND-TIME");
+        String from = micro ? "microsecond_time" : Facts.acceptFrom(a);
+        if (a.getAcceptType() != AcceptStatement.AcceptType.DATE && !micro) {
+            throw HandlerException.notApplicable("not ACCEPT FROM DATE / DAY / DAY-OF-WEEK / TIME / MICROSECOND-TIME");
         }
-        String method = switch (Facts.acceptFrom(a)) {
+        String method = switch (from) {
+            case "microsecond_time" -> "microsecondTime";
             case "date" -> "date";
             case "date_yyyymmdd" -> "dateYyyymmdd";
             case "day" -> "day";
@@ -893,7 +1051,7 @@ public final class Builtins implements MappingRegistry.Catalog {
                 } else {
                     throw HandlerException.unsupported("SET " + cond.cobolName() + " TO FALSE needs VALUE ... WHEN SET TO FALSE");
                 }
-                Operand parent = new Operand.Field(cond.parent());
+                Operand parent = new Operand.Field(cond.parent(), f.subscripts(), null);
                 if (cond.parent().isGroup()) {
                     Expression field = c.receiving(parent);
                     out.add(v instanceof Operand.Figurative fig ? stmt(call(field, "fill", fig.isSingle() ? chr(fig.fill()) : str(fig.pattern())))
@@ -902,6 +1060,33 @@ public final class Builtins implements MappingRegistry.Catalog {
                 }
                 Expression field = c.field(parent);
                 out.add(cond.parent().isAlphanumeric() ? storeAlphanumeric(field, v, c) : storeNumeric(field, v, c));
+            }
+        }
+        return out;
+    }
+
+    /** SET switch TO ON / OFF: libcob's cob_set_switch on the SWITCH-n the mnemonic name stands for. */
+    private static List<Statement> setSwitch(OpUnit u, TranslationContext c) throws HandlerException {
+        SetStatement set = (SetStatement) u.statement();
+        if (set.getSetType() != SetStatement.SetType.TO) {
+            throw HandlerException.notApplicable("SET ... UP / DOWN BY is not a switch SET");
+        }
+        List<Statement> out = new ArrayList<>();
+        for (var setTo : set.getSetTos()) {
+            if (setTo.getValues().size() != 1) {
+                throw HandlerException.unsupported("SET with several values is not supported");
+            }
+            var type = setTo.getValues().getFirst().getValueType();
+            if (type != io.proleap.cobol.asg.metamodel.procedure.set.Value.ValueType.ON
+                    && type != io.proleap.cobol.asg.metamodel.procedure.set.Value.ValueType.OFF) {
+                throw HandlerException.notApplicable("SET ... TO a value other than ON / OFF");
+            }
+            boolean on = type == io.proleap.cobol.asg.metamodel.procedure.set.Value.ValueType.ON;
+            for (var to : setTo.getTos()) {
+                String name = to.getToCall().getCtx().getText();
+                int n = c.switchNumberOf(name).orElseThrow(() -> HandlerException.unsupported(
+                        "SET " + name + " TO ON / OFF: not a mnemonic name of SWITCH-0 .. SWITCH-36"));
+                out.add(stmt(staticCall("Switches", "set", integer(n), bool(on))));
             }
         }
         return out;
@@ -941,9 +1126,13 @@ public final class Builtins implements MappingRegistry.Catalog {
         if (v instanceof ConditionValueStmt cond) {
             return new Subject(null, null, c.condition(cond));
         }
+        var sw = c.switchCondition(v.getCtx().getText());
+        if (sw.isPresent()) {
+            return new Subject(null, null, sw.get());
+        }
         Operand o = c.operand(v);
         if (o instanceof Operand.Field f && f.item().isCondition()) {
-            return new Subject(null, null, c.conditionName(f.item(), where));
+            return new Subject(null, null, c.conditionName(f, where));
         }
         return new Subject(o, null, null);
     }
@@ -960,11 +1149,15 @@ public final class Builtins implements MappingRegistry.Catalog {
                     // ProLeap parses WHEN TRUE / FALSE as a value.
                     yield booleanObject(subject, literal, where);
                 }
+                var sw = c.switchCondition(object.getValue().getValueStmt().getCtx().getText());
+                if (sw.isPresent() && subject.value() == null && subject.bool() != null && object.getThrough() == null) {
+                    yield subject.bool() ? sw.get() : not(sw.get());
+                }
                 Operand value = c.operand(object.getValue().getValueStmt());
                 if (subject.value() == null) {
                     // TRUE / FALSE / condition subject with a condition-name object.
                     if (subject.bool() != null && value instanceof Operand.Field f && f.item().isCondition() && object.getThrough() == null) {
-                        Expression e = c.conditionName(f.item(), where);
+                        Expression e = c.conditionName(f, where);
                         yield subject.bool() ? e : not(e);
                     }
                     throw HandlerException.unsupported("WHEN " + where.getText() + " does not match a TRUE/FALSE or condition subject");
@@ -1102,7 +1295,7 @@ public final class Builtins implements MappingRegistry.Catalog {
                 boolean integral = times instanceof Operand.NumericLiteral n && n.isInteger()
                         || times instanceof Operand.Field f && f.integer();
                 if (!integral) {
-                    throw HandlerException.unsupported("PERFORM ... TIMES requires an integer literal or integer item");
+                    throw HandlerException.unsupported("PERFORM ... TIMES of a non-integer is invalid COBOL (cobc rejects it)");
                 }
                 String i = c.fresh("i");
                 String n = c.fresh("times");
@@ -1122,13 +1315,10 @@ public final class Builtins implements MappingRegistry.Catalog {
             case VARYING -> {
                 var varying = type.getVarying();
                 if (!varying.getVaryingClause().getAfters().isEmpty()) {
-                    if (testAfter(varying.getTestClause())) {
-                        throw HandlerException.unsupported("PERFORM WITH TEST AFTER VARYING ... AFTER is not supported");
-                    }
                     List<VaryingPhrase> phrases = new ArrayList<>();
                     phrases.add(varying.getVaryingClause().getVaryingPhrase());
                     varying.getVaryingClause().getAfters().forEach(a -> phrases.add(a.getVaryingPhrase()));
-                    yield varyingAfter(phrases, body, c);
+                    yield testAfter(varying.getTestClause()) ? varyingAfterTestAfter(phrases, body, c) : varyingAfter(phrases, body, c);
                 }
                 VaryingPhrase phrase = varying.getVaryingClause().getVaryingPhrase();
                 Operand var = c.operand(phrase.getVaryingValueStmt());
@@ -1219,6 +1409,33 @@ public final class Builtins implements MappingRegistry.Catalog {
         return out;
     }
 
+    /**
+     * WITH TEST AFTER VARYING ... AFTER ...: every variable starts at its FROM and the body runs;
+     * then the innermost level whose condition is false steps, and every level inside it restarts
+     * from its FROM. When all conditions hold, the PERFORM ends.
+     */
+    private static List<Statement> varyingAfterTestAfter(List<VaryingPhrase> phrases, BlockStmt body, TranslationContext c)
+            throws HandlerException {
+        List<Varying> parts = new ArrayList<>();
+        for (VaryingPhrase p : phrases) {
+            parts.add(varyingParts(p, c));
+        }
+        List<Statement> out = new ArrayList<>();
+        parts.forEach(v -> out.add(v.init()));
+        Statement next = new BreakStmt();
+        for (int k = 0; k < parts.size(); k++) {
+            BlockStmt step = new BlockStmt(NodeList.nodeList(parts.get(k).step().clone()));
+            for (int j = k + 1; j < parts.size(); j++) {
+                step.addStatement(parts.get(j).init().clone());
+            }
+            next = new IfStmt(not(parts.get(k).until()), step, next);
+        }
+        // Not a clone: pending decisions hold references to placeholders inside body.
+        body.addStatement(next);
+        out.add(new WhileStmt(bool(true), body));
+        return out;
+    }
+
     private static boolean testAfter(TestClause clause) {
         return clause != null && clause.getTestClauseType() == TestClause.TestClauseType.AFTER;
     }
@@ -1231,11 +1448,43 @@ public final class Builtins implements MappingRegistry.Catalog {
         StopStatement s = (StopStatement) u.statement();
         switch (s.getStopType()) {
             case STOP_RUN -> { }
-            case STOP_RUN_AND_DISPLAY -> throw new HandlerException(HandlerException.Kind.MISSING_TARGET,
-                    "STOP literal shows the literal and waits for an operator reply; there is no operator console target");
-            case STOP_RUN_GIVING -> throw HandlerException.unsupported("STOP RUN GIVING / RETURNING is not supported");
+            case STOP_RUN_AND_DISPLAY -> throw HandlerException.missingTarget(
+                    "STOP literal shows the literal and waits for an operator reply; the target system decides what replaces the console",
+                    true);
+            case STOP_RUN_GIVING -> {
+                // cobc: cob_stop_run (cob_get_int (x)), the integer part of the value.
+                Operand status = c.operand(s.getStopStatementGiving().getGivingValueStmt());
+                Expression value = switch (status) {
+                    case Operand.NumericLiteral n when n.isInteger() -> integer(n.value().intValueExact());
+                    case Operand.Field f when f.numeric() -> call(c.field(status), "intValue");
+                    default -> throw HandlerException.unsupported("STOP RUN GIVING " + status.category() + " is not supported");
+                };
+                return List.of(stmt(staticCall("ProgramSupport", "stopRun", value)));
+            }
         }
         return List.of(stmt(staticCall("ProgramSupport", "stopRun", self())));
+    }
+
+    /**
+     * Candidate for STOP literal, as GnuCOBOL compiles it: DISPLAY of the literal on standard
+     * output, then an ACCEPT that reads one line of standard input and discards it; the program
+     * continues.
+     */
+    private static List<Statement> stopLiteralAccept(OpUnit u, TranslationContext c) throws HandlerException {
+        return List.of(stmt(staticCall("Display", "line", stopLiteral(u, c))), stmt(staticCall("Accept", "line")));
+    }
+
+    /** Candidate for STOP literal: DISPLAY of the literal on standard output, and the program continues without waiting. */
+    private static List<Statement> stopLiteralContinue(OpUnit u, TranslationContext c) throws HandlerException {
+        return List.of(stmt(staticCall("Display", "line", stopLiteral(u, c))));
+    }
+
+    private static Expression stopLiteral(OpUnit u, TranslationContext c) throws HandlerException {
+        StopStatement s = (StopStatement) u.statement();
+        if (s.getStopType() != StopStatement.StopType.STOP_RUN_AND_DISPLAY) {
+            throw HandlerException.notApplicable("not STOP literal");
+        }
+        return displayValue(c.operand(s.getDisplayValueStmt()), c);
     }
 
     private static List<Statement> exit(OpUnit u, TranslationContext c) throws HandlerException {
@@ -1263,33 +1512,82 @@ public final class Builtins implements MappingRegistry.Catalog {
      * EXCEPTION after it returns.
      */
     private static List<Statement> callProgram(OpUnit u, TranslationContext c) throws HandlerException {
+        return callTo(u, c, null, false, false);
+    }
+
+    /**
+     * The {@code call_external} candidate of a CALL 'literal' whose program is not in the project,
+     * once its slots are chosen. {@code target} is the project program the name stands for, or
+     * null when the program is absent at run time: then the CALL behaves as GnuCOBOL's CALL of a
+     * module it cannot load (ON EXCEPTION runs; without it the run unit ends with "module not
+     * found"). {@code byContent} passes every argument as a copy (correct only if the target
+     * never changes its parameters).
+     */
+    static List<Statement> callExternal(OpUnit u, TranslationContext c, String target, boolean byContent) throws HandlerException {
         CallStatement call = (CallStatement) u.statement();
+        if (!(call.getProgramValueStmt() instanceof LiteralValueStmt lit && lit.getLiteral().getLiteralType() == Literal.LiteralType.NON_NUMERIC)) {
+            throw HandlerException.notApplicable("call_external binds CALL 'literal' only");
+        }
+        return callTo(u, c, target, byContent, target == null);
+    }
+
+    /**
+     * CALL of the program the statement names, or of {@code target} (a project program) instead of
+     * a literal name; {@code absent}: the literal names no program at run time (the arguments are
+     * still evaluated, as GnuCOBOL does before it looks the module up).
+     */
+    private static List<Statement> callTo(OpUnit u, TranslationContext c, String target, boolean byContent, boolean absent)
+            throws HandlerException {
+        CallStatement call = (CallStatement) u.statement();
+        Expression returning = null;
         if (call.getGivingPhrase() != null) {
-            throw HandlerException.unsupported("CALL ... RETURNING / GIVING is not supported");
+            Operand r = c.operand(call.getGivingPhrase().getGivingCall());
+            if (!(r instanceof Operand.Field rf && rf.numeric())) {
+                throw HandlerException.unsupported("CALL ... RETURNING " + r.category() + " is not supported (a numeric item)");
+            }
+            if (call.getOnExceptionClause() != null || call.getOnOverflowPhrase() != null) {
+                throw HandlerException.unsupported("CALL ... RETURNING with ON EXCEPTION / ON OVERFLOW is not supported");
+            }
+            returning = c.field(r);
         }
         if (call.getOnExceptionClause() != null && call.getOnOverflowPhrase() != null) {
             throw HandlerException.unsupported("CALL with both ON OVERFLOW and ON EXCEPTION");
         }
         Scope onException = call.getOnExceptionClause() != null ? call.getOnExceptionClause() : call.getOnOverflowPhrase();
-        boolean dynamic = !(call.getProgramValueStmt() instanceof LiteralValueStmt lit
+        boolean dynamic = target == null && !(call.getProgramValueStmt() instanceof LiteralValueStmt lit
                 && lit.getLiteral().getLiteralType() == Literal.LiteralType.NON_NUMERIC);
+        if (!dynamic && target == null && returning == null
+                && SYSTEM_ROUTINES.containsKey(((LiteralValueStmt) call.getProgramValueStmt()).getLiteral().getNonNumericLiteral())) {
+            return systemRoutine(call, c);
+        }
         NodeList<Expression> args = NodeList.nodeList(self());
         List<Integer> expected = null;
         String program = null;
         if (dynamic) {
             c.require("dynamic_calls", c.dialect().dynamicCalls(), call.getCtx(), "CALL identifier");
-            Operand target = c.operand(call.getProgramValueStmt());
-            if (!(target instanceof Operand.Field f) || !f.alphanumeric() || f.edited()) {
-                throw HandlerException.unsupported("CALL through a " + target.category() + " item");
+            Operand named = c.operand(call.getProgramValueStmt());
+            if (!(named instanceof Operand.Field f) || !f.alphanumeric() || f.edited()) {
+                throw HandlerException.unsupported("CALL through a " + named.category() + " item");
             }
-            args.add(call(c.field(target), "get"));
+            args.add(call(c.field(named), "get"));
             args.add(new com.github.javaparser.ast.expr.MethodReferenceExpr(new com.github.javaparser.ast.expr.TypeExpr(type(c.className())),
                     new NodeList<>(), c.programResolver()));
         } else {
-            program = ((LiteralValueStmt) call.getProgramValueStmt()).getLiteral().getNonNumericLiteral();
+            program = target != null ? target : ((LiteralValueStmt) call.getProgramValueStmt()).getLiteral().getNonNumericLiteral();
             String name = program;
-            String cls = c.programClass(name).orElseThrow(() -> new HandlerException(HandlerException.Kind.MISSING_TARGET,
-                    "program '" + name + "' is not part of the translation project (unresolved cross-file dependency)"));
+            if (absent) {
+                args.add(str(name));
+                args.add(new com.github.javaparser.ast.expr.LambdaExpr(
+                        new com.github.javaparser.ast.body.Parameter(new com.github.javaparser.ast.type.UnknownType(), "name"),
+                        new com.github.javaparser.ast.expr.NullLiteralExpr()));
+            }
+        }
+        if (!dynamic && !absent) {
+            String name = program;
+            String cls = c.programClass(name).orElseThrow(() -> target != null
+                    ? HandlerException.notApplicable("program '" + name + "' is not part of the translation project")
+                    : HandlerException.missingProgram(name,
+                            "program '" + name + "' is not part of the translation project (unresolved cross-file dependency)"));
             args.add(call(name(cls), "instance"));
             if (c.entryIndex(name) > 0) {
                 args.add(integer(c.entryIndex(name)));
@@ -1310,7 +1608,8 @@ public final class Builtins implements MappingRegistry.Catalog {
                             throw HandlerException.unsupported("CALL USING BY REFERENCE " + ref.getByReferenceType() + " is not supported");
                         }
                         Operand o = c.operand(ref.getValueStmt());
-                        args.add(call(argumentField(o, c), "view"));
+                        Expression view = call(argumentField(o, c), "view");
+                        args.add(byContent ? call(view, "copy") : view);
                         sizes.add(argumentSize(o));
                     }
                 }
@@ -1336,13 +1635,112 @@ public final class Builtins implements MappingRegistry.Catalog {
             throw HandlerException.unsupported("CALL '" + program + "' USING passes items of " + sizes + " bytes but the program expects "
                     + expected + " (USING items must match in number and size)");
         }
-        String method = dynamic ? "callNamed" : c.entryIndex(program) > 0 ? "callEntry" : "call";
+        String method = dynamic || absent ? "callNamed" : c.entryIndex(program) > 0 ? "callEntry" : "call";
         Expression invoke = new com.github.javaparser.ast.expr.MethodCallExpr(name("ProgramSupport"), method, args);
         BlockStmt notOnException = call.getNotOnExceptionClause() == null ? new BlockStmt() : c.nested(call.getNotOnExceptionClause());
+        if (returning != null) {
+            // RETURNING receives the int the callee returns (its RETURN-CODE) with cob_set_int; the
+            // caller's RETURN-CODE is not updated, so it is put back after the call.
+            String saved = c.fresh("returnCode");
+            Expression rc = c.field(new Operand.ReturnCode());
+            List<Statement> out = new ArrayList<>();
+            out.add(declare(type("BigDecimal"), saved, call(rc, "get")));
+            out.add(stmt(invoke));
+            out.add(stmt(call(returning, "move", call(rc.clone(), "get"))));
+            out.add(stmt(call(rc.clone(), "move", name(saved))));
+            if (!notOnException.isEmpty()) {
+                out.add(notOnException);
+            }
+            return out;
+        }
         if (onException == null) {
             return notOnException.isEmpty() ? List.of(stmt(invoke)) : List.of(stmt(invoke), notOnException);
         }
         return List.of(new IfStmt(invoke, c.nested(onException), notOnException.isEmpty() ? null : notOnException));
+    }
+
+    /** GnuCOBOL system routines translated through SystemRoutines, with the number of items they take before the length. */
+    private static final Map<String, Integer> SYSTEM_ROUTINES = Map.of("CBL_TOUPPER", 1, "CBL_TOLOWER", 1, "CBL_NOT", 1,
+            "CBL_AND", 2, "CBL_OR", 2, "CBL_XOR", 2, "CBL_EQ", 2, "CBL_IMP", 2, "CBL_NIMP", 2);
+
+    /**
+     * CALL "CBL_..." USING items BY VALUE length: libcob's routine on the items' bytes; its result
+     * (0) becomes RETURN-CODE. The routine always exists, so ON EXCEPTION never runs and NOT ON
+     * EXCEPTION always does. Items are passed BY REFERENCE (BY CONTENT: a copy); the length BY
+     * VALUE, an integer literal or numeric item (cob_get_int).
+     */
+    private static List<Statement> systemRoutine(CallStatement call, TranslationContext c) throws HandlerException {
+        String name = ((LiteralValueStmt) call.getProgramValueStmt()).getLiteral().getNonNumericLiteral();
+        int items = SYSTEM_ROUTINES.get(name);
+        NodeList<Expression> args = new NodeList<>();
+        Expression length = null;
+        var using = call.getUsingPhrase();
+        for (var parameter : using == null ? List.<io.proleap.cobol.asg.metamodel.procedure.call.UsingParameter>of() : using.getUsingParameters()) {
+            switch (parameter.getParameterType()) {
+                case REFERENCE -> {
+                    for (var ref : parameter.getByReferencePhrase().getByReferences()) {
+                        if (ref.getByReferenceType() != null || length != null) {
+                            throw HandlerException.unsupported("CALL '" + name + "' USING: items, then the length BY VALUE");
+                        }
+                        args.add(call(argumentField(c.operand(ref.getValueStmt()), c), "view"));
+                    }
+                }
+                case CONTENT -> {
+                    for (var content : parameter.getByContentPhrase().getByContents()) {
+                        if (content.getByContentType() != null || length != null) {
+                            throw HandlerException.unsupported("CALL '" + name + "' USING: items, then the length BY VALUE");
+                        }
+                        args.add(call(call(argumentField(c.operand(content.getValueStmt()), c), "view"), "copy"));
+                    }
+                }
+                case VALUE -> {
+                    for (var value : parameter.getByValuePhrase().getByValues()) {
+                        if (length != null) {
+                            throw HandlerException.unsupported("CALL '" + name + "' takes one length BY VALUE");
+                        }
+                        var byValue = (io.proleap.cobol.CobolParser.CallByValueContext) value.getCtx();
+                        Operand o = c.operand(value.getValueStmt());
+                        if (byValue.ADDRESS() != null) {
+                            throw HandlerException.unsupported("CALL '" + name + "' USING BY VALUE ADDRESS OF");
+                        }
+                        if (byValue.LENGTH() != null) {
+                            // BY VALUE LENGTH OF item: the item's size.
+                            o = o instanceof Operand.Field f && c.fixedSize(f).isPresent()
+                                    ? new Operand.NumericLiteral(BigDecimal.valueOf(c.fixedSize(f).getAsInt()), Integer.toString(c.fixedSize(f).getAsInt()))
+                                    : null;
+                            if (o == null) {
+                                throw HandlerException.unsupported("CALL '" + name + "' USING BY VALUE LENGTH OF an item of variable size");
+                            }
+                        }
+                        length = switch (o) {
+                            case Operand.NumericLiteral n when n.isInteger() -> integer(n.value().intValueExact());
+                            case Operand.Field f when f.numeric() -> call(c.field(o), "intValue");
+                            case Operand o2 when o2.isNumericValued() && !(o2 instanceof Operand.Arithmetic) -> call(c.numeric(o2), "intValue");
+                            default -> throw HandlerException.unsupported("CALL '" + name + "': the length BY VALUE is an integer literal or numeric item");
+                        };
+                    }
+                }
+            }
+        }
+        if (args.size() != items || length == null) {
+            throw HandlerException.unsupported("CALL '" + name + "' takes " + items + " item(s) and a length BY VALUE");
+        }
+        args.add(length);
+        Expression invoke = switch (name) {
+            case "CBL_TOUPPER" -> new com.github.javaparser.ast.expr.MethodCallExpr(name("SystemRoutines"), "toUpper", args);
+            case "CBL_TOLOWER" -> new com.github.javaparser.ast.expr.MethodCallExpr(name("SystemRoutines"), "toLower", args);
+            case "CBL_NOT" -> new com.github.javaparser.ast.expr.MethodCallExpr(name("SystemRoutines"), "not", args);
+            default -> {
+                args.addFirst(str(name));
+                yield new com.github.javaparser.ast.expr.MethodCallExpr(name("SystemRoutines"), "bits", args);
+            }
+        };
+        List<Statement> out = new ArrayList<>();
+        out.add(stmt(call(c.field(new Operand.ReturnCode()), "move", staticCall("BigDecimal", "valueOf", invoke))));
+        if (call.getNotOnExceptionClause() != null) {
+            out.add(c.nested(call.getNotOnExceptionClause()));
+        }
+        return out;
     }
 
     /** CANCEL: a program of the project starts afresh at its next CALL; any other name is ignored, as in GnuCOBOL. */
@@ -1430,8 +1828,14 @@ public final class Builtins implements MappingRegistry.Catalog {
             if (target.item().isGroup() && target.item().isRenames()) {
                 throw HandlerException.unsupported("INITIALIZE of a RENAMES group");
             }
-            if (target.item().isGroup() && target.item().variableTable() != null) {
-                throw HandlerException.unsupported("INITIALIZE of a group with OCCURS DEPENDING ON is not supported");
+            DataItem variable = target.item().isGroup() ? target.item().variableTable() : null;
+            if (variable != null && toValue) {
+                throw HandlerException.unsupported("INITIALIZE ... TO VALUE of a group with OCCURS DEPENDING ON: GnuCOBOL 3.2 "
+                        + "sets occurrences beyond the current count unevenly");
+            }
+            if (variable != null && variable.occursMin() < 1) {
+                throw HandlerException.unsupported("INITIALIZE of a group with OCCURS 0 TO ... DEPENDING ON: GnuCOBOL 3.2 "
+                        + "initializes the first occurrence even when none is in use");
             }
             for (DataItem e : target.item().elementaryItems()) {
                 if (e != target.item() && (skippedByInitialize(e, target.item(), withFiller))) {
@@ -1486,8 +1890,9 @@ public final class Builtins implements MappingRegistry.Catalog {
         }
         for (int i = extra.size() - 1; i >= 0; i--) {
             String v = vars.get(i);
+            // A table with OCCURS DEPENDING ON is initialized up to its current count, as GnuCOBOL does.
             store = new ForStmt(NodeList.nodeList(new VariableDeclarationExpr(new VariableDeclarator(Ast.intType(), v, integer(1)))),
-                    new BinaryExpr(name(v), integer(extra.get(i).occurs()), BinaryExpr.Operator.LESS_EQUALS),
+                    new BinaryExpr(name(v), occurrences(extra.get(i), c), BinaryExpr.Operator.LESS_EQUALS),
                     NodeList.nodeList(new UnaryExpr(name(v), UnaryExpr.Operator.POSTFIX_INCREMENT)),
                     new BlockStmt(NodeList.nodeList(store)));
         }
@@ -1620,9 +2025,10 @@ public final class Builtins implements MappingRegistry.Catalog {
     }
 
     /**
-     * SEARCH ALL finds a match only when the table is in KEY order; which occurrence it finds
-     * for equal keys, and what it does on an unordered table, depend on the compiler's binary
-     * search. Neither can be proven here, so it is always a decision offering both candidates.
+     * SEARCH ALL as cobc 3.2 generates it (codegen.c output_search_all): head = 0, tail = occurs + 1,
+     * probe (head + tail) / 2, head = probe while the key is below the value, else tail = probe.
+     * With low = head + 1 and high = tail - 1 this loop probes the same occurrences, so duplicate
+     * keys find the same occurrence and keys out of order miss the same values as GnuCOBOL.
      */
     private static List<Statement> searchAll(OpUnit u, TranslationContext c) throws HandlerException {
         if (!isSearchAll(u)) {
@@ -1633,59 +2039,18 @@ public final class Builtins implements MappingRegistry.Catalog {
         if (t.table().keys().isEmpty()) {
             throw HandlerException.unsupported("SEARCH ALL " + t.table().cobolName() + ": the table has no ASCENDING / DESCENDING KEY");
         }
-        throw HandlerException.unprovable("SEARCH ALL " + t.table().cobolName()
-                + ": the keys cannot be proven to be in order and unique, so the occurrence found is not determined");
-    }
-
-    /** One WHEN of SEARCH ALL, which must be the only one. */
-    private static io.proleap.cobol.asg.metamodel.procedure.search.WhenPhrase searchAllWhen(
-            io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement s) throws HandlerException {
-        if (s.getWhenPhrases().size() != 1) {
-            throw HandlerException.unsupported("SEARCH ALL has exactly one WHEN");
-        }
-        return s.getWhenPhrases().getFirst();
-    }
-
-    private static List<Statement> searchAllLinear(OpUnit u, TranslationContext c) throws HandlerException {
-        if (!isSearchAll(u)) {
-            throw HandlerException.notApplicable("not SEARCH ALL");
-        }
-        var s = (io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement) u.statement();
-        Searched t = searched(s, c);
-        var when = searchAllWhen(s);
-        String label = c.fresh("search");
-        String index = t.index().javaName();
-        BlockStmt found = c.nested(when);
-        found.addStatement(new BreakStmt(label));
-        BlockStmt atEnd = s.getAtEndPhrase() == null ? new BlockStmt() : c.nested(s.getAtEndPhrase());
-        BlockStmt loop = new BlockStmt(NodeList.nodeList(new IfStmt(c.condition(when.getCondition()), found, null)));
-        Statement scan = new ForStmt(NodeList.nodeList(new AssignExpr(name(index), integer(1), AssignExpr.Operator.ASSIGN)),
-                new BinaryExpr(name(index), occurrences(t.table(), c), BinaryExpr.Operator.LESS_EQUALS),
-                NodeList.nodeList(new UnaryExpr(name(index), UnaryExpr.Operator.POSTFIX_INCREMENT)), loop);
-        BlockStmt body = new BlockStmt(NodeList.nodeList(scan));
-        atEnd.getStatements().forEach(body::addStatement);
-        return List.of(new LabeledStmt(label, body));
-    }
-
-    /** Binary search on the first KEY: halves the occurrences in use by comparing the key with the WHEN's value. */
-    private static List<Statement> searchAllBinary(OpUnit u, TranslationContext c) throws HandlerException {
-        if (!isSearchAll(u)) {
-            throw HandlerException.notApplicable("not SEARCH ALL");
-        }
-        var s = (io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement) u.statement();
-        Searched t = searched(s, c);
         var when = searchAllWhen(s);
         var cond = when.getCondition();
         var rel = cond.getAndOrConditions().isEmpty() ? cond.getCombinableCondition().getSimpleCondition().getRelationCondition() : null;
         if (rel == null || rel.getArithmeticComparison() == null
                 || rel.getArithmeticComparison().getOperator().getRelationalOperatorType() != RelationalOperatorType.EQUAL) {
-            throw HandlerException.unsupported("binary SEARCH ALL candidate needs WHEN key = value");
+            throw HandlerException.unsupported("SEARCH ALL needs WHEN key = value (other conditions are not supported)");
         }
         Operand key = c.operand(rel.getArithmeticComparison().getArithmeticExpressionLeft());
         Operand value = c.operand(rel.getArithmeticComparison().getArithmeticExpressionRight());
         DataItem.Key first = t.table().keys().getFirst();
         if (!(key instanceof Operand.Field kf) || kf.item() != first.item()) {
-            throw HandlerException.unsupported("binary SEARCH ALL candidate needs WHEN on the first KEY");
+            throw HandlerException.unsupported("SEARCH ALL needs WHEN on the first KEY, written on the left");
         }
         String label = c.fresh("search");
         String low = c.fresh("low");
@@ -1709,6 +2074,15 @@ public final class Builtins implements MappingRegistry.Catalog {
         body.addStatement(new WhileStmt(new BinaryExpr(name(low), name(high), BinaryExpr.Operator.LESS_EQUALS), loop));
         atEnd.getStatements().forEach(body::addStatement);
         return List.of(new LabeledStmt(label, body));
+    }
+
+    /** One WHEN of SEARCH ALL, which must be the only one. */
+    private static io.proleap.cobol.asg.metamodel.procedure.search.WhenPhrase searchAllWhen(
+            io.proleap.cobol.asg.metamodel.procedure.search.SearchStatement s) throws HandlerException {
+        if (s.getWhenPhrases().size() != 1) {
+            throw HandlerException.unsupported("SEARCH ALL has exactly one WHEN");
+        }
+        return s.getWhenPhrases().getFirst();
     }
 
     // ------------------------------------------------- STRING / UNSTRING / INSPECT
@@ -1805,12 +2179,14 @@ public final class Builtins implements MappingRegistry.Catalog {
                         new com.github.javaparser.ast.expr.ArrayInitializerExpr(all)))));
         for (var into : s.getIntoPhrase().getIntos()) {
             Operand r = c.operand(into.getIntoCall());
-            if (!(r instanceof Operand.Field rf) || !rf.alphanumeric() || rf.edited()) {
-                throw HandlerException.unsupported("UNSTRING INTO " + r.category() + " is not supported (only alphanumeric receivers)");
+            // A numeric receiver gets the field as an alphanumeric MOVE (libcob's cob_str_memcpy is cob_move).
+            boolean numeric = r instanceof Operand.Field nf && nf.numeric();
+            if (!(r instanceof Operand.Field rf) || (numeric ? !takesAlphanumeric(rf) : !rf.alphanumeric() || rf.edited())) {
+                throw HandlerException.unsupported("UNSTRING INTO " + r.category() + " is not supported (alphanumeric and numeric receivers)");
             }
             Expression field = c.field(r);
             BlockStmt then = new BlockStmt();
-            then.addStatement(stmt(call(field, "set", call(name(u1), "data"))));
+            then.addStatement(numeric ? moveAlphanumeric(field, call(name(u1), "data"), c) : stmt(call(field, "set", call(name(u1), "data"))));
             if (into.getDelimiterIn() != null) {
                 if (!delimited) {
                     throw HandlerException.unsupported("DELIMITER IN without DELIMITED BY");
@@ -1821,7 +2197,12 @@ public final class Builtins implements MappingRegistry.Catalog {
                 then.addStatement(stmt(call(integerItem(into.getCountIn().getCountInCall(), c), "move",
                         staticCall("BigDecimal", "valueOf", call(name(u1), "count")))));
             }
-            Expression next = delimited ? call(name(u1), "next") : call(name(u1), "next", call(field.clone(), "length"));
+            // Without DELIMITED BY a receiver takes as many characters as its COB_FIELD_SIZE: the digits of a
+            // DISPLAY item (a separate sign excluded), the bytes of a packed or binary one.
+            DataItem ri = ((Operand.Field) r).item();
+            Expression length = !numeric ? call(field.clone(), "length")
+                    : integer(ri.usage() == DataItem.Usage.DISPLAY ? ri.numeric().digits() : ri.size());
+            Expression next = delimited ? call(name(u1), "next") : call(name(u1), "next", length);
             out.add(new IfStmt(next, then, null));
         }
         if (s.getTallyingPhrase() != null) {
@@ -2025,12 +2406,8 @@ public final class Builtins implements MappingRegistry.Catalog {
         return List.of(new com.github.javaparser.ast.stmt.SwitchStmt(call(c.field(n), "intValue"), entries));
     }
 
+    /** The altered paragraph's GO TO reads its target from a field of the program, so ALTER is an assignment. */
     private static List<Statement> alter(OpUnit u, TranslationContext c) throws HandlerException {
-        throw HandlerException.unprovable("ALTER changes the target of a GO TO while the program runs; "
-                + "the translation keeps that behaviour only through the dispatcher candidate, which needs review");
-    }
-
-    private static List<Statement> alterGoTo(OpUnit u, TranslationContext c) throws HandlerException {
         var a = (io.proleap.cobol.asg.metamodel.procedure.alter.AlterStatement) u.statement();
         List<Statement> out = new ArrayList<>();
         for (var to : a.getProceedTos()) {
@@ -2094,10 +2471,18 @@ public final class Builtins implements MappingRegistry.Catalog {
         var close = (io.proleap.cobol.asg.metamodel.procedure.close.CloseStatement) u.statement();
         List<Statement> out = new ArrayList<>();
         for (var f : close.getCloseFiles()) {
-            if (f.getCloseFileType() != null) {
-                throw HandlerException.unsupported("CLOSE ... " + f.getCloseFileType() + " is not supported");
+            var file = c.file(f.getFileCall());
+            String method = "close";
+            var relative = ((io.proleap.cobol.CobolParser.CloseFileContext) f.getCtx()).closeRelativeStatement();
+            if (relative != null && relative.LOCK() != null) {
+                method = "closeWithLock";
+            } else if (relative != null && relative.REWIND() != null && !file.keyed() && !file.sort()) {
+                method = "closeNoRewind";
+            } else if (f.getCloseFileType() != null) {
+                throw HandlerException.unsupported("CLOSE ... " + f.getCtx().getText() + " is not supported"
+                        + (relative != null ? " (NO REWIND of a RELATIVE or INDEXED file)" : ""));
             }
-            out.add(stmt(call(name(c.file(f.getFileCall()).javaName()), "close")));
+            out.add(stmt(call(name(file.javaName()), method)));
         }
         return out;
     }
@@ -2126,8 +2511,23 @@ public final class Builtins implements MappingRegistry.Catalog {
     private static List<Statement> readFile(OpUnit u, TranslationContext c) throws HandlerException {
         var r = (io.proleap.cobol.asg.metamodel.procedure.read.ReadStatement) u.statement();
         if (r.getWith() != null) {
-            throw HandlerException.unsupported("READ ... WITH LOCK / NO LOCK / WAIT is not supported");
+            throw HandlerException.unprovable("READ ... " + r.getWith().getCtx().getText()
+                    + ": record locks matter only when another process uses the file at the same time");
         }
+        return read(u, c);
+    }
+
+    /** Candidate for READ ... WITH LOCK / NO LOCK / WAIT: the READ without its lock phrase. */
+    private static List<Statement> readFileUnlocked(OpUnit u, TranslationContext c) throws HandlerException {
+        var r = (io.proleap.cobol.asg.metamodel.procedure.read.ReadStatement) u.statement();
+        if (r.getWith() == null) {
+            throw HandlerException.notApplicable("READ without a lock phrase");
+        }
+        return read(u, c);
+    }
+
+    private static List<Statement> read(OpUnit u, TranslationContext c) throws HandlerException {
+        var r = (io.proleap.cobol.asg.metamodel.procedure.read.ReadStatement) u.statement();
         var file = c.file(r.getFileCall());
         if (file.sort()) {
             throw HandlerException.unsupported("READ of a sort file (use RETURN)");
@@ -2434,7 +2834,28 @@ public final class Builtins implements MappingRegistry.Catalog {
         return stmt(thisCall(c.procedureMethod(from)));
     }
 
+    /**
+     * The sequence of a SORT / MERGE COLLATING SEQUENCE phrase (one alphabet, NATIVE / STANDARD-1 /
+     * ASCII or EBCDIC), or null without the phrase.
+     */
+    private static String collating(List<io.proleap.cobol.CobolParser.AlphabetNameContext> names, Object alphanumeric, Object national,
+            String verb, TranslationContext c) throws HandlerException {
+        if (names == null) {
+            return null;
+        }
+        if (names.size() != 1 || alphanumeric != null || national != null) {
+            throw HandlerException.unsupported(verb + " COLLATING SEQUENCE with several alphabets or FOR ALPHANUMERIC / NATIONAL");
+        }
+        String name = names.getFirst().getText();
+        return c.alphabet(name).orElseThrow(() -> HandlerException.unsupported(verb + " COLLATING SEQUENCE " + name
+                + ": only alphabets declared NATIVE, STANDARD-1, ASCII or EBCDIC are supported"));
+    }
+
     private static List<Statement> sortKeys(Expression sortFile, List<?> onKeys, TranslationContext c) throws HandlerException {
+        return sortKeys(sortFile, onKeys, null, c);
+    }
+
+    private static List<Statement> sortKeys(Expression sortFile, List<?> onKeys, String collating, TranslationContext c) throws HandlerException {
         List<Statement> out = new ArrayList<>();
         out.add(stmt(call(sortFile, "begin")));
         for (Object k : onKeys) {
@@ -2449,7 +2870,7 @@ public final class Builtins implements MappingRegistry.Catalog {
                 calls = mk.getKeyCalls();
             }
             for (Call key : calls) {
-                out.add(stmt(call(sortFile.clone(), "key", c.sortKey(c.dataItem(key), key.getCtx()), bool(ascending))));
+                out.add(stmt(call(sortFile.clone(), "key", c.sortKey(c.dataItem(key), key.getCtx(), collating), bool(ascending))));
             }
         }
         return out;
@@ -2463,30 +2884,30 @@ public final class Builtins implements MappingRegistry.Catalog {
         return name(f.javaName());
     }
 
+    /** A USING / GIVING file: sequential, or RELATIVE / INDEXED read and written in their order (not ACCESS RANDOM). */
     private static Expression plainFile(Call call, TranslationContext c) throws HandlerException {
         var f = c.file(call);
-        if (f.sort() || f.keyed()) {
-            throw HandlerException.unsupported(call.getName() + " is a " + f.organization() + " file (USING / GIVING take sequential files)");
+        if (f.sort()) {
+            throw HandlerException.unsupported(call.getName() + " is an SD file");
+        }
+        if (f.keyed() && f.access() == TranslationContext.Access.RANDOM) {
+            throw HandlerException.unsupported(call.getName() + ": USING / GIVING of a " + f.organization() + " file in ACCESS RANDOM");
         }
         return name(f.javaName());
     }
 
+    /**
+     * SORT as a stable sort. GnuCOBOL 3.2 breaks ties between equal keys by release order (libcob's
+     * cob_file_sort_compare compares a per-record sequence number last), so WITH DUPLICATES IN ORDER
+     * does not change its result.
+     */
     private static List<Statement> sort(OpUnit u, TranslationContext c) throws HandlerException {
         var s = (io.proleap.cobol.asg.metamodel.procedure.sort.SortStatement) u.statement();
-        if (s.getDuplicates() == null || !s.getDuplicates().isDuplicatesInOrder()) {
-            throw HandlerException.unprovable("SORT without WITH DUPLICATES IN ORDER: records with equal keys may come out "
-                    + "in any order, and their keys cannot be proven unique");
-        }
-        return sortStable(u, c);
-    }
-
-    private static List<Statement> sortStable(OpUnit u, TranslationContext c) throws HandlerException {
-        var s = (io.proleap.cobol.asg.metamodel.procedure.sort.SortStatement) u.statement();
-        if (s.getCollatingSequence() != null) {
-            throw HandlerException.unsupported("SORT ... COLLATING SEQUENCE is not supported");
-        }
+        var phrase = ((io.proleap.cobol.CobolParser.SortStatementContext) s.getCtx()).sortCollatingSequencePhrase();
+        String collating = phrase == null ? null : collating(phrase.alphabetName(), phrase.sortCollatingAlphanumeric(),
+                phrase.sortCollatingNational(), "SORT", c);
         Expression sf = sortFile(s.getFileCall(), c);
-        List<Statement> out = new ArrayList<>(sortKeys(sf, s.getOnKeys(), c));
+        List<Statement> out = new ArrayList<>(sortKeys(sf, s.getOnKeys(), collating, c));
         if (s.getInputProcedure() != null) {
             var p = s.getInputProcedure();
             out.add(performProcedure(p.getProcedureCall(), p.getInputThrough() == null ? null : p.getInputThrough().getProcedureCall(), c));
@@ -2511,19 +2932,20 @@ public final class Builtins implements MappingRegistry.Catalog {
             out.add(performProcedure(procedure, thru, c));
             return;
         }
-        if (givings.size() != 1) {
-            throw HandlerException.unsupported("GIVING more than one file is not supported");
+        NodeList<Expression> files = new NodeList<>();
+        for (Call g : givings) {
+            files.add(plainFile(g, c));
         }
-        out.add(stmt(call(sf.clone(), "giving", plainFile(givings.getFirst(), c))));
+        out.add(stmt(new com.github.javaparser.ast.expr.MethodCallExpr(sf.clone(), "giving", files)));
     }
 
     private static List<Statement> merge(OpUnit u, TranslationContext c) throws HandlerException {
         var m = (io.proleap.cobol.asg.metamodel.procedure.merge.MergeStatement) u.statement();
-        if (m.getCollatingSequencePhrase() != null) {
-            throw HandlerException.unsupported("MERGE ... COLLATING SEQUENCE is not supported");
-        }
+        var phrase = ((io.proleap.cobol.CobolParser.MergeStatementContext) m.getCtx()).mergeCollatingSequencePhrase();
+        String collating = phrase == null ? null : collating(phrase.alphabetName(), phrase.mergeCollatingAlphanumeric(),
+                phrase.mergeCollatingNational(), "MERGE", c);
         Expression sf = sortFile(m.getFileCall(), c);
-        List<Statement> out = new ArrayList<>(sortKeys(sf, m.getOnKeys(), c));
+        List<Statement> out = new ArrayList<>(sortKeys(sf, m.getOnKeys(), collating, c));
         NodeList<Expression> inputs = new NodeList<>();
         for (var using : m.getUsingPhrases()) {
             for (Call f : using.getFileCalls()) {

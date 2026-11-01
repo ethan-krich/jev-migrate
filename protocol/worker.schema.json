@@ -13,14 +13,15 @@
       "properties": {
         "protocol": {"$ref": "#/$defs/protocol"},
         "id": {"type": "string", "minLength": 1, "description": "Correlation id, echoed by the response"},
-        "method": {"enum": ["initialize", "translate", "resolve", "finalize", "shutdown"]},
+        "method": {"enum": ["initialize", "translate", "resolve", "expand_context", "finalize", "shutdown"]},
         "session": {"type": "string", "description": "Required for every method except shutdown"},
         "params": {"type": "object"}
       },
       "allOf": [
         {"if": {"properties": {"method": {"const": "initialize"}}}, "then": {"properties": {"params": {"$ref": "#/$defs/initialize_params"}}}},
         {"if": {"properties": {"method": {"const": "translate"}}}, "then": {"properties": {"params": {"$ref": "#/$defs/translate_params"}}}},
-        {"if": {"properties": {"method": {"const": "resolve"}}}, "then": {"properties": {"params": {"$ref": "#/$defs/resolve_params"}}}}
+        {"if": {"properties": {"method": {"const": "resolve"}}}, "then": {"properties": {"params": {"$ref": "#/$defs/resolve_params"}}}},
+        {"if": {"properties": {"method": {"const": "expand_context"}}}, "then": {"properties": {"params": {"$ref": "#/$defs/expand_context_params"}}}}
       ]
     },
     "initialize_params": {
@@ -41,7 +42,36 @@
         "mappings": {"$ref": "mapping.schema.json"},
         "layout": {"type": "object", "description": "Translator-specific folder convention"},
         "options": {"type": "object", "description": "Translator-specific options"},
-        "copybook_paths": {"type": "array", "items": {"type": "string"}}
+        "settings": {"type": "object", "description": "Values chosen for setting decisions, written over `options` by the worker"},
+        "setting_provenance": {
+          "type": "object",
+          "description": "Setting field -> who chose its value in `settings` (provider and its confidence); the worker notes it in the generated code",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {"provider": {"type": "string"}, "confidence": {"type": "number", "minimum": 0, "maximum": 1}}
+          }
+        },
+        "copybook_paths": {"type": "array", "items": {"type": "string"}},
+        "importance": {
+          "type": "array",
+          "description": "Importance table: the most specific entry wins ((reason, operation), then (*, operation), then (reason, *), then (*, *)); a decision no entry matches is critical",
+          "items": {
+            "type": "object",
+            "required": ["reason", "operation", "importance"],
+            "additionalProperties": false,
+            "properties": {
+              "reason": {"type": "string", "minLength": 1, "description": "A decision reason or *"},
+              "operation": {"type": "string", "minLength": 1, "description": "A decision operation or *"},
+              "importance": {"$ref": "decision.schema.json#/$defs/importance"}
+            }
+          }
+        },
+        "context": {
+          "type": "object",
+          "description": "Budget of the context graph attached to every decision",
+          "additionalProperties": false,
+          "properties": {"max_depth": {"type": "integer", "minimum": 0}, "max_chars": {"type": "integer", "minimum": 0}}
+        }
       }
     },
     "translate_params": {
@@ -52,6 +82,15 @@
       "type": "object",
       "required": ["resolutions"],
       "properties": {"resolutions": {"type": "array", "items": {"$ref": "decision.schema.json#/$defs/resolution"}}}
+    },
+    "expand_context_params": {
+      "type": "object",
+      "required": ["decision_id", "refs"],
+      "properties": {
+        "decision_id": {"type": "string"},
+        "refs": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "max_chars": {"type": "integer", "minimum": 0, "description": "Text budget of this expansion (default: the session's context.max_chars)"}
+      }
     },
     "response": {
       "type": "object",

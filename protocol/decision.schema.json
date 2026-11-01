@@ -6,15 +6,16 @@
   "$defs": {
     "request": {
       "type": "object",
-      "required": ["id", "fingerprint", "reason", "operation", "message", "required", "state", "source", "context", "candidates"],
+      "required": ["id", "fingerprint", "reason", "operation", "message", "required", "state", "importance", "source", "context", "candidates"],
       "properties": {
         "id": {"type": "string", "pattern": "^decision-[0-9]+$", "description": "Unique within a session"},
-        "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "Content hash (reason, operation, location, text, facts, candidate ids); the cache key"},
+        "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "Content hash (reason, operation, location, text, facts, candidate ids, dialect, importance; never the context); the cache key"},
         "reason": {"enum": ["missing_mapping", "unsupported_construct", "ambiguous_mapping", "missing_target_api", "invalid_mapping", "callback_required"]},
         "operation": {"type": "string", "description": "Source operation, or DATA / ENVIRONMENT / PROCEDURE for declarations"},
         "message": {"type": "string"},
         "required": {"const": true, "description": "Finalize refuses to write output while a required decision is pending"},
         "state": {"enum": ["pending", "resolved"]},
+        "importance": {"$ref": "#/$defs/importance"},
         "selected_candidate": {"type": "string"},
         "source": {
           "type": "object",
@@ -34,7 +35,17 @@
             "source_operation": {"type": "string"},
             "target_language": {"type": "string"},
             "rule_id": {"type": "string"},
-            "facts": {"type": "object"}
+            "facts": {"type": "object"},
+            "refs": {"type": "array", "items": {"$ref": "#/$defs/context_ref"}, "description": "Budgeted context graph, breadth-first from the operands (depth 0); not part of the fingerprint"},
+            "budget": {"$ref": "#/$defs/context_budget"},
+            "program": {
+              "type": "object",
+              "description": "The decision's program: its header comments and IDENTIFICATION DIVISION paragraphs; not part of the fingerprint",
+              "properties": {
+                "identification": {"type": "object", "additionalProperties": {"type": ["string", "null"]}, "description": "author, installation, date_written, security, remarks"},
+                "comments": {"type": "array", "items": {"type": "string"}, "description": "Comments before the DATA DIVISION (or PROCEDURE DIVISION)"}
+              }
+            }
           }
         },
         "candidates": {"type": "array", "items": {"$ref": "#/$defs/candidate"}},
@@ -42,6 +53,15 @@
           "type": "object",
           "required": ["script", "function"],
           "properties": {"script": {"type": "string"}, "function": {"type": "string"}}
+        },
+        "setting": {
+          "type": "object",
+          "description": "A setting decision: selecting a candidate means translating again with `field` set to `values[candidate_id]` (sent in initialize.settings), never resolve",
+          "required": ["field", "values"],
+          "properties": {
+            "field": {"type": "string"},
+            "values": {"type": "object", "minProperties": 1, "additionalProperties": {"type": ["string", "boolean", "number"]}}
+          }
         }
       }
     },
@@ -52,7 +72,71 @@
         "id": {"type": "string"},
         "handler": {"type": "string"},
         "description": {"type": "string"},
-        "preview": {"type": "string", "description": "Target code the candidate generates"}
+        "preview": {"type": "string", "description": "Target code the candidate generates"},
+        "docs": {
+          "type": "array",
+          "description": "The Java methods the preview calls: signature and the first paragraph of their Javadoc; advisory, not part of the fingerprint",
+          "items": {
+            "type": "object",
+            "required": ["signature", "summary"],
+            "properties": {"signature": {"type": "string"}, "summary": {"type": "string"}}
+          }
+        },
+        "slots": {
+          "type": "array",
+          "description": "Applying the candidate raises one follow-up decision per slot, each with its own validated candidates",
+          "items": {
+            "type": "object",
+            "required": ["name", "description"],
+            "properties": {"name": {"type": "string", "minLength": 1}, "description": {"type": "string"}}
+          }
+        }
+      }
+    },
+    "importance": {
+      "enum": ["low", "normal", "high", "critical"],
+      "description": "Deterministic tier from the importance table passed to initialize; part of the fingerprint. Selects the provider's confidence floor"
+    },
+    "context_ref": {
+      "type": "object",
+      "required": ["ref", "kind", "depth"],
+      "properties": {
+        "ref": {"type": "string", "minLength": 1, "description": "Stable within the session; expand_context takes it"},
+        "kind": {"enum": ["data", "writes", "reads", "usage", "paragraph"]},
+        "depth": {"type": "integer", "minimum": 0},
+        "text": {"type": "string", "description": "Source text; absent when truncated"},
+        "summary": {"type": "string", "description": "One line"},
+        "file": {"type": "string"},
+        "line": {"type": "integer", "minimum": 1},
+        "parent": {"type": "string", "description": "The ref this node was reached from"},
+        "truncated": {"type": "boolean", "description": "The budget left out its text; expand_context returns it"},
+        "items": {"type": "array", "items": {"type": "string"}, "description": "Names of a group's subordinate items"},
+        "comments": {"type": "array", "items": {"type": "string"}, "description": "A paragraph's or data item's comments (the block above it, then its own lines); with text only"}
+      }
+    },
+    "context_budget": {
+      "type": "object",
+      "required": ["max_depth", "max_chars", "used_chars", "truncated", "omitted"],
+      "properties": {
+        "max_depth": {"type": "integer", "minimum": 0},
+        "max_chars": {"type": "integer", "minimum": 0},
+        "used_chars": {"type": "integer", "minimum": 0, "description": "Characters of text included"},
+        "truncated": {"type": "integer", "minimum": 0, "description": "Nodes listed without their text"},
+        "omitted": {"type": "integer", "minimum": 0, "description": "Nodes within max_depth not listed at all"}
+      }
+    },
+    "gate": {
+      "enum": ["passed", "below_floor", "abstained", "need_context"],
+      "description": "The provider's confidence gate; only `passed` answers are applied"
+    },
+    "review_priority": {
+      "type": "object",
+      "description": "Advisory: how carefully a person should review the answer. Never affects the gate or the fingerprint",
+      "required": ["level", "label"],
+      "properties": {
+        "level": {"type": "integer", "minimum": 0, "maximum": 4},
+        "label": {"enum": ["cosmetic", "local", "visible", "business", "money/compliance"]},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1}
       }
     },
     "resolution": {
@@ -69,7 +153,16 @@
           "additionalProperties": false
         },
         "provider": {"type": "string"},
-        "rationale": {"type": "string"}
+        "rationale": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1, "description": "The provider's probability for the selected candidate"},
+        "probabilities": {
+          "type": "object",
+          "description": "Option id (a candidate id, __abstain__ or __need_context__) -> probability",
+          "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1}
+        },
+        "gate": {"$ref": "#/$defs/gate"},
+        "importance": {"$ref": "#/$defs/importance"},
+        "review_priority": {"$ref": "#/$defs/review_priority"}
       }
     },
     "rejection": {

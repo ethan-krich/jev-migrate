@@ -228,6 +228,7 @@ public final class Facts {
                         case "ARGUMENT-NUMBER" -> "argument_number";
                         case "ARGUMENT-VALUE" -> "argument_value";
                         case "COMMAND-LINE" -> "command_line";
+                        case "MICROSECOND-TIME" -> "microsecond_time";
                         default -> "device";
                     };
                 }
@@ -356,7 +357,8 @@ public final class Facts {
 
     /**
      * ACCEPT source: stdin (no FROM; FROM SYSIN / CONSOLE is resolved by the caller), date,
-     * date_yyyymmdd, day, day_yyyyddd, day_of_week, time, other_date, escape_key, message_count.
+     * date_yyyymmdd, day, day_yyyyddd, day_of_week, time, other_date, escape_key, message_count
+     * (FROM MICROSECOND-TIME is a device name to ProLeap; the caller resolves it).
      */
     static String acceptFrom(AcceptStatement a) {
         return switch (a.getAcceptType()) {

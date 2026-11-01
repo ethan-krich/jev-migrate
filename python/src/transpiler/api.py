@@ -13,13 +13,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any, Protocol
 
-from .protocol import JOB_VERSION, DecisionRequest
+from .protocol import IMPORTANCE_TIERS, JOB_VERSION, DecisionRequest, ReviewPriority, importance_table
 from .providers import DecisionProvider, DeterministicProvider
 from .registry import HandlerCatalog, MappingRegistry
 
@@ -56,6 +56,7 @@ class LanguagePair:
     default_layout: Callable[[], Layout]
     catalog: HandlerCatalog
     default_dialect: Callable[[], Dialect] | None = None
+    default_importance: Callable[[], Mapping[tuple[str, str], str]] | None = None
 
 
 def language_pairs() -> dict[str, LanguagePair]:
@@ -113,6 +114,102 @@ class ProgramResult:
         )
 
 
+@dataclass(frozen=True)
+class Resolution:
+    """What happened to one provider answer: applied by the worker, held by the gate (or the
+    context cap), or rejected (not an offered candidate, stale fingerprint, ...)."""
+
+    decision_id: str
+    outcome: str  # applied | held | rejected
+    candidate_id: str | None
+    provider: str | None
+    importance: str | None
+    gate: str | None
+    confidence: float | None
+    review_priority: ReviewPriority | None
+    rationale: str = ""
+    held_reason: str | None = None
+    stage: str | None = None  # rejected only: orchestrator | worker
+    message: str | None = None
+
+    @property
+    def applied(self) -> bool:
+        return self.outcome == "applied"
+
+    @classmethod
+    def from_json(cls, d: dict[str, Any], outcome: str) -> Resolution:
+        rp = d.get("review_priority")
+        return cls(
+            decision_id=d.get("decision_id", ""),
+            outcome=outcome,
+            candidate_id=d.get("selection", {}).get("candidate_id"),
+            provider=d.get("provider"),
+            importance=d.get("importance"),
+            gate=d.get("gate"),
+            confidence=d.get("confidence"),
+            review_priority=ReviewPriority.from_json(rp) if rp else None,
+            rationale=d.get("rationale", ""),
+            held_reason=d.get("held_reason"),
+            stage=d.get("stage"),
+            message=d.get("message"),
+        )
+
+
+@dataclass(frozen=True)
+class SettingChoice:
+    """A project setting a provider chose for a setting decision; every program was translated
+    again with it. ``decision`` is the request as asked (from a pass that was then replaced)."""
+
+    field: str
+    value: Any
+    decision: DecisionRequest
+    resolution: Resolution
+
+    @property
+    def confidence(self) -> float | None:
+        return self.resolution.confidence
+
+
+@dataclass(frozen=True)
+class Resolutions:
+    provider: str | None
+    applied: tuple[Resolution, ...]
+    held: tuple[Resolution, ...]
+    rejected: tuple[Resolution, ...]
+
+    def __iter__(self):
+        return iter(self.applied + self.held + self.rejected)
+
+    def for_decision(self, decision_id: str) -> Resolution | None:
+        """The applied answer for a decision, else its held, else its rejected one."""
+        for group in (self.applied, self.held, self.rejected):
+            for r in reversed(group):
+                if r.decision_id == decision_id:
+                    return r
+        return None
+
+
+@dataclass(frozen=True)
+class ReviewItem:
+    """A row of ``review.md``: a decision, what happened to its answer, and the tier-mismatch flag."""
+
+    decision: DecisionRequest
+    resolution: Resolution | None
+
+    @property
+    def pending(self) -> bool:
+        return not self.decision.resolved
+
+    @property
+    def tier_mismatch(self) -> bool:
+        """review_priority business or higher on a low decision, or cosmetic on a critical one."""
+        rp = self.resolution.review_priority if self.resolution else None
+        if rp is None:
+            return False
+        return (rp.level >= 3 and self.decision.importance == "low") or (
+            rp.level == 0 and self.decision.importance == "critical")
+
+
 @dataclass
 class TranspileResult:
     status: str  # ok | incomplete | failed
@@ -139,6 +236,34 @@ class TranspileResult:
     def errors(self) -> list[dict[str, Any]]:
         return self.report.get("errors", [])
 
+    @property
+    def settings(self) -> list[SettingChoice]:
+        """Settings chosen for setting decisions, in the order they were chosen."""
+        return [SettingChoice(s["field"], s["value"], DecisionRequest.from_json(s["decision"]),
+                              Resolution.from_json(s["resolution"], "applied"))
+                for s in self.report.get("settings", [])]
+
+    @property
+    def resolutions(self) -> Resolutions:
+        r = self.report.get("resolutions", {})
+        return Resolutions(
+            provider=r.get("provider"),
+            **{kind: tuple(Resolution.from_json(e, kind) for e in r.get(kind, [])) for kind in ("applied", "held", "rejected")},
+        )
+
+    def review_queue(self) -> list[ReviewItem]:
+        """Every decision with its answer, in ``review.md`` order: pending first, then review
+        priority level (highest first, none last), then importance (critical first)."""
+        resolutions = self.resolutions
+        items = [ReviewItem(d, resolutions.for_decision(d.id)) for d in self.decisions]
+
+        def key(item: ReviewItem) -> tuple[bool, int, int]:
+            rp = item.resolution.review_priority if item.resolution else None
+            tier = IMPORTANCE_TIERS.index(item.decision.importance) if item.decision.importance in IMPORTANCE_TIERS else -1
+            return (not item.pending, -(rp.level if rp else -1), -tier)
+
+        return sorted(items, key=key)
+
     def raise_for_status(self) -> TranspileResult:
         if not self.ok:
             raise TranspilerError(self.summary())
@@ -146,6 +271,9 @@ class TranspileResult:
 
     def summary(self) -> str:
         lines = [f"status: {self.status} ({len(self.programs)} program(s), {len(self.files_written)} file(s) written)"]
+        for s in self.settings:
+            confidence = "" if s.confidence is None else f" (confidence {s.confidence:.2f})"
+            lines.append(f"  setting {s.field} = {s.value!r}, chosen by {s.resolution.provider or 'provider'}{confidence}")
         for p in self.programs:
             lines.append(f"  {p.file}: {p.status} -> {p.output_path or '-'}")
             lines.extend(f"    {d['severity']}: {d['message']}" for d in p.diagnostics)
@@ -175,6 +303,7 @@ def transpile(
     mappings: MappingRegistry | None = None,
     layout: Layout | None = None,
     dialect: Dialect | None = None,
+    importance: Mapping[tuple[str, str], str] | None = None,
     source_root: str | os.PathLike[str] | None = None,
     provider: DecisionProvider | None = None,
     options: dict[str, Any] | None = None,
@@ -194,6 +323,10 @@ def transpile(
     ``dialect`` holds the project settings the source does not determine (``cobol_to_java.Dialect``);
     without it the language pair's default dialect is used. A key given both by an explicit
     ``dialect`` and in ``options`` is an error; ``options`` may override the default dialect.
+
+    ``importance`` maps ``(reason, operation)`` (``*`` matches anything) to a decision's tier,
+    ``low``, ``normal``, ``high`` or ``critical``; without it the language pair's default table
+    is used (``cobol_to_java.DEFAULT_IMPORTANCE``).
     """
     if mappings is not None:
         pair = find_language_pair(target, source_language, mappings.language_pair)
@@ -224,6 +357,15 @@ def transpile(
         "mappings": mappings.to_dict(),
         "provider": provider.to_config(),
     }
+    if (budget := provider.context_budget()) is not None:
+        job["translator_params"]["context"] = budget
+    if importance is None and pair.default_importance is not None:
+        importance = pair.default_importance()
+    if importance is not None:
+        try:
+            job["translator_params"]["importance"] = importance_table(importance)
+        except ValueError as e:
+            raise TranspilerError(str(e)) from None
     if timeout is not None:
         job["request_timeout_seconds"] = max(1, int(timeout))
 

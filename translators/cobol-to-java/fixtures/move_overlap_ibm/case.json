@@ -1,0 +1,7 @@
+{
+  "description": "Dialect.move_overlap = ibm: MOVEs whose receiver starts inside the sender copy left to right (IBM MVC), as GnuCOBOL with -fmove-ibm (cob_move_ibm) does; a shorter sender moves as through a temporary",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "out_of_range": "fail", "move_overlap": "ibm"},
+  "equivalence": {"programs": ["OVERLAP.cbl"], "main_class": "fixtures.move_overlap_ibm.Overlap", "cobc_flags": ["-fmove-ibm"]},
+  "layout": {"base_package": "fixtures.move_overlap_ibm"}
+}

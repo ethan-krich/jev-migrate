@@ -10,4 +10,6 @@
            IF WS-A = HIGH-VALUES DISPLAY "high" END-IF.
            IF WS-A > WS-B DISPLAY "ordered" END-IF.
            IF WS-B < "abc" DISPLAY "ordered again" END-IF.
+           MOVE WS-B (1:2) TO WS-B (2:2).
+           MOVE WS-B (2:2) TO WS-B (1:2).
            STOP RUN.

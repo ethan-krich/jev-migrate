@@ -1,0 +1,6 @@
+close no rewind 07
+read with lock 00 abcd
+close with lock 00
+open after lock 38
+read closed 47
+close again 00

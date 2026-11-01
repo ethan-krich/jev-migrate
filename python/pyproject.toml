@@ -3,7 +3,13 @@ name = "transpiler"
 version = "0.1.0"
 description = "Public Python API for the transpiler: mapping registry, translation jobs, results and decision providers"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "rich>=13.9,<15",
+]
+
+[project.optional-dependencies]
+# The Jev decision provider (transpiler.providers.jev); the only code that uses the network.
+jev = ["typesafe-sdk>=0.7.5,<0.8"]
 
 [build-system]
 requires = ["uv_build>=0.11,<0.12"]

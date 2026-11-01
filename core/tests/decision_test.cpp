@@ -91,3 +91,58 @@ TEST(Decision, MakeProvider) {
   EXPECT_FALSE(make_provider({{"kind", "jev"}}).has_value());
   EXPECT_FALSE(make_provider({{"kind", "static"}, {"decisions", {{{"decision_id", "d"}}}}}).has_value());
 }
+
+TEST(Decision, ParsesGatedAnswers) {
+  auto passed = parse_decision_response({{"decision_id", "decision-1"},
+                                         {"selection", {{"kind", "candidate"}, {"candidate_id", "c"}}},
+                                         {"gate", "passed"},
+                                         {"confidence", 0.97},
+                                         {"probabilities", {{"c", 0.97}, {"__abstain__", 0.03}}},
+                                         {"review_priority", {{"level", 2}, {"label", "visible"}}}});
+  ASSERT_TRUE(passed.has_value()) << passed.error();
+  EXPECT_TRUE(passed->passed());
+  EXPECT_EQ(passed->confidence, 0.97);
+  EXPECT_EQ(passed->review_priority["label"], "visible");
+  auto need = parse_decision_response({{"decision_id", "decision-1"}, {"gate", "need_context"}, {"need_context", {"data:A@3:8"}}});
+  ASSERT_TRUE(need.has_value()) << need.error();
+  EXPECT_FALSE(need->passed());
+  EXPECT_EQ(need->need_context, std::vector<std::string>{"data:A@3:8"});
+  EXPECT_TRUE(parse_decision_response({{"decision_id", "decision-1"}, {"gate", "abstained"}}).has_value());
+  // A passed answer must select; need_context must name refs and select nothing; gates and confidences are checked.
+  EXPECT_FALSE(parse_decision_response({{"decision_id", "decision-1"}, {"gate", "passed"}}).has_value());
+  EXPECT_FALSE(parse_decision_response({{"decision_id", "decision-1"}, {"gate", "need_context"}}).has_value());
+  EXPECT_FALSE(parse_decision_response({{"decision_id", "decision-1"}, {"gate", "need_context"}, {"need_context", {"r"}},
+                                        {"selection", {{"kind", "candidate"}, {"candidate_id", "c"}}}})
+                   .has_value());
+  EXPECT_FALSE(parse_decision_response({{"decision_id", "decision-1"}, {"gate", "maybe"},
+                                        {"selection", {{"kind", "candidate"}, {"candidate_id", "c"}}}})
+                   .has_value());
+  EXPECT_FALSE(parse_decision_response({{"decision_id", "decision-1"}, {"confidence", 1.5},
+                                        {"selection", {{"kind", "candidate"}, {"candidate_id", "c"}}}})
+                   .has_value());
+}
+
+TEST(Decision, ReportEntryCarriesGateFieldsAndImportance) {
+  DecisionResponse a = answer("builtin:display");
+  a.gate = "below_floor";
+  a.confidence = 0.5;
+  json entry = a.to_report("critical");
+  EXPECT_EQ(entry["importance"], "critical");
+  EXPECT_EQ(entry["gate"], "below_floor");
+  EXPECT_EQ(entry["confidence"], 0.5);
+  EXPECT_FALSE(a.to_resolution().contains("gate")) << "the worker only receives the selection";
+}
+
+TEST(Decision, CacheKeepsConfidenceAndReviewPriority) {
+  DecisionCache cache;
+  DecisionResponse a = answer("builtin:display");
+  a.gate = "passed";
+  a.confidence = 0.99;
+  a.review_priority = {{"level", 4}, {"label", "money/compliance"}};
+  cache.store(request(), a);
+  auto hit = cache.lookup(request());
+  ASSERT_TRUE(hit.has_value());
+  EXPECT_EQ(hit->confidence, 0.99);
+  EXPECT_EQ(hit->review_priority["level"], 4);
+  EXPECT_EQ(hit->provider, "cache");
+}

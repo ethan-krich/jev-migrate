@@ -1,0 +1,24 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ACCMICRO.
+      * ACCEPT FROM MICROSECOND-TIME.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-TEXT    PIC X(14).
+       01 WS-NUM     PIC 9(12).
+       01 WS-SHORT   PIC 9(8).
+       01 WS-GROUP.
+          05 WS-HHMMSS PIC X(6).
+          05 WS-MICRO  PIC X(6).
+       PROCEDURE DIVISION.
+       MAIN-PARA.
+           ACCEPT WS-TEXT FROM MICROSECOND-TIME.
+           DISPLAY "text [" WS-TEXT (1:6) "] [" WS-TEXT (13:2) "]".
+           IF WS-TEXT (7:6) IS NUMERIC DISPLAY "micro digits" END-IF.
+           ACCEPT WS-NUM FROM MICROSECOND-TIME.
+           DISPLAY "num " WS-NUM (1:6).
+           ACCEPT WS-SHORT FROM MICROSECOND-TIME.
+           DISPLAY "short " WS-SHORT (1:2).
+           ACCEPT WS-GROUP FROM MICROSECOND-TIME.
+           DISPLAY "group " WS-HHMMSS.
+           IF WS-MICRO IS NUMERIC DISPLAY "group digits" END-IF.
+           STOP RUN.

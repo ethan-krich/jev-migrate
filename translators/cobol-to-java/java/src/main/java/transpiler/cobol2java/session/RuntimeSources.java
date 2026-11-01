@@ -18,23 +18,32 @@ public final class RuntimeSources {
     /** Kept in sync with runtime/src/main/java by RuntimeSourcesTest. */
     public static final List<String> CLASSES = List.of(
             "Accept", "AlphanumericField", "Arithmetic", "Bounds", "Clock", "CobolFile", "CobolProgram", "Compare", "Display", "EditedField", "Environment", "FileBase", "Functions", "Goback",
-            "IndexedFile", "NumericField", "PerformStack", "ProgramSupport", "RelativeFile", "SortFile", "StopRun", "Storage", "StringOps");
+            "IndexedFile", "NumericField", "PerformStack", "ProgramSupport", "RelativeFile", "SortFile", "StopRun", "Storage", "StringOps", "Switches", "SystemRoutines");
 
     private RuntimeSources() {}
 
     /** Class simple name to Java source, with the package declaration set to {@code targetPackage}. */
     public static Map<String, String> forPackage(String targetPackage) {
         Map<String, String> out = new LinkedHashMap<>();
+        for (Map.Entry<String, CompilationUnit> e : parsed().entrySet()) {
+            CompilationUnit cu = e.getValue().clone();
+            cu.setPackageDeclaration(targetPackage);
+            out.put(e.getKey(), cu.toString());
+        }
+        return out;
+    }
+
+    /** Class simple name to the parsed runtime source, as bundled (with its Javadoc). */
+    public static Map<String, CompilationUnit> parsed() {
+        Map<String, CompilationUnit> out = new LinkedHashMap<>();
         for (String cls : CLASSES) {
             String resource = "/runtime-src/" + SOURCE_PACKAGE.replace('.', '/') + "/" + cls + ".java";
             try (InputStream in = RuntimeSources.class.getResourceAsStream(resource)) {
                 if (in == null) {
                     throw new IllegalStateException("runtime source missing from worker: " + resource);
                 }
-                CompilationUnit cu = new JavaParser(new ParserConfiguration().setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21))
-                        .parse(new String(in.readAllBytes(), StandardCharsets.UTF_8)).getResult().orElseThrow();
-                cu.setPackageDeclaration(targetPackage);
-                out.put(cls, cu.toString());
+                out.put(cls, new JavaParser(new ParserConfiguration().setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21))
+                        .parse(new String(in.readAllBytes(), StandardCharsets.UTF_8)).getResult().orElseThrow());
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }

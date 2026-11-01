@@ -242,14 +242,79 @@ public final class Functions {
     // ------------------------------------------------------------- DISPLAY
 
     /**
-     * DISPLAY of an integer function result (MOD, ORD, INTEGER, ...): at least nine digits, a
-     * minus sign only when negative.
+     * DISPLAY of an integer function result (MOD, ORD, INTEGER, ...): the field GnuCOBOL allocates
+     * for it, as {@link #decimalDisplay} (nine digits up to 32 bits, a minus sign only when negative).
      */
     public static String integerDisplay(BigDecimal value) {
-        BigInteger v = value.toBigIntegerExact();
-        String digits = v.abs().toString();
-        int width = digits.length() <= 9 ? 9 : 18;
-        return (v.signum() < 0 ? "-" : "") + "0".repeat(Math.max(0, width - digits.length())) + digits;
+        return decimalDisplay(new BigDecimal(value.toBigIntegerExact()), '.');
+    }
+
+    /** ABS of an item or literal: a copy in its own picture and usage holding the absolute value (cob_intr_abs). */
+    public static NumericField abs(NumericField f) {
+        NumericField r = f.like();
+        r.move(f.get().abs());
+        return r;
+    }
+
+    /** MAX of items and literals: the first largest one, in its own picture (cob_intr_max). */
+    public static NumericField maxField(NumericField... fields) {
+        NumericField best = fields[0];
+        for (NumericField f : fields) {
+            if (f.get().compareTo(best.get()) > 0) {
+                best = f;
+            }
+        }
+        return best;
+    }
+
+    /** MIN of items and literals: the first smallest one, in its own picture (cob_intr_min). */
+    public static NumericField minField(NumericField... fields) {
+        NumericField best = fields[0];
+        for (NumericField f : fields) {
+            if (f.get().compareTo(best.get()) < 0) {
+                best = f;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * DISPLAY of a result that GnuCOBOL 3.2 puts in a field sized from its value (cob_alloc_field:
+     * SUM, NUMVAL, NUMVAL-C, MOD, REM). Trailing fractional zeros are dropped; a value that fits 32
+     * bits (31 when negative) with fewer than 10 decimals gets nine digits, one that fits 64 bits
+     * (63) with fewer than 19 decimals twenty, anything else as many as GMP's size estimate gives.
+     * The sign is shown only when negative; higher digits than the field holds are cut, as a MOVE.
+     */
+    public static String decimalDisplay(BigDecimal value, char point) {
+        BigDecimal v = value.signum() == 0 ? BigDecimal.ZERO : value.stripTrailingZeros();
+        if (v.scale() < 0) {
+            v = v.setScale(0);
+        }
+        BigInteger unscaled = v.unscaledValue();
+        int scale = v.scale();
+        boolean negative = unscaled.signum() < 0;
+        int bits = unscaled.signum() == 0 ? 1 : unscaled.abs().bitLength();
+        int digits;
+        if (bits < 33 - (negative ? 1 : 0) && scale < 10) {
+            digits = 9;
+        } else if (bits < 65 - (negative ? 1 : 0) && scale < 19) {
+            digits = 20;
+        } else {
+            // mpz_sizeinbase (value, 10): the digits of the largest number with as many bits.
+            digits = BigInteger.ONE.shiftLeft(bits).subtract(BigInteger.ONE).toString().length();
+        }
+        digits = Math.max(digits, scale);
+        String raw = unscaled.abs().toString();
+        raw = raw.length() >= digits ? raw.substring(raw.length() - digits) : "0".repeat(digits - raw.length()) + raw;
+        StringBuilder sb = new StringBuilder(digits + 2);
+        if (negative) {
+            sb.append('-');
+        }
+        sb.append(raw, 0, digits - scale);
+        if (scale > 0) {
+            sb.append(point).append(raw, digits - scale, digits);
+        }
+        return sb.toString();
     }
 
     /** DISPLAY of a fixed-width unsigned result (DATE-OF-INTEGER: 8, DAY-OF-INTEGER: 7). */

@@ -1,0 +1,6 @@
+a *> inside a literal is not a comment  
+it's "fine" 
+starts in column 3
+column one
+far right, past column 72: 007
+n 008

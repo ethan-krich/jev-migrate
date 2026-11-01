@@ -1,0 +1,7 @@
+{
+  "description": "GO TO out of a PERFORMed range (the PERFORM waits for its range's end, reached again later; falling off the PROCEDURE DIVISION inside it ends the program) and EXIT SECTION from a paragraph PERFORMed on its own",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native"},
+  "equivalence": {"programs": ["GOTOOUT.cbl", "EXITSEC.cbl"], "main_class": "fixtures.goto_out_of_perform.Gotoout"},
+  "layout": {"base_package": "fixtures.goto_out_of_perform"}
+}

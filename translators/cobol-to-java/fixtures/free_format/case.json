@@ -1,0 +1,7 @@
+{
+  "description": "Free-format source (cobc -free): code in any column and past column 72, *> comments (also after code, never inside literals), >>SOURCE FORMAT FREE, >>D debugging lines (comments without WITH DEBUGGING MODE)",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "source_format": "free"},
+  "equivalence": {"programs": ["FREEFMT.cbl"], "main_class": "fixtures.free_format.Freefmt", "cobc_flags": ["-free"]},
+  "layout": {"base_package": "fixtures.free_format"}
+}

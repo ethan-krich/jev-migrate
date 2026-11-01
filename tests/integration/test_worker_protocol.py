@@ -74,7 +74,7 @@ def test_ready_announces_catalog_matching_python_defaults(worker):
     data = worker.ready["data"]
     assert {h["id"]: h["operation"] for h in data["handlers"]} == dict(BUILTIN_HANDLERS)
     assert {op: frozenset(keys) for op, keys in data["facts"].items()} == dict(FACTS)
-    assert data["methods"] == ["initialize", "translate", "resolve", "finalize", "shutdown"]
+    assert data["methods"] == ["initialize", "translate", "resolve", "expand_context", "finalize", "shutdown"]
 
 
 @pytest.mark.parametrize("line, code", [
@@ -157,18 +157,130 @@ def test_session_lifecycle_with_synthetic_resolution(worker, tmp_path):
     java = (tmp_path / "out/src/main/java/proto/Basics.java").read_text()
     assert "UNRESOLVED" not in java and java.count("Display.line") == len(decisions) - 1
     assert worker.call("translate")["error"]["code"] == "invalid_state"
+    assert worker.call("expand_context", {"decision_id": first["id"], "refs": ["x"]})["error"]["code"] == "invalid_state"
 
 
 def test_decisions_without_candidates_cannot_be_selected(worker, tmp_path):
+    src = FIXTURES / "unsupported/src"
+    worker.call("initialize", init_params(tmp_path, [src / "UNSUP.cbl"], src))
+    decision = next(d for d in worker.call("translate")["result"]["decisions"] if d["operation"] == "DATA")
+    assert decision["candidates"] == []
+    resp = worker.call("resolve", {"resolutions": [
+        {"decision_id": decision["id"], "selection": {"kind": "candidate", "candidate_id": "builtin:display"}}]})
+    assert resp["result"]["rejected"][0]["code"] == "no_candidates"
+    assert resp["status"] == "incomplete"
+
+
+def test_setting_decisions_offer_values_and_are_applied_by_initialize_settings(worker, tmp_path):
+    src = FIXTURES / "dialect_unset/src"
+    worker.call("initialize", init_params(tmp_path, [src / "NEEDS.cbl"], src))
+    decision = worker.call("translate")["result"]["decisions"][0]
+    assert decision["operation"] == "dialect:encoding"
+    assert decision["setting"] == {"field": "encoding", "values": {"setting:ascii": "ascii", "setting:ebcdic": "ebcdic"}}
+    assert decision["context"]["facts"]["usages"][0].startswith("line 6: ")
+    resp = worker.call("resolve", {"resolutions": [
+        {"decision_id": decision["id"], "selection": {"kind": "candidate", "candidate_id": "setting:ascii"}}]})
+    assert resp["result"]["rejected"][0]["code"] == "setting"
+    params = init_params(tmp_path, [src / "NEEDS.cbl"], src)
+    params["settings"] = {"encoding": "ascii"}
+    init = worker.call("initialize", params, session="session-2")
+    assert init["result"]["dialect"]["encoding"] == "ascii"
+    again = worker.call("translate", session="session-2")["result"]["decisions"]
+    assert [d["operation"] for d in again] == ["dialect:collating_sequence", "dialect:move_overlap"]
+
+
+def test_external_call_is_bound_through_slot_decisions(worker, tmp_path):
     src = FIXTURES / "unresolved_call/src"
     worker.call("initialize", init_params(tmp_path, [src / "CALLER.cbl"], src))
     [decision] = worker.call("translate")["result"]["decisions"]
-    assert decision["reason"] == "missing_target_api"
-    assert "EXTPROG" in decision["message"] and decision["candidates"] == []
-    resp = worker.call("resolve", {"resolutions": [
+    assert decision["reason"] == "missing_target_api" and "EXTPROG" in decision["message"]
+    [external] = decision["candidates"]
+    assert external["id"] == "builtin:call_external" and "preview" not in external
+    assert [s["name"] for s in external["slots"]] == ["target"]
+    wrong = worker.call("resolve", {"resolutions": [
         {"decision_id": decision["id"], "selection": {"kind": "candidate", "candidate_id": "builtin:call_program"}}]})
-    assert resp["result"]["rejected"][0]["code"] == "no_candidates"
-    assert resp["status"] == "incomplete"
+    assert wrong["result"]["rejected"][0]["code"] == "unknown_candidate"
+
+    opened = worker.call("resolve", {"resolutions": [
+        {"decision_id": decision["id"], "fingerprint": decision["fingerprint"],
+         "selection": {"kind": "candidate", "candidate_id": "builtin:call_external"}}]})
+    assert opened["status"] == "incomplete" and opened["result"]["applied"] == [decision["id"]]
+    [target] = opened["result"]["new_decisions"]
+    assert target["context"]["facts"]["slot"] == "target" and target["importance"] == "critical"  # no table given
+    assert [c["id"] for c in target["candidates"]] == ["target:not_found"]
+    assert 'callNamed(this, "EXTPROG", name -> null, false)' in target["candidates"][0]["preview"]
+    assert worker.call("finalize")["status"] == "incomplete"
+
+    done = worker.call("resolve", {"resolutions": [
+        {"decision_id": target["id"], "selection": {"kind": "candidate", "candidate_id": "target:not_found"}}]})
+    assert done["status"] == "ok" and done["result"]["new_decisions"] == []
+    assert worker.call("finalize")["status"] == "ok"
+    java = (tmp_path / "out/src/main/java/proto/Caller.java").read_text()
+    assert "UNRESOLVED" not in java and 'ProgramSupport.callNamed(this, "EXTPROG", name -> null, false);' in java
+
+
+def test_importance_table_sets_tiers_and_fingerprints(worker, tmp_path):
+    src = FIXTURES / "unresolved_call/src"
+    params = init_params(tmp_path, [src / "CALLER.cbl"], src)
+    params["importance"] = [{"reason": "*", "operation": "*", "importance": "normal"},
+                            {"reason": "missing_target_api", "operation": "CALL", "importance": "critical"}]
+    worker.call("initialize", params)
+    [critical] = worker.call("translate")["result"]["decisions"]
+    assert critical["importance"] == "critical"
+    params["importance"][1]["importance"] = "low"
+    worker.call("initialize", params, session="t")
+    [low] = worker.call("translate", session="t")["result"]["decisions"]
+    assert low["importance"] == "low"
+    assert low["fingerprint"] != critical["fingerprint"], "importance is part of the fingerprint"
+    worker.call("initialize", init_params(tmp_path, [src / "CALLER.cbl"], src), session="u")
+    [unmatched] = worker.call("translate", session="u")["result"]["decisions"]
+    assert unmatched["importance"] == "critical", "without a table every decision is critical"
+
+
+@pytest.mark.parametrize("table", [
+    {"reason": "*"},
+    [{"reason": "*", "operation": "*", "importance": "urgent"}],
+    [{"reason": "nonsense", "operation": "*", "importance": "low"}],
+    [{"reason": "*", "operation": "*", "importance": "low"}, {"reason": "*", "operation": "*", "importance": "high"}],
+])
+def test_invalid_importance_tables_are_rejected(worker, tmp_path, table):
+    src = FIXTURES / "basics/src"
+    params = init_params(tmp_path, [src / "BASICS.cbl"], src)
+    params["importance"] = table
+    resp = worker.call("initialize", params)
+    assert resp["error"]["code"] == "invalid_params" and "importance" in resp["error"]["message"]
+
+
+def test_expand_context_returns_truncated_text_and_rejects_unknown_refs(worker, tmp_path):
+    src = FIXTURES / "basics/src"
+    mappings = default_mappings()
+    mappings.remove("DISPLAY")
+    params = init_params(tmp_path, [src / "BASICS.cbl"], src, mappings.to_dict())
+    params["context"] = {"max_depth": 1, "max_chars": 40}
+    worker.call("initialize", params)
+    decision = worker.call("translate")["result"]["decisions"][3]
+    refs = decision["context"]["refs"]
+    budget = decision["context"]["budget"]
+    assert budget["max_depth"] == 1 and budget["used_chars"] <= 40 and budget["truncated"] > 0
+    truncated = [r for r in refs if r.get("truncated")]
+    assert truncated and all("text" not in r and r["summary"] for r in truncated)
+    want = truncated[0]["ref"]
+    resp = worker.call("expand_context", {"decision_id": decision["id"], "refs": [want, "data:NOPE@1:1"]})
+    assert resp["status"] == "ok"
+    first = resp["result"]["refs"][0]
+    assert first["ref"] == want and "text" in first and "truncated" not in first
+    deeper = resp["result"]["refs"][1:]
+    assert all(r["truncated"] and r["parent"] == want and r["depth"] == first["depth"] + 1 for r in deeper)
+    assert resp["result"]["rejected"] == [
+        {"ref": "data:NOPE@1:1", "code": "unknown_ref", "message": f"decision {decision['id']} has no context node 'data:NOPE@1:1'"}]
+    # Refs listed by an expansion can be expanded in turn.
+    if deeper:
+        again = worker.call("expand_context", {"decision_id": decision["id"], "refs": [deeper[0]["ref"]]})
+        assert again["result"]["refs"][0]["text"]
+    assert worker.call("expand_context", {"decision_id": "decision-999", "refs": [want]})["error"]["code"] == "invalid_params"
+    assert worker.call("expand_context", {"decision_id": decision["id"], "refs": []})["error"]["code"] == "invalid_params"
+    params["context"] = {"max_depth": -1}
+    assert worker.call("initialize", params, session="t")["error"]["code"] == "invalid_params"
 
 
 def test_translate_rejects_unknown_files_and_retranslation(worker, tmp_path):

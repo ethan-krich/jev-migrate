@@ -11,7 +11,14 @@ public final class PerformStack {
     private int[] ends = new int[16];
     private int depth;
 
+    /** GnuCOBOL's frame stack holds 255 PERFORMs (COB_STACK_SIZE); beyond it its behaviour is undefined. */
+    static final int LIMIT = 255;
+
     public void push(int end) {
+        if (depth == LIMIT) {
+            // libcob reports this only when built with stack checks; anything else is not reproducible.
+            Bounds.fail("stack overflow, possible PERFORM depth exceeded");
+        }
         if (depth == ends.length) {
             ends = Arrays.copyOf(ends, depth * 2);
         }

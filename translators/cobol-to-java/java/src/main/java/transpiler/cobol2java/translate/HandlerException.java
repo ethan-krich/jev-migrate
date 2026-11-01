@@ -15,15 +15,36 @@ public final class HandlerException extends Exception {
 
     private final Kind kind;
     private final boolean offerCandidates;
+    private final String missingProgram;
 
     public HandlerException(Kind kind, String message) {
-        this(kind, message, false);
+        this(kind, message, false, null);
     }
 
-    private HandlerException(Kind kind, String message, boolean offerCandidates) {
+    private HandlerException(Kind kind, String message, boolean offerCandidates, String missingProgram) {
         super(message, null, false, false);
         this.kind = kind;
         this.offerCandidates = offerCandidates;
+        this.missingProgram = missingProgram;
+    }
+
+    /** MISSING_TARGET: a CALL names a program (as written) that is not part of the project. */
+    public static HandlerException missingProgram(String program, String message) {
+        return new HandlerException(Kind.MISSING_TARGET, message, false, program);
+    }
+
+    /**
+     * MISSING_TARGET: the target system decides what replaces a device or console; with
+     * {@code offerCandidates} the operation's other builtin handlers are offered, each exact for
+     * one answer.
+     */
+    public static HandlerException missingTarget(String message, boolean offerCandidates) {
+        return new HandlerException(Kind.MISSING_TARGET, message, offerCandidates, null);
+    }
+
+    /** The program a CALL names that is not in the project, or null. */
+    public String missingProgram() {
+        return missingProgram;
     }
 
     /**
@@ -31,7 +52,7 @@ public final class HandlerException extends Exception {
      * review (they are correct only under conditions the translator cannot prove).
      */
     public static HandlerException unprovable(String message) {
-        return new HandlerException(Kind.UNSUPPORTED, message, true);
+        return new HandlerException(Kind.UNSUPPORTED, message, true, null);
     }
 
     public boolean offerCandidates() {

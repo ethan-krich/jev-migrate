@@ -1,10 +1,12 @@
 {
-  "description": "A program needing unset Dialect settings gets exactly one dialect:<field> decision per field",
+  "description": "A program needing unset Dialect settings gets exactly one dialect:<field> decision per field, offering the field's values",
   "expect": {
     "status": "incomplete",
     "decisions": [
-      {"reason": "missing_mapping", "operation": "dialect:encoding", "line": 6, "candidates": []},
-      {"reason": "missing_mapping", "operation": "dialect:collating_sequence", "line": 11, "candidates": []}
+      {"reason": "missing_mapping", "operation": "dialect:encoding", "line": 6, "candidates": ["setting:ascii", "setting:ebcdic"]},
+      {"reason": "missing_mapping", "operation": "dialect:collating_sequence", "line": 11,
+       "candidates": ["setting:native", "setting:ascii", "setting:ebcdic"]},
+      {"reason": "missing_mapping", "operation": "dialect:move_overlap", "line": 13, "candidates": ["setting:temporary", "setting:ibm"]}
     ]
   },
   "layout": {"base_package": "fixtures.dialect_unset"}

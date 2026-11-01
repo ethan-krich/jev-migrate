@@ -1,0 +1,8 @@
+{
+  "description": "SPECIAL-NAMES switches SWITCH-n with ON / OFF STATUS condition-names, their start values from COB_SWITCH_n, SET switch TO ON / OFF, switch conditions in IF and EVALUATE",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native"},
+  "equivalence": {"programs": ["SWTEST.cbl"], "main_class": "fixtures.switches.Swtest",
+                  "env": {"COB_SWITCH_1": "ON", "COB_SWITCH_3": "1x", "COB_SWITCH_2": "off", "COB_SWITCH_36": "on"}},
+  "layout": {"base_package": "fixtures.switches"}
+}

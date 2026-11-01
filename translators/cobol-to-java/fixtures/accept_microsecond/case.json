@@ -1,0 +1,8 @@
+{
+  "description": "ACCEPT FROM MICROSECOND-TIME into alphanumeric, numeric and group items; COB_CURRENT_DATE fixes hhmmss while the microseconds come from the system clock, so only their form is shown",
+  "expect": {"status": "ok"},
+  "dialect": {"encoding": "ascii", "collating_sequence": "native", "out_of_range": "fail"},
+  "equivalence": {"programs": ["ACCMICRO.cbl"], "main_class": "fixtures.accept_microsecond.Accmicro",
+                  "env": {"COB_CURRENT_DATE": "2024/03/05 13:14:15"}},
+  "layout": {"base_package": "fixtures.accept_microsecond"}
+}

@@ -5,10 +5,18 @@
 
 from transpiler import LanguagePair
 
-from .defaults import CATALOG, LANGUAGE_PAIR, default_layout, default_mappings, empty_mappings, translator_dir
+from .defaults import (
+    CATALOG,
+    LANGUAGE_PAIR,
+    default_importance,
+    default_layout,
+    default_mappings,
+    empty_mappings,
+    translator_dir,
+)
 from .dialect import Dialect, default_dialect
 from .layout import Layout
-from .mappings import BUILTIN_HANDLERS, FACTS
+from .mappings import BUILTIN_HANDLERS, DEFAULT_IMPORTANCE, FACTS
 
 
 def language_pair() -> LanguagePair:
@@ -22,17 +30,20 @@ def language_pair() -> LanguagePair:
         default_layout=default_layout,
         catalog=CATALOG,
         default_dialect=default_dialect,
+        default_importance=default_importance,
     )
 
 
 __all__ = [
     "BUILTIN_HANDLERS",
     "CATALOG",
+    "DEFAULT_IMPORTANCE",
     "Dialect",
     "FACTS",
     "LANGUAGE_PAIR",
     "Layout",
     "default_dialect",
+    "default_importance",
     "default_layout",
     "default_mappings",
     "empty_mappings",

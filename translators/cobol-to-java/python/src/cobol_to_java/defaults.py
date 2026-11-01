@@ -7,7 +7,7 @@ from pathlib import Path
 from transpiler import HandlerCatalog, MappingRegistry, Strategy
 
 from .layout import Layout
-from .mappings import BUILTIN_HANDLERS, DEFAULT_RULES, FACTS, OPERATIONS, PRIORITY
+from .mappings import BUILTIN_HANDLERS, DEFAULT_IMPORTANCE, DEFAULT_RULES, FACTS, OPERATIONS, PRIORITY
 
 LANGUAGE_PAIR = "cobol-to-java"
 
@@ -26,6 +26,11 @@ def default_mappings() -> MappingRegistry:
 def empty_mappings() -> MappingRegistry:
     """A registry with no rules (every operation becomes a missing_mapping decision)."""
     return MappingRegistry(LANGUAGE_PAIR, CATALOG)
+
+
+def default_importance() -> dict[tuple[str, str], str]:
+    """A fresh, mutable copy of DEFAULT_IMPORTANCE: ``{(reason, operation): tier}``."""
+    return dict(DEFAULT_IMPORTANCE)
 
 
 def default_layout() -> Layout:

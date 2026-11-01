@@ -1,0 +1,10 @@
+trace on
+sw2 off
+sw3 on
+sw36 only
+trace off
+sw2 on
+sw3 off
+sw5 on
+evaluate sw2
+trace is off

@@ -1,0 +1,19 @@
+row 1 other N
+row 2 open
+row 3 other N
+row 4 closed
+small 2,3
+big 3,1
+first open 2
+rx not open
+some news
+amt 01
+or-and 01
+not 01
+not 04
+and-or 07
+not 07
+or-and 10
+and-or 10
+not 10
+chain

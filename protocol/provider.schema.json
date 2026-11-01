@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://transpiler.local/protocol/provider.schema.json",
+  "title": "Provider protocol message",
+  "description": "One line of the newline-delimited JSON protocol between the orchestrator (stdin of the provider) and an out-of-process decision provider (stdout), `kind: \"python\"` in the job. The envelope is the worker protocol's with another version; diagnostics go to stderr only.",
+  "oneOf": [{"$ref": "#/$defs/request"}, {"$ref": "#/$defs/response"}, {"$ref": "#/$defs/event"}],
+  "$defs": {
+    "protocol": {"const": "transpiler-provider/1"},
+    "request": {
+      "type": "object",
+      "required": ["protocol", "id", "method"],
+      "not": {"required": ["type"]},
+      "properties": {
+        "protocol": {"$ref": "#/$defs/protocol"},
+        "id": {"type": "string", "minLength": 1},
+        "method": {"enum": ["decide", "shutdown"]},
+        "params": {"type": "object"}
+      },
+      "allOf": [
+        {"if": {"properties": {"method": {"const": "decide"}}}, "then": {"required": ["params"], "properties": {"params": {"$ref": "#/$defs/decide_params"}}}}
+      ]
+    },
+    "decide_params": {
+      "type": "object",
+      "required": ["decisions"],
+      "properties": {
+        "decisions": {"type": "array", "items": {"$ref": "decision.schema.json#/$defs/request"}, "description": "Independent pending decisions"},
+        "extra_context": {
+          "type": "array",
+          "description": "Nodes returned by the worker's expand_context for a decision asked again after a need_context answer",
+          "items": {
+            "type": "object",
+            "required": ["decision_id", "expansions", "refs"],
+            "properties": {
+              "decision_id": {"type": "string"},
+              "expansions": {"type": "integer", "minimum": 1, "description": "Expansions made for this decision so far"},
+              "expansions_left": {"type": "integer", "minimum": 0},
+              "refs": {"type": "array", "items": {"$ref": "decision.schema.json#/$defs/context_ref"}}
+            }
+          }
+        }
+      }
+    },
+    "answer": {
+      "description": "A provider's answer: a gated candidate selection, or a request for more context",
+      "type": "object",
+      "required": ["decision_id", "gate"],
+      "properties": {
+        "decision_id": {"type": "string"},
+        "fingerprint": {"type": "string"},
+        "selection": {"$ref": "decision.schema.json#/$defs/resolution/properties/selection"},
+        "need_context": {"type": "array", "minItems": 1, "items": {"type": "string"}, "description": "Truncated refs to open (gate need_context)"},
+        "gate": {"$ref": "decision.schema.json#/$defs/gate"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "probabilities": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1}},
+        "review_priority": {"$ref": "decision.schema.json#/$defs/review_priority"},
+        "provider": {"type": "string"},
+        "rationale": {"type": "string"}
+      },
+      "allOf": [
+        {"if": {"properties": {"gate": {"const": "need_context"}}}, "then": {"required": ["need_context"], "not": {"required": ["selection"]}}},
+        {"if": {"properties": {"gate": {"const": "passed"}}}, "then": {"required": ["selection", "confidence"]}}
+      ]
+    },
+    "decide_result": {
+      "type": "object",
+      "required": ["answers"],
+      "properties": {"answers": {"type": "array", "items": {"$ref": "#/$defs/answer"}, "description": "Any subset of the decisions asked"}}
+    },
+    "response": {
+      "type": "object",
+      "required": ["protocol", "type", "id", "status"],
+      "properties": {
+        "protocol": {"$ref": "#/$defs/protocol"},
+        "type": {"const": "response"},
+        "id": {"type": ["string", "null"]},
+        "status": {"enum": ["ok", "error"]},
+        "result": {"type": "object"},
+        "error": {
+          "type": "object",
+          "required": ["code", "message"],
+          "properties": {
+            "code": {"enum": ["malformed_json", "invalid_request", "unsupported_protocol", "unknown_method", "invalid_params", "internal_error"]},
+            "message": {"type": "string"},
+            "details": {}
+          }
+        }
+      },
+      "if": {"properties": {"status": {"const": "error"}}},
+      "then": {"required": ["error"]},
+      "else": {"required": ["result"], "properties": {"id": {"type": "string"}}}
+    },
+    "event": {
+      "type": "object",
+      "required": ["protocol", "type", "event", "data"],
+      "properties": {
+        "protocol": {"$ref": "#/$defs/protocol"},
+        "type": {"const": "event"},
+        "event": {"enum": ["ready"]},
+        "data": {
+          "type": "object",
+          "required": ["provider"],
+          "properties": {"provider": {"type": "string"}, "version": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

@@ -38,6 +38,9 @@ public final class RelativeFile extends FileBase {
     }
 
     public void open(int openMode) {
+        if (lockedOut()) {
+            return;
+        }
         if (mode != CLOSED) {
             finish("41", false);
             return;
@@ -71,6 +74,9 @@ public final class RelativeFile extends FileBase {
     }
 
     public void close() {
+        if (closeLocked()) {
+            return;
+        }
         readDone = false;
         if (mode == CLOSED) {
             finish("42", false);
@@ -442,5 +448,16 @@ public final class RelativeFile extends FileBase {
         file.seek(position);
         file.write(b);
         position += b.length;
+    }
+
+    @Override
+    boolean sortRead() {
+        return sortQuietly(() -> readNext(false, true)) || !succeeded();
+    }
+
+    @Override
+    void sortWrite(String data) {
+        record.set(data);
+        sortQuietly(() -> write(record, true));
     }
 }

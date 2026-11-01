@@ -96,9 +96,11 @@ import org.antlr.v4.runtime.misc.Interval;
 import org.antlr.v4.runtime.tree.ParseTree;
 import transpiler.cobol2java.cobol.Picture;
 import transpiler.cobol2java.cobol.SourceMap;
+import transpiler.cobol2java.context.ContextGraph;
 import transpiler.cobol2java.decision.Candidate;
 import transpiler.cobol2java.decision.Decision;
 import transpiler.cobol2java.decision.Reason;
+import transpiler.cobol2java.decision.SlotGroup;
 import transpiler.cobol2java.decision.SourceLocation;
 import transpiler.cobol2java.mapping.MappingRegistry;
 import transpiler.cobol2java.mapping.MappingRule;
@@ -283,13 +285,20 @@ public final class ProgramTranslator implements TranslationContext {
     private List<Decision> sink = new ArrayList<>();
     /** Program-level decisions (never discarded with a failed candidate), in source order with the rest. */
     private final List<Decision> root = sink;
-    private final Set<String> dialectDecisions = new HashSet<>();
+    /** The program's decision per unset dialect setting, with the uses collected as its evidence. */
+    private final Map<String, Decision> dialectDecisions = new HashMap<>();
+    private final Map<String, List<String>> dialectUsages = new HashMap<>();
     /** Times an unset dialect setting was required; a rise during fact extraction blocks a unit. */
     private int dialectHits;
     // SPECIAL-NAMES
     private boolean decimalComma;
     private final Map<String, String> devices = new HashMap<>();
+    /** SWITCH-n mnemonic names, and the condition-names of their ON / OFF STATUS (switch number, true for ON). */
+    private final Map<String, Integer> switches = new HashMap<>();
+    private final Map<String, Map.Entry<Integer, Boolean>> switchConditions = new HashMap<>();
     private final Map<String, CobolParser.ClassClauseContext> classes = new HashMap<>();
+    /** ALPHABET names of SPECIAL-NAMES: ascii, ebcdic, or other (literals, another alphabet). */
+    private final Map<String, String> alphabets = new HashMap<>();
     // Procedure structure and jumps
     private final Map<Scope, List<ParserRuleContext>> nextSentences = new IdentityHashMap<>();
     private final Set<ParserRuleContext> placedNextSentences = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -345,12 +354,13 @@ public final class ProgramTranslator implements TranslationContext {
         cu.addImport(in.runtimePackage() + ".SortFile");
         cu.addImport(in.runtimePackage() + ".Storage");
         cu.addImport(in.runtimePackage() + ".StringOps");
+        cu.addImport(in.runtimePackage() + ".Switches");
+        cu.addImport(in.runtimePackage() + ".SystemRoutines");
         cu.addImport(BigDecimal.class);
 
         ClassOrInterfaceDeclaration cls = cu.addClass(in.className(), Modifier.Keyword.PUBLIC, Modifier.Keyword.FINAL);
         cls.addImplementedType("CobolProgram");
-        cls.setJavadocComment("Translated from " + in.sourceFile() + " (PROGRAM-ID " + in.programId() + ") by cobol-to-java.\n"
-                + "Do not edit: regenerate from the COBOL source.");
+        cls.setJavadocComment("Translated from " + in.sourceFile() + " (PROGRAM-ID " + in.programId() + ") by cobol-to-java.");
 
         checkUnsupportedDivisions();
         buildDataModel();
@@ -405,16 +415,67 @@ public final class ProgramTranslator implements TranslationContext {
             } else if (clause.classClause() != null) {
                 classes.put(clause.classClause().className().getText().toUpperCase(Locale.ROOT), clause.classClause());
             } else if (clause.alphabetClause() != null) {
-                // An alphabet only matters where it is used (PROGRAM COLLATING SEQUENCE, CODE-SET), which are decisions.
+                // An alphabet only matters where it is used: SORT / MERGE COLLATING SEQUENCE (for the
+                // native and EBCDIC sequences); PROGRAM COLLATING SEQUENCE and CODE-SET are decisions.
+                var a = clause.alphabetClause().alphabetClauseFormat1();
+                if (a != null) {
+                    String seq = a.EBCDIC() != null ? "ebcdic"
+                            : a.ASCII() != null || a.STANDARD_1() != null || a.NATIVE() != null ? "ascii" : "other";
+                    alphabets.put(a.alphabetName().getText().toUpperCase(Locale.ROOT), seq);
+                }
                 continue;
-            } else if (clause.environmentSwitchNameClause() != null
-                    && clause.environmentSwitchNameClause().environmentSwitchNameSpecialNamesStatusPhrase() == null) {
+            } else if (clause.environmentSwitchNameClause() != null && clause.environmentSwitchNameClause().environmentName() != null) {
                 var sw = clause.environmentSwitchNameClause();
-                devices.put(sw.mnemonicName().getText().toUpperCase(Locale.ROOT), sw.environmentName().getText().toUpperCase(Locale.ROOT));
+                String env = sw.environmentName().getText().toUpperCase(Locale.ROOT);
+                String mnemonic = sw.mnemonicName().getText().toUpperCase(Locale.ROOT);
+                Integer n = switchNumber(env);
+                var status = sw.environmentSwitchNameSpecialNamesStatusPhrase();
+                if (status != null && n == null) {
+                    dataDecision(clause, "ENVIRONMENT", "ON / OFF STATUS of " + env + " (only SWITCH-0 .. SWITCH-36 are switches)");
+                    continue;
+                }
+                devices.put(mnemonic, env);
+                if (n != null) {
+                    switches.put(mnemonic, n);
+                    Boolean on = null;
+                    for (var child : status == null ? List.<org.antlr.v4.runtime.tree.ParseTree>of() : status.children) {
+                        if (child instanceof org.antlr.v4.runtime.tree.TerminalNode t && (t.getSymbol().getType() == CobolParser.ON
+                                || t.getSymbol().getType() == CobolParser.OFF)) {
+                            on = t.getSymbol().getType() == CobolParser.ON;
+                        } else if (child instanceof CobolParser.ConditionContext cond) {
+                            switchConditions.put(cond.getText().toUpperCase(Locale.ROOT), Map.entry(n, on));
+                        }
+                    }
+                }
             } else {
                 dataDecision(clause, "ENVIRONMENT", "SPECIAL-NAMES clause " + clause.getText() + " is not supported");
             }
         }
+    }
+
+    /** The number of a GnuCOBOL switch name, SWITCH-0 .. SWITCH-36, or null. */
+    private static Integer switchNumber(String environmentName) {
+        var m = java.util.regex.Pattern.compile("SWITCH-(\\d{1,2})").matcher(environmentName);
+        if (!m.matches() || Integer.parseInt(m.group(1)) > 36) {
+            return null;
+        }
+        return Integer.parseInt(m.group(1));
+    }
+
+    @Override
+    public java.util.OptionalInt switchNumberOf(String mnemonic) {
+        Integer n = switches.get(mnemonic.toUpperCase(Locale.ROOT));
+        return n == null ? java.util.OptionalInt.empty() : java.util.OptionalInt.of(n);
+    }
+
+    @Override
+    public java.util.Optional<Expression> switchCondition(String name) {
+        var sw = switchConditions.get(name.toUpperCase(Locale.ROOT));
+        if (sw == null) {
+            return java.util.Optional.empty();
+        }
+        Expression on = staticCall("Switches", "get", integer(sw.getKey()));
+        return java.util.Optional.of(sw.getValue() ? on : new UnaryExpr(on, UnaryExpr.Operator.LOGICAL_COMPLEMENT));
     }
 
     private void objectComputer(CobolParser.ObjectComputerParagraphContext ctx) {
@@ -484,12 +545,13 @@ public final class ProgramTranslator implements TranslationContext {
                 f.path = in.dialect().fileAssignments().get(f.assigned);
                 if (f.path == null) {
                     // The project must say where the file is; it is never guessed.
-                    Decision.Plan none = id -> {
+                    Decision.Plan none = (id, note) -> {
                         throw new IllegalArgumentException("decision has no candidates");
                     };
                     root.add(new Decision(Reason.MISSING_MAPPING, "dialect:file_assignments", "ASSIGN TO '" + f.assigned + "' (file "
                             + f.cobolName + ") has no entry in Dialect.file_assignments", location(f.ctx), in.programId(),
-                            Map.of("field", "file_assignments", "name", f.assigned), null, List.of(), null, id -> none.apply(id)));
+                            Map.of("field", "file_assignments", "name", f.assigned), null, List.of(), null, none)
+                            .withContext(context(f.ctx)));
                     statements++;
                     files.remove(f.cobolName);
                     continue;
@@ -2235,6 +2297,21 @@ public final class ProgramTranslator implements TranslationContext {
         sizeOf.setBody(new BlockStmt(NodeList.nodeList(sizes)));
     }
 
+    /** Whether any program of the source file has SOURCE-COMPUTER ... WITH DEBUGGING MODE. */
+    private boolean debuggingMode() {
+        for (var cu : in.unit().getProgram().getCompilationUnits()) {
+            for (var unit : cu.getProgramUnits()) {
+                var env = unit.getEnvironmentDivision();
+                var config = env == null ? null : env.getConfigurationSection();
+                var sc = config == null ? null : config.getSourceComputerParagraph();
+                if (sc != null && sc.isDebuggingMode()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private static boolean within(ParserRuleContext ctx, ParserRuleContext outer) {
         int i = ctx.getStart().getTokenIndex();
         return i >= outer.getStart().getTokenIndex() && i <= outer.getStop().getTokenIndex();
@@ -2253,8 +2330,15 @@ public final class ProgramTranslator implements TranslationContext {
             var dctx = (CobolParser.ProcedureDeclarativeContext) d.getCtx();
             String method = unique(methodNames, Names.methodName("use", dctx.procedureSectionHeader().sectionName().getText()));
             var use = d.getUseStament();
+            if (use != null && use.getUseType() == io.proleap.cobol.asg.metamodel.procedure.use.UseStatement.UseType.DEBUG
+                    && !debuggingMode()) {
+                // Without WITH DEBUGGING MODE GnuCOBOL never runs a debugging section (not even with COB_SET_DEBUG).
+                continue;
+            }
+            // GLOBAL makes a USE procedure apply to nested programs too; a program without any is unaffected.
+            boolean nested = !((CobolParser.ProgramUnitContext) in.unit().getCtx()).programUnit().isEmpty();
             if (use == null || use.getUseType() != io.proleap.cobol.asg.metamodel.procedure.use.UseStatement.UseType.AFTER
-                    || use.getUseAfterStatement().isGlobal()) {
+                    || (use.getUseAfterStatement().isGlobal() && nested)) {
                 dataDecision(dctx.useStatement(), "PROCEDURE", words(dctx.useStatement()) + " is not supported (only USE AFTER ERROR procedures)");
                 continue;
             }
@@ -2557,6 +2641,11 @@ public final class ProgramTranslator implements TranslationContext {
                 walk(p.getCtx(), tree -> {
                     if (tree instanceof CobolParser.ExitStatementContext exit && exit.SECTION() != null) {
                         exitSections.add(s);
+                        // Leaving a paragraph that is PERFORMed on its own for its section's end leaves
+                        // that PERFORM waiting, which only the procedure dispatcher reproduces.
+                        if (performedParagraphs.contains(p)) {
+                            dispatcher = true;
+                        }
                     }
                 });
             }
@@ -2822,7 +2911,14 @@ public final class ProgramTranslator implements TranslationContext {
                                 candidatesFor(unit, handler));
                         case UNSUPPORTED -> unresolved(unit, block, facts, Reason.UNSUPPORTED_CONSTRUCT, rule, e.getMessage(),
                                 e.offerCandidates() ? candidatesFor(unit, handler) : List.of());
-                        case MISSING_TARGET -> unresolved(unit, block, facts, Reason.MISSING_TARGET_API, rule, e.getMessage(), List.of());
+                        case MISSING_TARGET -> {
+                            if (e.missingProgram() != null) {
+                                externalCall(unit, block, facts, rule, e.missingProgram(), e.getMessage());
+                            } else {
+                                unresolved(unit, block, facts, Reason.MISSING_TARGET_API, rule, e.getMessage(),
+                                        e.offerCandidates() ? candidatesFor(unit, handler) : List.of());
+                            }
+                        }
                         // The dialect:<field> decision is already recorded once for the program.
                         case DIALECT -> block.addStatement(placeholder(unit, "needs Dialect." + e.getMessage()));
                     }
@@ -2865,7 +2961,9 @@ public final class ProgramTranslator implements TranslationContext {
             try {
                 List<Statement> stmts = generate(h, unit, nested);
                 String preview = String.join("\n", stmts.stream().map(Statement::toString).toList());
-                out.add(new Generated(new Candidate("builtin:" + h.id(), h.id(), h.description(), preview), stmts, nested));
+                Candidate candidate = new Candidate("builtin:" + h.id(), h.id(), h.description(), preview)
+                        .withDocs(JavaDocs.runtime().calledBy(stmts));
+                out.add(new Generated(candidate, stmts, nested));
             } catch (HandlerException e) {
                 // Not a viable candidate for this instance.
             } finally {
@@ -2895,7 +2993,7 @@ public final class ProgramTranslator implements TranslationContext {
             List<Candidate> candidates, Map<String, Generated> plans, BlockStmt block) {
         EmptyStmt placeholder = placeholder(unit, null);
         block.addStatement(placeholder);
-        Decision.Plan plan = candidateId -> {
+        Decision.Plan plan = (candidateId, note) -> {
             Generated g = plans.get(candidateId);
             if (g == null) {
                 throw new IllegalArgumentException("no plan for candidate " + candidateId);
@@ -2906,10 +3004,162 @@ public final class ProgramTranslator implements TranslationContext {
             }
             block.getStatements().remove(index);
             block.getStatements().addAll(index, g.statements());
+            annotate(g.statements(), note);
             return g.nested();
         };
         return new Decision(reason, unit.operation(), message, unit.location(), in.programId(), facts,
-                rule == null ? null : rule.id(), candidates, rule == null ? null : rule.callback(), plan);
+                rule == null ? null : rule.id(), candidates, rule == null ? null : rule.callback(), plan)
+                .withContext(context(unit.statement().getCtx()));
+    }
+
+    /**
+     * Puts {@code note} (who decided a statement, e.g. "Decided by jev (confidence 0.87): ...") as a
+     * Java line comment on the first statement generated for it, before any comment it already has.
+     */
+    static void annotate(List<Statement> statements, String note) {
+        if (note == null || statements.isEmpty()) {
+            return;
+        }
+        Statement first = statements.getFirst();
+        String text = " " + note + first.getComment().map(c -> " | " + c.getContent().strip()).orElse("");
+        first.setComment(new LineComment(text));
+    }
+
+    /** The context graph a provider reads for a decision about the source at {@code ctx}. */
+    private ContextGraph context(ParserRuleContext ctx) {
+        return ContextGraph.of(ctx, in.unit().getProgram(), in.sourceMap(), in.sourceFile());
+    }
+
+    /**
+     * CALL 'name' of a program outside the project: a missing_target_api decision offering
+     * {@code builtin:call_external}, whose slots ask what the name reaches ({@code target}) and,
+     * with USING, how the arguments are passed ({@code args}). Every combination is generated
+     * here; a slot offers only the options that generate with all the other slot's options.
+     */
+    private void externalCall(OpUnit unit, BlockStmt block, Map<String, Object> facts, MappingRule rule, String program,
+            String message) {
+        var call = (io.proleap.cobol.asg.metamodel.procedure.call.CallStatement) unit.statement();
+        Map<String, String> targets = new LinkedHashMap<>();
+        if (absentAllowed(program)) {
+            targets.put("target:not_found", null);
+        }
+        // Not the program itself: GnuCOBOL makes a program that CALLs itself recursive, which is settled before this choice.
+        String self = (in.containers().isEmpty() ? in.packageName() : in.containers().getLast().getValue()) + "." + in.className();
+        in.programs().forEach((name, cls) -> {
+            if (!cls.equals(self)) {
+                targets.put("target:program:" + name, name);
+            }
+        });
+        List<String> modes = call.getUsingPhrase() == null ? List.of(ARGS_AS_WRITTEN) : List.of(ARGS_AS_WRITTEN, ARGS_BY_CONTENT);
+        Map<String, Generated> combos = new LinkedHashMap<>();
+        for (var t : targets.entrySet()) {
+            for (String mode : modes) {
+                Generated g = generateExternal(unit, t.getValue(), mode.equals(ARGS_BY_CONTENT));
+                if (g != null) {
+                    combos.put(t.getKey() + "|" + mode, g);
+                }
+            }
+        }
+        List<String> offeredTargets = targets.keySet().stream().filter(k -> combos.containsKey(k + "|" + ARGS_AS_WRITTEN)).toList();
+        List<String> offeredModes = modes.stream()
+                .filter(m -> offeredTargets.stream().allMatch(k -> combos.containsKey(k + "|" + m))).toList();
+        if (offeredTargets.isEmpty()) {
+            unresolved(unit, block, facts, Reason.MISSING_TARGET_API, rule, message, List.of());
+            return;
+        }
+        List<Candidate.Slot> slots = new ArrayList<>(List.of(new Candidate.Slot("target",
+                "what CALL '" + program + "' reaches: a program of the project, or no program at run time")));
+        if (call.getUsingPhrase() != null) {
+            slots.add(new Candidate.Slot("args", "how the USING arguments are passed to the target"));
+        }
+        Candidate external = new Candidate("builtin:call_external", "call_external",
+                "bind CALL '" + program + "' to its target; the slots are separate decisions", null, slots);
+        EmptyStmt placeholder = placeholder(unit, null);
+        block.addStatement(placeholder);
+        ContextGraph graph = context(call.getCtx());
+        String ruleId = rule == null ? null : rule.id();
+        Decision.Plan plan = (candidateId, chosenNote) -> {
+            if (!candidateId.equals(external.id())) {
+                throw new IllegalArgumentException("no plan for candidate " + candidateId);
+            }
+            SlotGroup group = new SlotGroup(slots.stream().map(Candidate.Slot::name).toList(), (chosen, note) -> {
+                Generated g = combos.get(chosen.get("target") + "|" + chosen.getOrDefault("args", ARGS_AS_WRITTEN));
+                int index = block.getStatements().indexOf(placeholder);
+                if (g == null || index < 0) {
+                    throw new IllegalStateException("CALL '" + program + "' cannot be generated for " + chosen);
+                }
+                block.getStatements().remove(index);
+                block.getStatements().addAll(index, g.statements());
+                annotate(g.statements(), note);
+                return g.nested();
+            });
+            List<Decision> raised = new ArrayList<>();
+            List<Candidate> targetCandidates = new ArrayList<>();
+            for (String k : offeredTargets) {
+                String name = targets.get(k);
+                targetCandidates.add(new Candidate(k, "call_external", name == null
+                        ? "no program '" + program + "' at run time: ON EXCEPTION runs, or the run unit ends with \"module not found\" (GnuCOBOL)"
+                        : "'" + program + "' is the project's program " + name + " under another name",
+                        preview(combos.get(k + "|" + ARGS_AS_WRITTEN))));
+            }
+            raised.add(slotDecision(unit, facts, ruleId, "target", "CALL '" + program + "': choose the program it reaches",
+                    targetCandidates, group, graph));
+            if (slots.size() > 1) {
+                List<Candidate> modeCandidates = new ArrayList<>();
+                for (String m : offeredModes) {
+                    modeCandidates.add(new Candidate(m, "call_external", m.equals(ARGS_AS_WRITTEN)
+                            ? "pass the USING items as written (BY REFERENCE shares the item, BY CONTENT passes a copy)"
+                            : "pass every USING item as a copy; correct only if the target never changes its parameters",
+                            preview(combos.get(offeredTargets.getFirst() + "|" + m))));
+                }
+                raised.add(slotDecision(unit, facts, ruleId, "args", "CALL '" + program + "': choose how the arguments are passed",
+                        modeCandidates, group, graph));
+            }
+            return raised;
+        };
+        sink.add(new Decision(Reason.MISSING_TARGET_API, unit.operation(), message, unit.location(), in.programId(), facts,
+                ruleId, List.of(external), null, plan).withContext(graph));
+    }
+
+    static final String ARGS_AS_WRITTEN = "args:as_written";
+    static final String ARGS_BY_CONTENT = "args:by_content";
+
+    private Decision slotDecision(OpUnit unit, Map<String, Object> facts, String ruleId, String slot, String message,
+            List<Candidate> candidates, SlotGroup group, ContextGraph graph) {
+        Map<String, Object> slotFacts = new LinkedHashMap<>(facts);
+        slotFacts.put("slot", slot);
+        return Decision.slot(Reason.MISSING_TARGET_API, unit.operation(), message, unit.location(), in.programId(), slotFacts, ruleId,
+                candidates, group, slot).withContext(graph);
+    }
+
+    /** A literal GnuCOBOL resolves as a module (not a path or one of its system routines), so "not found" is its behaviour. */
+    private static boolean absentAllowed(String program) {
+        String upper = program.toUpperCase(java.util.Locale.ROOT);
+        return !program.isBlank() && program.equals(program.strip()) && program.indexOf('/') < 0 && program.indexOf('\\') < 0
+                && !upper.startsWith("CBL_") && !upper.startsWith("C$") && !upper.equals("SYSTEM");
+    }
+
+    /** The call_external statements for one combination of slot choices, or null when they cannot be generated. */
+    private Generated generateExternal(OpUnit unit, String target, boolean byContent) {
+        List<Decision> nested = new ArrayList<>();
+        List<Decision> saved = sink;
+        int savedStatements = statements;
+        int savedTranslated = translated;
+        sink = nested;
+        try {
+            List<Statement> stmts = Builtins.callExternal(unit, this, target, byContent);
+            return new Generated(null, stmts, nested);
+        } catch (HandlerException e) {
+            return null;
+        } finally {
+            sink = saved;
+            statements = savedStatements;
+            translated = savedTranslated;
+        }
+    }
+
+    private static String preview(Generated g) {
+        return String.join("\n", g.statements().stream().map(Statement::toString).toList());
     }
 
     /** Records a declaration-level construct that blocks translation (no candidates). */
@@ -2919,27 +3169,59 @@ public final class ProgramTranslator implements TranslationContext {
 
     private void dataDecision(ParserRuleContext ctx, String operation, String message, Reason reason) {
         statements++;
-        Decision.Plan none = id -> {
+        Decision.Plan none = (id, note) -> {
             throw new IllegalArgumentException("decision has no candidates");
         };
         sink.add(new Decision(reason, operation, message, location(ctx), in.programId(),
-                Map.of(), null, List.of(), null, none));
+                Map.of(), null, List.of(), null, none).withContext(context(ctx)));
     }
 
     /**
-     * Records the program's single decision for an unset dialect setting. It has no candidates:
-     * the project must set the field and translate again.
+     * Records the program's single decision for an unset dialect setting. A field of
+     * {@link Dialect#SETTINGS} offers its values as candidates (a setting decision: the
+     * orchestrator translates again with the chosen value); others have none. Every source line
+     * that needs the setting is kept in the {@code usages} fact, as evidence for the choice.
      */
-    private void dialectDecision(String field, SourceLocation where, String usage) {
-        if (!dialectDecisions.add(field)) {
+    private void dialectDecision(String field, ParserRuleContext ctx, String usage) {
+        SourceLocation where = location(ctx);
+        List<String> usages = dialectUsages.computeIfAbsent(field, f -> new ArrayList<>());
+        // The whole statement: translating it stops at the first use, so its other uses are only seen here.
+        ParserRuleContext statement = ctx;
+        while (statement != null && !(statement instanceof io.proleap.cobol.CobolParser.StatementContext)) {
+            statement = statement.getParent();
+        }
+        SourceLocation shown = statement == null ? where : location(statement);
+        String text = shown.text().replaceAll("\\s+", " ");
+        String evidence = "line " + shown.line() + ": " + (text.length() > 400 ? text.substring(0, 397) + "..." : text);
+        if (usages.size() < MAX_SETTING_USAGES && !usages.contains(evidence)) {
+            usages.add(evidence);
+        }
+        Decision existing = dialectDecisions.get(field);
+        if (existing != null) {
+            existing.putFact("usages", List.copyOf(usages));
             return;
         }
-        Decision.Plan none = id -> {
-            throw new IllegalArgumentException("decision has no candidates");
+        Decision.Plan none = (id, note) -> {
+            throw new IllegalArgumentException("a setting is applied by translating again, not by resolve");
         };
-        root.add(new Decision(Reason.MISSING_MAPPING, "dialect:" + field, usage + " depends on Dialect." + field
-                + ", which the project leaves unset", where, in.programId(), Map.of("field", field), null, List.of(), null, none));
+        List<Candidate> candidates = new ArrayList<>();
+        Map<String, Object> values = new LinkedHashMap<>();
+        Dialect.SETTINGS.getOrDefault(field, Map.of()).forEach((value, meaning) -> {
+            candidates.add(new Candidate("setting:" + value, "setting", meaning, null));
+            values.put("setting:" + value, value);
+        });
+        Decision d = new Decision(Reason.MISSING_MAPPING, "dialect:" + field, usage + " depends on Dialect." + field
+                + ", which the project leaves unset", where, in.programId(), Map.of("field", field, "usages", List.copyOf(usages)),
+                null, candidates, null, none).withContext(context(ctx));
+        if (!candidates.isEmpty()) {
+            d.withSetting(field, values);
+        }
+        dialectDecisions.put(field, d);
+        root.add(d);
     }
+
+    /** The uses of an unset setting kept as evidence on its decision. */
+    private static final int MAX_SETTING_USAGES = 20;
 
     @Override
     public Dialect dialect() {
@@ -2952,7 +3234,7 @@ public final class ProgramTranslator implements TranslationContext {
             return value.get();
         }
         dialectHits++;
-        dialectDecision(field, location(where), usage);
+        dialectDecision(field, where, usage);
         throw new HandlerException(HandlerException.Kind.DIALECT, field);
     }
 
@@ -3037,6 +3319,28 @@ public final class ProgramTranslator implements TranslationContext {
     }
 
     /**
+     * A function argument as GnuCOBOL passes it to ABS / MAX / MIN: a numeric item, or a numeric
+     * literal as a standalone item of its own digits, scale and sign. Null for other operands.
+     */
+    private Expression pictured(Operand o) throws HandlerException {
+        return switch (o) {
+            case Operand.Field f when f.numeric() && !f.edited() && f.refmod() == null -> field(f);
+            case Operand.NumericLiteral n -> {
+                String digits = n.unsignedText().replace(".", "").replace(",", "");
+                yield new com.github.javaparser.ast.expr.ObjectCreationExpr(null, Ast.type("NumericField"), NodeList.nodeList(
+                        integer(digits.length()), integer(Math.max(0, n.value().scale())), new com.github.javaparser.ast.expr.BooleanLiteralExpr(n.isSigned()),
+                        str(n.value().toPlainString())));
+            }
+            default -> null;
+        };
+    }
+
+    /** DISPLAY text of a numeric item expression, with the program's decimal point. */
+    private Expression shown(Expression numericField) {
+        return decimalComma ? call(numericField, "display", Ast.chr(',')) : call(numericField, "display");
+    }
+
+    /**
      * Numeric literal text; ProLeap gives no value for a decimal comma, so the text is read
      * here. With DECIMAL-POINT IS COMMA the comma is the decimal point and a period is invalid.
      */
@@ -3055,10 +3359,30 @@ public final class ProgramTranslator implements TranslationContext {
         }
     }
 
+    /**
+     * {@code "text"}, {@code X"hex"} (the bytes written in hexadecimal) and {@code Z"text"} (the
+     * text followed by a NUL byte, a GnuCOBOL extension). Values are byte strings: one char per byte.
+     */
     private static Operand nonNumericLiteral(String text) throws HandlerException {
+        char prefix = Character.toUpperCase(text.charAt(0));
+        if (prefix == 'X' || prefix == 'Z') {
+            String body = text.substring(2, text.length() - 1);
+            if (prefix == 'Z') {
+                char q = text.charAt(1);
+                return new Operand.AlphanumericLiteral(body.replace("" + q + q, "" + q) + '\0');
+            }
+            if (body.length() % 2 != 0) {
+                throw HandlerException.unsupported("hexadecimal literal " + text + " has an odd number of digits");
+            }
+            StringBuilder bytes = new StringBuilder();
+            for (int i = 0; i < body.length(); i += 2) {
+                bytes.append((char) Integer.parseInt(body.substring(i, i + 2), 16));
+            }
+            return new Operand.AlphanumericLiteral(bytes.toString());
+        }
         char q = text.charAt(0);
         if (q != '"' && q != '\'') {
-            throw HandlerException.unsupported("literal " + text + " (hex/national/other prefix) is not supported");
+            throw HandlerException.unsupported("literal " + text + " (national/DBCS prefix) is not supported");
         }
         return new Operand.AlphanumericLiteral(text.substring(1, text.length() - 1).replace("" + q + q, "" + q));
     }
@@ -3207,7 +3531,7 @@ public final class ProgramTranslator implements TranslationContext {
                     throw HandlerException.unsupported("FUNCTION MOD needs integer arguments");
                 }
                 yield new Operand.Computed(staticCall("Functions", fn.equals("MOD") ? "mod" : "rem", numberOf(args.get(0), fn),
-                        numberOf(args.get(1), fn)), true, integral ? "integer" : null);
+                        numberOf(args.get(1), fn)), true, integral ? "integer" : "decimal");
             }
             case "INTEGER", "INTEGER-PART" -> {
                 arity(fn, args, 1);
@@ -3216,7 +3540,9 @@ public final class ProgramTranslator implements TranslationContext {
             }
             case "ABS" -> {
                 arity(fn, args, 1);
-                yield new Operand.Computed(staticCall("Functions", "abs", numberOf(args.getFirst(), fn)), true, null);
+                Expression arg = pictured(args.getFirst());
+                yield new Operand.Computed(staticCall("Functions", "abs", numberOf(args.getFirst(), fn)), true, null,
+                        arg == null ? null : shown(staticCall("Functions", "abs", arg)));
             }
             case "MAX", "MIN", "SUM", "ORD-MAX", "ORD-MIN" -> {
                 if (args.isEmpty()) {
@@ -3234,13 +3560,29 @@ public final class ProgramTranslator implements TranslationContext {
                     default -> "ordMin";
                 };
                 Expression e = new com.github.javaparser.ast.expr.MethodCallExpr(name("Functions"), method, values);
-                yield fn.startsWith("ORD") ? new Operand.Computed(staticCall("BigDecimal", "valueOf", e), true, "integer")
-                        : new Operand.Computed(e, true, null);
+                if (fn.startsWith("ORD")) {
+                    yield new Operand.Computed(staticCall("BigDecimal", "valueOf", e), true, "integer");
+                }
+                if (fn.equals("SUM")) {
+                    yield new Operand.Computed(e, true, "decimal");
+                }
+                // MAX / MIN return the winning argument itself, so DISPLAY shows it in its own picture.
+                NodeList<Expression> fields = new NodeList<>();
+                for (Operand a : args) {
+                    Expression pictured = pictured(a);
+                    if (pictured == null) {
+                        fields = null;
+                        break;
+                    }
+                    fields.add(pictured);
+                }
+                yield new Operand.Computed(e, true, null, fields == null ? null
+                        : shown(new com.github.javaparser.ast.expr.MethodCallExpr(name("Functions"), method + "Field", fields)));
             }
             case "NUMVAL", "NUMVAL-C" -> {
                 arity(fn, args, 1);
                 yield new Operand.Computed(staticCall("Functions", fn.equals("NUMVAL") ? "numval" : "numvalC", textOf(args.getFirst(), fn)),
-                        true, null);
+                        true, "decimal");
             }
             case "ORD" -> {
                 arity(fn, args, 1);
@@ -3426,12 +3768,39 @@ public final class ProgramTranslator implements TranslationContext {
                         rm.length() == null ? null : position(rm.length().arithmeticExpression()));
             }
         }
+        return reference(item, subscripts, refmod, ctx);
+    }
+
+    /**
+     * A subscripted condition-name: {@code IF FLAG-ON (I)}. ProLeap keeps its subscripts beside
+     * the name rather than in a table call, so they are read from the parse tree here.
+     */
+    private Operand.Field conditionReference(ConditionNameReference ref) throws HandlerException {
+        var ctx = (CobolParser.ConditionNameReferenceContext) ref.getCtx();
+        if (ctx.inFile() != null || !ctx.inMnemonic().isEmpty()) {
+            throw HandlerException.unsupported(ctx.getText() + " cannot be resolved");
+        }
+        Operand named = resolveName(ctx.conditionName().getText(), ctx.inData().stream().map(x -> x.dataName().getText()).toList(),
+                ctx.getText());
+        DataItem item = named instanceof Operand.Field f ? f.item() : null;
+        if (item == null || !item.isCondition()) {
+            throw HandlerException.unsupported(ctx.getText() + " is not a condition-name");
+        }
+        List<Operand.Subscript> subscripts = new ArrayList<>();
+        for (var group : ctx.conditionNameSubscriptReference()) {
+            for (var sc : group.subscript()) {
+                subscripts.add(subscript(sc));
+            }
+        }
+        return (Operand.Field) reference(item, subscripts, null, ctx);
+    }
+
+    /** A reference to {@code item} with its subscripts and reference modification, checked against its tables. */
+    private Operand reference(DataItem item, List<Operand.Subscript> subscripts, Operand.RefMod refmod, ParserRuleContext ctx)
+            throws HandlerException {
         List<DataItem> dims = item.dimensions();
         if (subscripts.size() != dims.size()) {
             throw HandlerException.unsupported(item.cobolName() + " needs " + dims.size() + " subscript(s), not " + subscripts.size());
-        }
-        if (item.isCondition() && !subscripts.isEmpty()) {
-            throw HandlerException.unsupported("subscripted condition-names are not supported");
         }
         for (int i = 0; i < dims.size(); i++) {
             DataItem t = dims.get(i);
@@ -3554,6 +3923,11 @@ public final class ProgramTranslator implements TranslationContext {
         }
         String name = (q.dataName() != null ? q.dataName() : q.conditionName()).getText();
         List<String> qualifiers = q.qualifiedInData().stream().map(x -> x.inData().dataName().getText()).toList();
+        return resolveName(name, qualifiers, ctx.getText());
+    }
+
+    /** The item named {@code name} within the containers {@code qualifiers} (innermost first), an index, or null. */
+    private Operand resolveName(String name, List<String> qualifiers, String text) throws HandlerException {
         DataItem found = null;
         for (DataItem item : items.values()) {
             if (!item.cobolName().equalsIgnoreCase(name)) {
@@ -3568,7 +3942,7 @@ public final class ProgramTranslator implements TranslationContext {
             if (next == qualifiers.size()) {
                 // A program's own item hides a GLOBAL one of the same name; nearer containers hide farther ones.
                 if (found != null && found.globalDepth() == item.globalDepth()) {
-                    throw HandlerException.unsupported(ctx.getText() + " is ambiguous");
+                    throw HandlerException.unsupported(text + " is ambiguous");
                 }
                 if (found == null || item.globalDepth() < found.globalDepth()) {
                     found = item;
@@ -3828,14 +4202,12 @@ public final class ProgramTranslator implements TranslationContext {
             case CLASS_CONDITION -> classCondition(sc.getClassCondition());
             case CONDITION_NAME_REFERENCE -> {
                 ConditionNameReference ref = sc.getConditionNameReference();
-                if (!ref.getConditionNameSubscriptReferences().isEmpty()) {
-                    throw HandlerException.unsupported("subscripted condition-names are not supported");
+                var sw = switchCondition(ref.getCtx().getText());
+                if (sw.isPresent()) {
+                    yield sw.get();
                 }
-                Operand o = operand(ref.getConditionCall());
-                if (!(o instanceof Operand.Field f) || !f.item().isCondition()) {
-                    throw HandlerException.unsupported(ref.getCtx().getText() + " is not a condition-name");
-                }
-                yield conditionName(f.item(), ref.getCtx());
+                Operand.Field f = conditionReference(ref);
+                yield conditionName(f, ref.getCtx());
             }
         };
     }
@@ -3873,8 +4245,10 @@ public final class ProgramTranslator implements TranslationContext {
     }
 
     @Override
-    public Expression conditionName(DataItem condition, ParserRuleContext where) throws HandlerException {
-        Operand parent = new Operand.Field(condition.parent());
+    public Expression conditionName(Operand.Field reference, ParserRuleContext where) throws HandlerException {
+        DataItem condition = reference.item();
+        // A condition-name is in the same tables as its conditional variable: the subscripts carry over.
+        Operand parent = new Operand.Field(condition.parent(), reference.subscripts(), null);
         Expression test = null;
         for (DataItem.ConditionValue v : condition.conditionValues()) {
             Expression one = v.thru() == null
@@ -3908,19 +4282,32 @@ public final class ProgramTranslator implements TranslationContext {
                 yield Facts.hasDirectToken(s.getCtx(), "NOT") ? new UnaryExpr(new EnclosedExpr(e), UnaryExpr.Operator.LOGICAL_COMPLEMENT) : e;
             }
             case COMBINED -> {
-                // A = (B OR C) is A = B OR A = C; the connective is the same throughout.
+                // A = (B OR C AND D) is A = B OR (A = C AND A = D): AND binds tighter, as in any condition.
                 var cc = r.getCombinedComparison();
                 Operand subject = operand(cc.getArithmeticExpression());
                 RelationalOperatorType op = cc.getOperator().getRelationalOperatorType();
-                var combined = cc.getCombinedCondition();
-                boolean and = combined.getCombinedConditionType() == io.proleap.cobol.asg.metamodel.valuestmt.relation.CombinedCondition.CombinedConditionType.AND;
-                if (Facts.hasDirectToken(combined.getCtx(), and ? "OR" : "AND")) {
-                    throw HandlerException.unsupported("combined comparison mixing AND and OR is not supported");
+                var operands = cc.getCombinedCondition().getArithmeticExpressions();
+                var combined = (CobolParser.RelationCombinedConditionContext) cc.getCombinedCondition().getCtx();
+                int next = 0;
+                List<Expression> disjuncts = new ArrayList<>();
+                Expression conjunction = null;
+                boolean or = false;
+                for (var child : combined.children) {
+                    if (child instanceof org.antlr.v4.runtime.tree.TerminalNode t) {
+                        or = t.getSymbol().getType() == CobolParser.OR;
+                        continue;
+                    }
+                    Expression one = comparison(subject, operand(operands.get(next++)), op, r.getCtx());
+                    if (conjunction != null && or) {
+                        disjuncts.add(conjunction);
+                        conjunction = null;
+                    }
+                    conjunction = conjunction == null ? one : new BinaryExpr(conjunction, one, BinaryExpr.Operator.AND);
                 }
-                Expression e = null;
-                for (var operandExpr : combined.getArithmeticExpressions()) {
-                    Expression one = comparison(subject, operand(operandExpr), op, r.getCtx());
-                    e = e == null ? one : new BinaryExpr(e, one, and ? BinaryExpr.Operator.AND : BinaryExpr.Operator.OR);
+                disjuncts.add(conjunction);
+                Expression e = disjuncts.getFirst();
+                for (int i = 1; i < disjuncts.size(); i++) {
+                    e = new BinaryExpr(e, disjuncts.get(i), BinaryExpr.Operator.OR);
                 }
                 yield new EnclosedExpr(e);
             }
@@ -4123,6 +4510,57 @@ public final class ProgramTranslator implements TranslationContext {
     }
 
     @Override
+    public boolean receiverInsideSender(Operand src, Operand dst) {
+        if (!overlaps(src, dst)) {
+            return false;
+        }
+        int[] a = staticRange((Operand.Field) src);
+        int[] b = staticRange((Operand.Field) dst);
+        // A left-to-right copy differs from a copy through a temporary only when the receiver starts inside the sender.
+        return a == null || b == null || (b[0] > a[0] && b[0] < a[0] + a[1]);
+    }
+
+    @Override
+    public java.util.OptionalInt fixedSize(Operand.Field f) {
+        if (f.item().isGroup() && f.item().variableTable() != null) {
+            return java.util.OptionalInt.empty();
+        }
+        if (f.refmod() == null) {
+            return java.util.OptionalInt.of(f.item().size());
+        }
+        Operand.Subscript start = f.refmod().start();
+        Operand.Subscript length = f.refmod().length();
+        if (length != null) {
+            return length.value() == null ? java.util.OptionalInt.of(length.offset()) : java.util.OptionalInt.empty();
+        }
+        return start.value() == null ? java.util.OptionalInt.of(f.item().size() - start.offset() + 1) : java.util.OptionalInt.empty();
+    }
+
+    /** The record offset and length of a reference whose subscripts and reference modification are literals, else null. */
+    private int[] staticRange(Operand.Field f) {
+        if (f.item().linkage() || (f.item().isGroup() && f.item().variableTable() != null)) {
+            return null;
+        }
+        int offset = f.item().offset();
+        List<DataItem> dims = f.item().dimensions();
+        for (int i = 0; i < f.subscripts().size(); i++) {
+            Operand.Subscript sub = f.subscripts().get(i);
+            if (sub.value() != null) {
+                return null;
+            }
+            offset += (sub.offset() - 1) * dims.get(i).size();
+        }
+        var size = fixedSize(f);
+        if (f.refmod() != null) {
+            if (f.refmod().start().value() != null) {
+                return null;
+            }
+            offset += f.refmod().start().offset() - 1;
+        }
+        return size.isPresent() ? new int[] {offset, size.getAsInt()} : null;
+    }
+
+    @Override
     public void requireBytes(DataItem item, String usage) throws HandlerException {
         if (item.elementaryItems().stream().anyMatch(DataItem::encodingSensitive)) {
             requireAsciiBytes(currentCtx, usage);
@@ -4201,11 +4639,23 @@ public final class ProgramTranslator implements TranslationContext {
 
     @Override
     public Expression sortKey(DataItem key, ParserRuleContext where) throws HandlerException {
+        return sortKey(key, where, null);
+    }
+
+    @Override
+    public java.util.Optional<String> alphabet(String name) {
+        String seq = alphabets.get(name.toUpperCase(Locale.ROOT));
+        return seq == null || seq.equals("other") ? java.util.Optional.empty() : java.util.Optional.of(seq);
+    }
+
+    @Override
+    public Expression sortKey(DataItem key, ParserRuleContext where, String collating) throws HandlerException {
         if (!key.fileRecord() || key.hasAccessor() || key.kind() == DataItem.Kind.UNSUPPORTED || key.isCondition()) {
             throw HandlerException.unsupported("KEY " + key.cobolName() + " must be an item of the sort record outside any table");
         }
         boolean numeric = key.isNumeric();
-        String sequence = numeric ? "ascii" : requireCollatingSequence(RelationalOperatorType.GREATER, where);
+        // Numeric keys compare by value; alphanumeric ones in the COLLATING SEQUENCE, else the program's.
+        String sequence = numeric ? "ascii" : collating != null ? collating : requireCollatingSequence(RelationalOperatorType.GREATER, where);
         Expression view = key.isGroup() ? create("AlphanumericField", name("s"), integer(key.offset()), integer(key.size()))
                 : viewConstructor(key, name("s"), integer(key.offset()));
         Expression value = call(view, "get");
@@ -4240,7 +4690,6 @@ public final class ProgramTranslator implements TranslationContext {
             throw HandlerException.unsupported("GO TO outside the dispatcher form");
         }
         int t = procedureIndex(target, false);
-        checkGoTo(t);
         if (currentParagraph != null && alterable.containsKey(currentParagraph)) {
             return new ReturnStmt(name(alterable.get(currentParagraph)));
         }
@@ -4250,7 +4699,6 @@ public final class ProgramTranslator implements TranslationContext {
     @Override
     public int procedureNumber(Call target) throws HandlerException {
         int t = procedureIndex(target, false);
-        checkGoTo(t);
         return t;
     }
 
@@ -4262,15 +4710,6 @@ public final class ProgramTranslator implements TranslationContext {
         throw HandlerException.unsupported("ALTER " + paragraph.getName() + ": the paragraph must hold only a GO TO");
     }
 
-    /** A GO TO from inside a PERFORMed range to outside it never returns to the PERFORM. */
-    private void checkGoTo(int target) throws HandlerException {
-        for (int[] r : performRanges) {
-            if (currentNode >= r[0] && currentNode <= r[1] && (target < r[0] || target > r[1])) {
-                throw HandlerException.unsupported("GO TO out of a PERFORMed range (procedures " + r[0] + ".." + r[1]
-                        + "): the PERFORM would not return");
-            }
-        }
-    }
 
     @Override
     public String procedureMethod(Call call) throws HandlerException {

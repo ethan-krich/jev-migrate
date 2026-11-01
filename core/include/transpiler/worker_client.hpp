@@ -24,6 +24,7 @@ struct WorkerError {
     malformed,          // stdout carried something that is not a valid protocol message
     id_mismatch,        // a response did not correlate with the outstanding request
     protocol_mismatch,  // the worker speaks another protocol version
+    error_response,     // a provider answered with an error status
     io,
   };
   Kind kind;
@@ -36,9 +37,10 @@ std::string_view to_string(WorkerError::Kind kind);
 struct WorkerSpec {
   std::vector<std::string> command;  // absolute paths; the worker inherits the caller's cwd
   std::chrono::milliseconds startup_timeout{60'000};
+  std::string protocol{protocol::kVersion};  // the version every message must carry
 };
 
-// A persistent translator process. Requests are strictly sequential: one outstanding request,
+// A persistent translator (or decision provider) process. Requests are strictly sequential: one outstanding request,
 // correlated by id; events received meanwhile are passed to the caller.
 class WorkerClient {
  public:
@@ -57,6 +59,8 @@ class WorkerClient {
 
   const protocol::json& ready_info() const { return ready_; }
   bool alive();
+  // An error of `kind` carrying the process's last stderr lines (for failures found by callers).
+  WorkerError error(WorkerError::Kind kind, std::string message) { return make_error(kind, std::move(message)); }
 
  private:
   struct StderrTail {
@@ -64,13 +68,14 @@ class WorkerClient {
     std::deque<std::string> lines;
   };
 
-  WorkerClient(Subprocess process, std::shared_ptr<StderrTail> tail)
-      : process_(std::move(process)), tail_(std::move(tail)) {}
+  WorkerClient(Subprocess process, std::shared_ptr<StderrTail> tail, std::string protocol)
+      : process_(std::move(process)), tail_(std::move(tail)), protocol_(std::move(protocol)) {}
   WorkerError make_error(WorkerError::Kind kind, std::string message);
   std::expected<protocol::Message, WorkerError> next_message(std::chrono::milliseconds timeout);
 
   Subprocess process_;
   std::shared_ptr<StderrTail> tail_;
+  std::string protocol_;
   protocol::json ready_;
   unsigned long next_id_ = 1;
 };

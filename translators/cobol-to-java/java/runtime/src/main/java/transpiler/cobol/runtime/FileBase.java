@@ -7,7 +7,7 @@ package transpiler.cobol.runtime;
  * the mode of its last OPEN); otherwise it ends the run unit with status 1, unless the file has a
  * FILE STATUS item.
  */
-abstract class FileBase {
+public abstract class FileBase {
     static final int CLOSED = -1;
     /** Files open in the run unit, closed implicitly when it ends (as GnuCOBOL does at STOP RUN). */
     private static final java.util.Set<FileBase> OPEN = new java.util.LinkedHashSet<>();
@@ -19,6 +19,8 @@ abstract class FileBase {
     /** The mode of the last OPEN attempted (GnuCOBOL's last_open_mode), which selects a USE procedure. */
     int lastOpenMode = CLOSED;
     private java.util.function.IntPredicate errorProcedure;
+    /** Closed WITH LOCK: it cannot be opened again in this run unit (status 38). */
+    private boolean closedWithLock;
 
     FileBase(String name, String path, AlphanumericField status) {
         this.name = name;
@@ -42,6 +44,54 @@ abstract class FileBase {
         this.errorProcedure = procedure;
     }
 
+    public abstract void open(int openMode);
+
+    public abstract void close();
+
+    /** The record last read. */
+    public abstract String data();
+
+    /**
+     * SORT / MERGE USING: the next record in the file's order (libcob's cob_read_next); true when
+     * there is none. An unsuccessful status ends the input without running USE procedures.
+     */
+    abstract boolean sortRead();
+
+    /**
+     * SORT / MERGE GIVING: WRITE of {@code data} moved into the record area (libcob's cob_write);
+     * an unsuccessful status is recorded without running USE procedures or ending the run unit.
+     */
+    abstract void sortWrite(String data);
+
+    /** CLOSE ... WITH LOCK: a successful CLOSE after which every OPEN in this run unit gets status 38, as in libcob. */
+    public void closeWithLock() {
+        close();
+        if (succeeded()) {
+            closedWithLock = true;
+        }
+    }
+
+    /** At the start of OPEN: status 38 for a file closed WITH LOCK (checked before any other condition, as libcob). */
+    final boolean lockedOut() {
+        if (closedWithLock) {
+            finish("38", false);
+        }
+        return closedWithLock;
+    }
+
+    /**
+     * At the start of CLOSE: a file closed WITH LOCK is not "not open" to libcob (status 42 is only
+     * for a closed file), so CLOSE succeeds (00) and lifts the lock.
+     */
+    final boolean closeLocked() {
+        if (!closedWithLock) {
+            return false;
+        }
+        closedWithLock = false;
+        finish("00", false);
+        return true;
+    }
+
     /** The implicit CLOSE of every file still open when the run unit ends (no FILE STATUS is set). */
     static void closeAll() {
         for (FileBase f : java.util.List.copyOf(OPEN)) {
@@ -58,13 +108,27 @@ abstract class FileBase {
         return lastStatus.charAt(0) == '0';
     }
 
+    /** True while a SORT/MERGE USING/GIVING transfer runs: unsuccessful statuses are recorded without USE procedures or run-unit termination. */
+    private boolean sortIo;
+
+    /** Runs {@code body} with error dispatch suppressed for every unsuccessful status. */
+    final boolean sortQuietly(java.util.function.BooleanSupplier body) {
+        boolean saved = sortIo;
+        sortIo = true;
+        try {
+            return body.getAsBoolean();
+        } finally {
+            sortIo = saved;
+        }
+    }
+
     /** Records {@code code}; {@code handled}: the statement has the phrase for this condition. */
     final void finish(String code, boolean handled) {
         lastStatus = code;
         if (status != null) {
             status.set(code);
         }
-        if (code.charAt(0) != '0' && !handled) {
+        if (code.charAt(0) != '0' && !handled && !sortIo) {
             if (errorProcedure != null && errorProcedure.test(lastOpenMode)) {
                 // The statement's NOT phrase depends on its own status, not on what the procedure did.
                 lastStatus = code;

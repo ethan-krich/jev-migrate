@@ -1,0 +1,20 @@
+{
+  "description": "PERFORM WITH TEST AFTER VARYING ... AFTER (two and three levels, an inner FROM that depends on an outer variable, indexes, inline and out-of-line) and PERFORM ... TIMES of a negative item",
+  "expect": {
+    "status": "ok"
+  },
+  "dialect": {
+    "encoding": "ascii",
+    "collating_sequence": "native",
+    "out_of_range": "fail"
+  },
+  "equivalence": {
+    "programs": [
+      "PERFAFT.cbl"
+    ],
+    "main_class": "fixtures.perform_test_after.Perfaft"
+  },
+  "layout": {
+    "base_package": "fixtures.perform_test_after"
+  }
+}
