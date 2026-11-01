@@ -11,6 +11,8 @@
 
 from .api import (
     LanguagePair,
+    LibraryUse,
+    LibraryUsed,
     ProgramResult,
     Resolution,
     Resolutions,
@@ -52,6 +54,8 @@ __all__ = [
     "LanguagePair",
     "LibraryError",
     "LibraryRegistry",
+    "LibraryUse",
+    "LibraryUsed",
     "Mapping",
     "MappingError",
     "MappingRegistry",

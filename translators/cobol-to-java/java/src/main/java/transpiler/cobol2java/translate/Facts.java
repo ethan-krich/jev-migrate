@@ -49,7 +49,7 @@ public final class Facts {
             Map.entry("PERFORM", Set.of("form", "loop", "test", "thru")),
             Map.entry("STOP", Set.of("kind")),
             Map.entry("EXIT", Set.of("kind")),
-            Map.entry("CALL", Set.of("program", "program_kind", "program_in_project", "using")),
+            Map.entry("CALL", Set.of("program", "program_kind", "program_in_project", "program_in_library", "using")),
             Map.entry("CANCEL", Set.of()),
             Map.entry("ENTRY", Set.of()),
             Map.entry("SET", Set.of("form")),
@@ -327,6 +327,7 @@ public final class Facts {
                 f.put("program", name);
                 f.put("program_kind", name != null ? "literal" : "identifier");
                 f.put("program_in_project", name != null && ctx.programClass(name).isPresent());
+                f.put("program_in_library", name != null && ctx.programLibrary(name).isPresent());
                 f.put("using", call.getUsingPhrase() != null);
             }
             default -> {

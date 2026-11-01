@@ -6,7 +6,9 @@ operation (a COBOL verb such as ``MOVE``) is handled:
 * ``builtin``    - apply a deterministic transformation implemented by the translator worker,
                    named by a stable handler id;
 * ``unresolved`` - report the operation as a structured decision instead of translating it;
-* ``callback``   - reserved: defer to a function in a user Python script (phase 2).
+* ``callback``   - reserved: defer to a function in a user Python script (phase 2);
+* ``library``    - the operation uses a part a library claims (``transpile(libraries=...)``): a
+                   ``library_call`` decision offering calls into the library and the exact translation.
 
 Rules carry optional ``when`` conditions over facts the worker computes for each operation
 instance, and a ``priority``. The worker picks, among matching rules, the highest priority,
@@ -39,6 +41,7 @@ class Strategy(StrEnum):
     BUILTIN = "builtin"
     UNRESOLVED = "unresolved"
     CALLBACK = "callback"
+    LIBRARY = "library"
 
 
 class MappingError(ValueError):

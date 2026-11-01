@@ -200,6 +200,9 @@ class Run {
     report_["files_written"] = fin->result.value("files_written", json::array());
     for (const auto& p : fin->result.value("programs", json::array())) programs_[p.value("file", "")] = p;
     if (fin->result.contains("blocking")) report_["blocking"] = fin->result["blocking"];
+    // Opaque here: parts of the source the worker replaced with library calls (not equivalence-checked).
+    if (fin->result.contains("libraries_used")) report_["libraries_used"] = fin->result["libraries_used"];
+    if (fin->result.contains("equivalence")) report_["equivalence"] = fin->result["equivalence"];
     // finalize reports the authoritative final state of every pending decision.
     for (const auto& p : fin->result.value("pending", json::array()))
       if (auto it = decisions_.find(p.value("id", "")); it != decisions_.end()) it->second.raw = p;
@@ -432,6 +435,7 @@ class Run {
   void hold(const DecisionResponse& a, const std::string& importance, const std::string& reason) {
     json entry = a.to_report(importance);
     if (!reason.empty()) entry["held_reason"] = reason;
+    else if (!a.held_reason.empty()) entry["held_reason"] = a.held_reason;
     report_["resolutions"]["held"].push_back(entry);
   }
 

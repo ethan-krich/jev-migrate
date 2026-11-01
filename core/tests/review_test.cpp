@@ -57,3 +57,35 @@ TEST(Review, FlagsTierMismatches) {
 TEST(Review, EmptyReport) {
   EXPECT_NE(review_table({{"status", "ok"}, {"decisions", json::array()}}).find("No decisions."), std::string::npos);
 }
+
+TEST(Review, LibraryMappingsComeFirstWithTheWarning) {
+  json uses = {{{"program", "BILLING"}, {"file", "BILLING.cbl"}, {"line", 12}, {"selector", "program"}, {"part", "DATEADD"},
+                {"outcome", "library"}, {"chain", {"Dates.addDays(int,int)"}}, {"decided_by", "Decided by jev (confidence 0.82)"}},
+               {{"program", "BILLING"}, {"file", "BILLING.cbl"}, {"line", 15}, {"selector", "program"}, {"part", "WEEKDAY"},
+                {"outcome", "translated"}, {"chain", json::array()}, {"reason", "cobol:translate chosen at the start step"}}};
+  json report = {{"status", "ok"},
+                 {"decisions", {decision("decision-1", "resolved", "high")}},
+                 {"libraries_used", {{{"id", "acme.dates"}, {"java", "com.acme:acme-dates:2.3.1"}, {"declared_in_target", false},
+                                      {"target_note", "not a dependency in pom.xml"}, {"uses", uses}}}},
+                 {"settings", {{{"field", "encoding"}, {"value", "ascii"}}}}};
+  std::string md = review_table(report);
+  size_t section = md.find("## Library mappings");
+  ASSERT_NE(section, std::string::npos) << md;
+  EXPECT_LT(section, md.find("## Settings chosen"));
+  EXPECT_LT(section, row(md, "decision-1"));
+  EXPECT_NE(md.find("run your tests against both the original program and the translation."), std::string::npos);
+  EXPECT_NE(md.find("| acme.dates | com.acme:acme-dates:2.3.1 | program DATEADD | BILLING.cbl:12 | library | Dates.addDays(int,int) | "
+                    "Decided by jev (confidence 0.82) |"),
+            std::string::npos)
+      << md;
+  EXPECT_NE(md.find("| program WEEKDAY | BILLING.cbl:15 | translated | cobol:translate chosen at the start step | - |"),
+            std::string::npos)
+      << md;
+  EXPECT_NE(md.find("- `acme.dates` (com.acme:acme-dates:2.3.1): not declared in the target project: not a dependency in pom.xml"),
+            std::string::npos)
+      << md;
+}
+
+TEST(Review, NoLibrarySectionWithoutLibraries) {
+  EXPECT_EQ(review_table({{"status", "ok"}, {"decisions", json::array()}}).find("Library mappings"), std::string::npos);
+}

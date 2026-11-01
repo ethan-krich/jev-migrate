@@ -131,6 +131,11 @@ public interface TranslationContext {
     /** The fully qualified class translated from the program with this PROGRAM-ID, if in the project. */
     Optional<String> programClass(String programId);
 
+    /** The library claiming the program a CALL names (initialize.libraries), or empty. */
+    default Optional<transpiler.cobol2java.library.Libraries.Library> programLibrary(String name) {
+        return Optional.empty();
+    }
+
     /** The ENTRY number a CALL name denotes in its program (0: a PROGRAM-ID). */
     int entryIndex(String name);
 

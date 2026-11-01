@@ -43,6 +43,40 @@ struct Row {
   int tier;
 };
 
+// The parts of the source a worker mapped to libraries (report.libraries_used): first, since
+// they are the parts whose behaviour is not checked against the original.
+std::string library_section(const json& report) {
+  const json& libraries = report.value("libraries_used", json::array());
+  if (!libraries.is_array() || libraries.empty()) return "";
+  std::string out = "## Library mappings\n\n";
+  out += "These parts use a library instead of a translation of the original COBOL. Behaviour may differ: "
+         "run your tests against both the original program and the translation.\n\n";
+  std::vector<std::string> missing;
+  out += "| Library | Java | Part | Source | Outcome | Calls or reason | Decided by |\n|---|---|---|---|---|---|---|\n";
+  for (const auto& lib : libraries) {
+    const json& declared = lib.value("declared_in_target", json{});
+    if (lib.contains("declared_in_target") && !(declared.is_boolean() && declared.get<bool>()))
+      missing.push_back(std::format("`{}` ({}): {}", str(lib, "id"), str(lib, "java"),
+                                    declared.is_boolean() ? "not declared in the target project: " + str(lib, "target_note")
+                                                          : "could not be confirmed in the target project: " + str(lib, "target_note")));
+    for (const auto& use : lib.value("uses", json::array())) {
+      std::string calls;
+      for (const auto& c : use.value("chain", json::array())) calls += (calls.empty() ? "" : " . ") + c.get<std::string>();
+      if (calls.empty()) calls = str(use, "reason");
+      out += std::format("| {} | {} | {} {} | {}:{} | {} | {} | {} |\n", cell(str(lib, "id")), cell(str(lib, "java")),
+                         cell(str(use, "selector")), cell(str(use, "part")), cell(str(use, "file")), use.value("line", 0),
+                         cell(str(use, "outcome")), cell(calls), cell(str(use, "decided_by")));
+    }
+  }
+  out += "\n";
+  if (!missing.empty()) {
+    out += "Libraries the output uses that the target build does not declare:\n\n";
+    for (const auto& m : missing) out += "- " + m + "\n";
+    out += "\n";
+  }
+  return out;
+}
+
 }  // namespace
 
 std::string review_table(const json& report) {
@@ -78,6 +112,7 @@ std::string review_table(const json& report) {
                      str(report, "status"), rows.size(), pending, str(resolutions, "provider"),
                      resolutions.value("applied", json::array()).size(), resolutions.value("held", json::array()).size(),
                      resolutions.value("rejected", json::array()).size());
+  out += library_section(report);
   const json& settings = report.value("settings", json::array());
   if (!settings.empty()) {
     out += "## Settings chosen\n\nThe programs were translated again with these settings.\n\n";

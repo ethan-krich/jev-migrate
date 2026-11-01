@@ -90,7 +90,7 @@ FACTS = MappingProxyType({
     "PERFORM": frozenset({"form", "loop", "test", "thru"}),
     "STOP": frozenset({"kind"}),
     "EXIT": frozenset({"kind"}),
-    "CALL": frozenset({"program", "program_kind", "program_in_project", "using"}),
+    "CALL": frozenset({"program", "program_kind", "program_in_project", "program_in_library", "using"}),
     "CANCEL": frozenset(),
     "ENTRY": frozenset(),
     "SET": frozenset({"form"}),
@@ -139,6 +139,8 @@ DEFAULT_IMPORTANCE = MappingProxyType({
     ("unsupported_construct", "*"): "high",
     ("missing_target_api", "*"): "high",
     ("callback_required", "*"): "high",
+    # A library call is not equivalence-checked: every step of it is reviewed as a high-stakes choice.
+    ("library_call", "*"): "high",
     # Declarations shape every statement that uses the data.
     ("*", "DATA"): "critical",
     # Arithmetic and data conversion: wrong digits are wrong amounts.
@@ -164,6 +166,13 @@ DEFAULT_IMPORTANCE = MappingProxyType({
     ("*", "DISPLAY"): "low",
     ("*", "EXHIBIT"): "low",
 })
+
+# Rules with the library strategy: (id, source, when, description). They match only when
+# transpile(libraries=...) claims the part, and turn its use into a library_call decision.
+DEFAULT_LIBRARY_RULES: tuple[tuple[str, str, dict, str], ...] = (
+    ("cobol.call.library", "CALL", {"program_in_library": True},
+     "CALL of a program a library claims: library calls or the exact translation (library_call)"),
+)
 
 # (id, source, handler, when, description)
 DEFAULT_RULES: tuple[tuple[str, str, str, dict, str], ...] = (

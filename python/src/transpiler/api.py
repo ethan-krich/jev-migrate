@@ -172,6 +172,46 @@ class SettingChoice:
 
 
 @dataclass(frozen=True)
+class LibraryUse:
+    """One use of a part a library claims, and what replaced it: ``outcome`` is ``library`` (a call
+    into the library, not equivalence-checked), ``translated`` (the exact translation; ``reason``
+    says why) or ``pending``."""
+
+    program: str
+    file: str
+    line: int
+    selector: str
+    part: str
+    outcome: str
+    chain: tuple[str, ...] = ()
+    reason: str | None = None
+    decided_by: str | None = None
+    java: str | None = None
+
+    @classmethod
+    def from_json(cls, d: dict[str, Any]) -> LibraryUse:
+        return cls(d.get("program", ""), d.get("file", ""), d.get("line", 0), d.get("selector", ""), d.get("part", ""),
+                   d.get("outcome", ""), tuple(d.get("chain", [])), d.get("reason"), d.get("decided_by"), d.get("java"))
+
+
+@dataclass(frozen=True)
+class LibraryUsed:
+    """A library with use sites in the project. ``declared_in_target`` is whether ``target_project``
+    declares it (``None``: not checked, or the build files cannot confirm it; ``target_note`` says why)."""
+
+    id: str
+    java: str
+    uses: tuple[LibraryUse, ...]
+    declared_in_target: bool | None = None
+    target_note: str | None = None
+
+    @classmethod
+    def from_json(cls, d: dict[str, Any]) -> LibraryUsed:
+        return cls(d["id"], d.get("java", ""), tuple(LibraryUse.from_json(u) for u in d.get("uses", [])),
+                   d.get("declared_in_target"), d.get("target_note"))
+
+
+@dataclass(frozen=True)
 class Resolutions:
     provider: str | None
     applied: tuple[Resolution, ...]
@@ -245,6 +285,17 @@ class TranspileResult:
                 for s in self.report.get("settings", [])]
 
     @property
+    def libraries_used(self) -> list[LibraryUsed]:
+        """Libraries whose claimed parts the project uses, with every use site and its outcome."""
+        return [LibraryUsed.from_json(lib) for lib in self.report.get("libraries_used", [])]
+
+    @property
+    def equivalence(self) -> str:
+        """``partial`` when any part calls a library instead of its translation (not checked against
+        the original), else ``exact``."""
+        return self.report.get("equivalence", "exact")
+
+    @property
     def resolutions(self) -> Resolutions:
         r = self.report.get("resolutions", {})
         return Resolutions(
@@ -275,6 +326,14 @@ class TranspileResult:
         for s in self.settings:
             confidence = "" if s.confidence is None else f" (confidence {s.confidence:.2f})"
             lines.append(f"  setting {s.field} = {s.value!r}, chosen by {s.resolution.provider or 'provider'}{confidence}")
+        library_uses = [u for lib in self.libraries_used for u in lib.uses if u.outcome == "library"]
+        if library_uses:
+            lines.append(f"  warning: {len(library_uses)} use(s) of library parts call a library instead of the translation "
+                         f"(not equivalence-checked): run your tests against both the original program and the translation; "
+                         f"see {self.output / 'review.md'}")
+        for lib in self.libraries_used:
+            if lib.declared_in_target is False or (lib.declared_in_target is None and lib.target_note):
+                lines.append(f"  warning: library {lib.id} ({lib.java}): {lib.target_note}")
         for p in self.programs:
             lines.append(f"  {p.file}: {p.status} -> {p.output_path or '-'}")
             lines.extend(f"    {d['severity']}: {d['message']}" for d in p.diagnostics)

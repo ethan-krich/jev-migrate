@@ -131,12 +131,21 @@ public final class ProgramTranslator implements TranslationContext {
             Function<String, Optional<List<Integer>>> programParameters,
             Map<String, String> programs,
             Map<String, Integer> entries,
-            List<Map.Entry<ProgramUnit, String>> containers) {
+            List<Map.Entry<ProgramUnit, String>> containers,
+            transpiler.cobol2java.library.LibraryScope libraries) {
         public Input(ProgramUnit unit, SourceMap sourceMap, String sourceFile, String programId, String packageName, String className,
                 String runtimePackage, MappingRegistry registry, Builtins builtins, Function<String, Optional<String>> programDirectory,
                 Dialect dialect) {
             this(unit, sourceMap, sourceFile, programId, packageName, className, runtimePackage, registry, builtins, programDirectory,
-                    dialect, id -> Optional.empty(), Map.of(), Map.of(), List.of());
+                    dialect, id -> Optional.empty(), Map.of(), Map.of(), List.of(), transpiler.cobol2java.library.LibraryScope.NONE);
+        }
+
+        public Input(ProgramUnit unit, SourceMap sourceMap, String sourceFile, String programId, String packageName, String className,
+                String runtimePackage, MappingRegistry registry, Builtins builtins, Function<String, Optional<String>> programDirectory,
+                Dialect dialect, Function<String, Optional<List<Integer>>> programParameters, Map<String, String> programs,
+                Map<String, Integer> entries, List<Map.Entry<ProgramUnit, String>> containers) {
+            this(unit, sourceMap, sourceFile, programId, packageName, className, runtimePackage, registry, builtins, programDirectory,
+                    dialect, programParameters, programs, entries, containers, transpiler.cobol2java.library.LibraryScope.NONE);
         }
     }
 
@@ -277,6 +286,10 @@ public final class ProgramTranslator implements TranslationContext {
     private final Map<DataItem, String> storageNames = new IdentityHashMap<>();
     /** The statement being translated, for decisions raised while resolving its operands. */
     private ParserRuleContext currentCtx;
+    /** The generated class (per-program library objects are added to it when a decision chooses them). */
+    private ClassOrInterfaceDeclaration programClass;
+    /** Per-program library objects already declared: owner type to accessor method. */
+    private final Map<String, String> libraryInstances = new LinkedHashMap<>();
     /** Level-01 / level-77 items (and constants) in source order. */
     private final List<DataItem> roots = new ArrayList<>();
     private final Set<String> fieldNames = new HashSet<>();
@@ -359,6 +372,7 @@ public final class ProgramTranslator implements TranslationContext {
         cu.addImport(BigDecimal.class);
 
         ClassOrInterfaceDeclaration cls = cu.addClass(in.className(), Modifier.Keyword.PUBLIC, Modifier.Keyword.FINAL);
+        programClass = cls;
         cls.addImplementedType("CobolProgram");
         cls.setJavadocComment("Translated from " + in.sourceFile() + " (PROGRAM-ID " + in.programId() + ") by cobol-to-java.");
 
@@ -2868,6 +2882,11 @@ public final class ProgramTranslator implements TranslationContext {
             block.addStatement(placeholder(unit, "needs Dialect"));
             return;
         }
+        dispatch(unit, block, facts);
+    }
+
+    /** Selects the unit's rule for {@code facts} and applies its strategy (a handler, a decision, a library use). */
+    private void dispatch(OpUnit unit, BlockStmt block, Map<String, Object> facts) {
         MappingRegistry.Selection selection = in.registry().select(unit.operation(), facts);
         if (!selection.matched()) {
             unresolved(unit, block, facts, Reason.MISSING_MAPPING, null,
@@ -2890,6 +2909,7 @@ public final class ProgramTranslator implements TranslationContext {
         switch (rule.strategy()) {
             case UNRESOLVED -> unresolved(unit, block, facts, Reason.MISSING_MAPPING, rule,
                     "mapping rule '" + rule.id() + "' leaves " + unit.operation() + " unresolved", candidatesFor(unit, null));
+            case LIBRARY -> libraryUse(unit, block, facts, rule);
             case CALLBACK -> {
                 Decision d = newDecision(unit, facts, Reason.CALLBACK_REQUIRED, rule,
                         "mapping rule '" + rule.id() + "' delegates to callback " + rule.callback().function(),
@@ -2925,6 +2945,213 @@ public final class ProgramTranslator implements TranslationContext {
                 }
             }
         }
+    }
+
+    /**
+     * A use of a part a library claims (a rule with strategy {@code library}). The exact
+     * translation is generated in place first, with the rule the unit selects without the library;
+     * then the library's calls that bind exactly are searched. With none, the translation stays and
+     * the use is recorded as not using the library; otherwise a chain of library_call decisions
+     * starts, each offering {@code cobol:translate} (that translation) as well.
+     */
+    private void libraryUse(OpUnit unit, BlockStmt block, Map<String, Object> facts, MappingRule rule) {
+        transpiler.cobol2java.library.LibraryScope scope = in.libraries();
+        Map<String, Object> plain = new LinkedHashMap<>(facts);
+        String name = null;
+        transpiler.cobol2java.library.Libraries.Library lib = null;
+        if (unit.operation().equals("CALL") && Boolean.TRUE.equals(facts.get("program_in_library"))) {
+            name = (String) facts.get("program");
+            lib = scope.program(name).orElse(null);
+            plain.put("program_in_library", false);
+        }
+        if (lib == null) {
+            // A rule selecting the library strategy where no library claims the part: translate as without it.
+            dispatch(unit, block, plain);
+            return;
+        }
+        EmptyStmt anchor = new EmptyStmt();
+        anchor.setComment(new LineComment(" LIBRARY " + lib.id() + ": " + unit.location().text().replace('\n', ' ')));
+        block.addStatement(anchor);
+        int before = block.getStatements().size();
+        List<Decision> nested = new ArrayList<>();
+        List<Decision> saved = sink;
+        int savedStatements = statements;
+        int savedTranslated = translated;
+        sink = nested;
+        try {
+            dispatch(unit, block, plain);
+        } finally {
+            sink = saved;
+        }
+        boolean altTranslated = translated > savedTranslated;
+        statements = savedStatements;
+        translated = savedTranslated;
+        List<Statement> alt = new ArrayList<>(block.getStatements().subList(before, block.getStatements().size()));
+        String preview = String.join("\n", alt.stream().map(Statement::toString).toList());
+        var use = scope.record(lib.id(), in.programId(), in.sourceFile(), unit.location().line(), "program", name);
+        var call = (io.proleap.cobol.asg.metamodel.procedure.call.CallStatement) unit.statement();
+        LibraryChain chain;
+        List<LibraryChain.Option> starts;
+        String why;
+        try {
+            chain = programChain(call, lib, name);
+            starts = chain.starts();
+            why = !chain.searchable() ? "it passes more than " + LibraryChain.MAX_INPUTS + " items"
+                    : "no public member of the library binds exactly to its items " + chain.ins().stream().map(LibraryChain.In::label).toList();
+        } catch (HandlerException e) {
+            chain = null;
+            starts = List.of();
+            why = e.getMessage();
+        }
+        if (starts.isEmpty()) {
+            block.getStatements().remove(anchor);
+            sink.addAll(nested);
+            if (altTranslated) {
+                translated++;
+            }
+            use.outcome = "translated";
+            use.reason = "library not offered: " + why;
+            return;
+        }
+        List<Statement> tail = new ArrayList<>();
+        List<Decision> tailNested = new ArrayList<>();
+        if (call.getNotOnExceptionClause() != null) {
+            // The library is always present: NOT ON EXCEPTION runs after the call, ON EXCEPTION never does.
+            sink = tailNested;
+            int s0 = statements;
+            int t0 = translated;
+            try {
+                BlockStmt notOnException = nested(call.getNotOnExceptionClause());
+                if (!notOnException.isEmpty()) {
+                    tail.add(notOnException);
+                }
+            } finally {
+                sink = saved;
+                statements = s0;
+                translated = t0;
+            }
+        }
+        com.fasterxml.jackson.databind.node.ObjectNode part = transpiler.cobol2java.protocol.Json.object();
+        part.put("kind", "program");
+        part.put("name", name);
+        String programName = name;
+        scope.programFile(name).ifPresent(file -> {
+            part.put("file", file);
+            scope.source(file).ifPresent(text -> part.put("text", text));
+        });
+        String label = "CALL '" + programName + "'" + (call.getOnExceptionClause() != null || call.getOnOverflowPhrase() != null
+                ? " (with a library its ON EXCEPTION never runs)" : "");
+        LibrarySite site = new LibrarySite(this, unit, block, facts, rule.id(), chain, use, part, label,
+                new LibrarySite.Alternative(anchor, alt, nested, altTranslated, preview), tail, tailNested, context(call.getCtx()));
+        sink.add(site.start(starts));
+    }
+
+    /**
+     * The inputs and outputs of a CALL of a claimed program: the USING items are the inputs; the
+     * output is the RETURNING item, or else one BY REFERENCE item (which may also be read),
+     * RETURN-CODE, or nothing (a {@code void} call).
+     */
+    private LibraryChain programChain(io.proleap.cobol.asg.metamodel.procedure.call.CallStatement call,
+            transpiler.cobol2java.library.Libraries.Library lib, String name) throws HandlerException {
+        List<LibraryChain.In> ins = new ArrayList<>();
+        List<Integer> byReference = new ArrayList<>();
+        var using = call.getUsingPhrase();
+        for (var parameter : using == null ? List.<io.proleap.cobol.asg.metamodel.procedure.call.UsingParameter>of() : using.getUsingParameters()) {
+            switch (parameter.getParameterType()) {
+                case REFERENCE -> {
+                    for (var ref : parameter.getByReferencePhrase().getByReferences()) {
+                        if (ref.getByReferenceType() != null) {
+                            throw HandlerException.unsupported("CALL USING BY REFERENCE " + ref.getByReferenceType());
+                        }
+                        Operand o = operand(ref.getValueStmt());
+                        if (o instanceof Operand.Field) {
+                            byReference.add(ins.size());
+                        }
+                        ins.add(new LibraryChain.In(o, label(o)));
+                    }
+                }
+                case CONTENT -> {
+                    for (var content : parameter.getByContentPhrase().getByContents()) {
+                        if (content.getByContentType() != null) {
+                            throw HandlerException.unsupported("CALL USING BY CONTENT " + content.getByContentType());
+                        }
+                        Operand o = operand(content.getValueStmt());
+                        ins.add(new LibraryChain.In(o, label(o)));
+                    }
+                }
+                case VALUE -> {
+                    for (var value : parameter.getByValuePhrase().getByValues()) {
+                        Operand o = operand(value.getValueStmt());
+                        ins.add(new LibraryChain.In(o, label(o)));
+                    }
+                }
+            }
+        }
+        List<LibraryChain.Out> outs = new ArrayList<>();
+        if (call.getGivingPhrase() != null) {
+            Operand r = operand(call.getGivingPhrase().getGivingCall());
+            outs.add(new LibraryChain.Out("returning", r, label(r), -1));
+        } else {
+            for (int i : byReference) {
+                outs.add(new LibraryChain.Out("item:" + ins.get(i).label(), ins.get(i).operand(), ins.get(i).label(), i));
+            }
+            outs.add(new LibraryChain.Out("return_code", new Operand.ReturnCode(), "RETURN-CODE", -1));
+            outs.add(new LibraryChain.Out("none", null, "nothing", -1));
+        }
+        return new LibraryChain(lib, ins, outs, lib.hintsFor(name), this, call.getCtx());
+    }
+
+    /** How a decision names an operand: the item's name, or the literal as written. */
+    static String label(Operand o) {
+        return switch (o) {
+            case Operand.Field f -> f.item().cobolName() + (f.refmod() != null ? " (reference-modified)" : "");
+            case Operand.AlphanumericLiteral a -> "\"" + a.value() + "\"";
+            case Operand.NumericLiteral n -> n.text();
+            case Operand.Figurative f -> f.name();
+            case Operand.ReturnCode r -> "RETURN-CODE";
+            default -> o.category();
+        };
+    }
+
+    String programIdForLibrary() {
+        return in.programId();
+    }
+
+    /**
+     * The per-program object a chain starts with (a constructor without arguments): an accessor
+     * that creates it on first use. {@code declare} adds the field and the accessor to the class.
+     */
+    Expression libraryInstance(String libraryId, transpiler.cobol2java.library.JavaMember constructor, boolean declare) {
+        String accessor = libraryInstances.get(constructor.owner());
+        if (accessor == null) {
+            StringBuilder base = new StringBuilder();
+            for (String w : (libraryId + " " + constructor.ownerName()).split("[^A-Za-z0-9]+")) {
+                if (!w.isEmpty()) {
+                    base.append(base.isEmpty() ? Character.toLowerCase(w.charAt(0)) : Character.toUpperCase(w.charAt(0))).append(w.substring(1));
+                }
+            }
+            accessor = base.toString();
+            for (int n = 2; programClass.getFieldByName(accessor).isPresent() || !programClass.getMethodsByName(accessor).isEmpty(); n++) {
+                accessor = base.toString() + n;
+            }
+            if (!declare) {
+                return new com.github.javaparser.ast.expr.MethodCallExpr(accessor);
+            }
+            libraryInstances.put(constructor.owner(), accessor);
+            programClass.addMember(com.github.javaparser.StaticJavaParser.parseBodyDeclaration(
+                    "private " + constructor.owner() + " " + accessor + ";"));
+            programClass.addMember(com.github.javaparser.StaticJavaParser.parseBodyDeclaration(
+                    "/** The library " + libraryId + "'s " + constructor.ownerName() + ", created on first use (one per program). */\n"
+                            + "private " + constructor.owner() + " " + accessor + "() {\n"
+                            + "    if (this." + accessor + " == null) {\n        this." + accessor + " = new " + constructor.owner() + "();\n    }\n"
+                            + "    return this." + accessor + ";\n}"));
+        }
+        return new com.github.javaparser.ast.expr.MethodCallExpr(accessor);
+    }
+
+    @Override
+    public Optional<transpiler.cobol2java.library.Libraries.Library> programLibrary(String name) {
+        return in.libraries().program(name);
     }
 
     /** Generates with a handler, collecting decisions raised by nested statements into {@code nested}. */

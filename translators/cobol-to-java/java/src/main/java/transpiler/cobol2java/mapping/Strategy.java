@@ -10,7 +10,9 @@ public enum Strategy {
     /** Report the operation as an unresolved decision. */
     UNRESOLVED,
     /** Defer to a user Python function (routed by the host; never executed in this worker). */
-    CALLBACK;
+    CALLBACK,
+    /** The operation uses a part a library claims: a library_call decision offering library calls and the exact translation. */
+    LIBRARY;
 
     public String wire() {
         return name().toLowerCase(Locale.ROOT);

@@ -360,3 +360,108 @@ def test_the_cobol_side_is_checked_against_the_parse(worker, tmp_path):
     assert len(problems) == 5, problems
     assert "matches no program" in problems[0] and "paragraph NOPE" in problems[1] and "copybook NOREC" in problems[2]
     assert "not a COBOL verb" in problems[3] and "does not claim" in problems[4]
+
+
+def resolve(worker, decision: dict, candidate: str, session: str = "s") -> dict:
+    r = worker.call("resolve", {"resolutions": [{"decision_id": decision["id"], "fingerprint": decision["fingerprint"],
+                                                 "provider": "test", "confidence": 0.9,
+                                                 "selection": {"kind": "candidate", "candidate_id": candidate}}]}, session=session)
+    assert r["result"]["applied"] == [decision["id"]], r
+    return r
+
+
+def translate_billing(worker, tmp_path, session="s", libraries=None) -> list[dict]:
+    params = library_params(tmp_path, libraries if libraries is not None else [acme_dates()])
+    if libraries == []:
+        params.pop("libraries")
+    assert worker.call("initialize", params, session=session)["status"] == "ok"
+    decisions = worker.call("translate", {"files": ["BILLING.cbl"]}, session=session)["result"]["decisions"]
+    rest = worker.call("translate", {"files": ["common/dates/DATEADD.cbl", "common/dates/DATEFMT.cbl", "common/dates/WEEKDAY.cbl"]},
+                       session=session)
+    assert rest["status"] == "ok"
+    return decisions
+
+
+def test_a_claimed_program_call_is_a_library_call_decision(worker, tmp_path):
+    dateadd, weekday, datefmt = translate_billing(worker, tmp_path)
+    assert [d["reason"] for d in (dateadd, weekday, datefmt)] == ["library_call"] * 3
+    assert dateadd["context"]["rule_id"] == "cobol.call.library" and dateadd["context"]["facts"]["program_in_library"] is True
+    assert dateadd["library"]["step"] == "start" and dateadd["library"]["part"]["file"] == "common/dates/DATEADD.cbl"
+    assert "COMPUTE WS-DAY-NUMBER" in dateadd["library"]["part"]["text"]
+    facts = dateadd["context"]["facts"]
+    assert facts["library"] == "acme.dates" and facts["library_hash"].startswith("sha256:") and facts["chain"] == []
+    ids = [c["id"] for c in dateadd["candidates"]]
+    assert ids == ["library:acme.dates:CalendarDate.new(int,int,int)", "library:acme.dates:CalendarDate.ofNumber(int)",
+                   "library:acme.dates:Dates.addDays(int,int)", "library:acme.dates:Dates.daysBetween(int,int)", "cobol:translate"]
+    add = dateadd["candidates"][2]
+    assert add["handler"] == "library" and "not equivalence-checked" in add["description"]
+    assert add["docs"][0]["signature"] == "int Dates.addDays(int yyyymmdd, int days)"
+    assert "ProgramSupport.call(this" in dateadd["candidates"][-1]["preview"]
+    # A boolean result cannot be stored, so isLeapYear is never offered.
+    assert not any("isLeapYear" in c["id"] for d in (dateadd, weekday, datefmt) for c in d["candidates"])
+
+    # Two bindings of addDays fit WS-DUE-DATE: the order is a follow-up decision, whose fingerprint has the chain.
+    [args] = resolve(worker, dateadd, "library:acme.dates:Dates.addDays(int,int)")["result"]["new_decisions"]
+    assert args["library"]["step"] == "args" and args["context"]["facts"]["chain"] == ["Dates.addDays(int,int)"]
+    arg_ids = [c["id"] for c in args["candidates"]]
+    assert arg_ids[0] == "args:0,1" and "args:1,0" in arg_ids and arg_ids[-1] == "cobol:translate"
+    assert resolve(worker, args, "args:0,1")["result"]["new_decisions"] == []
+
+    # DateFormatter() then .format(int) is forced; only its lifetime is asked.
+    [lifetime] = resolve(worker, datefmt, "library:acme.dates:DateFormatter.new()")["result"]["new_decisions"]
+    assert lifetime["library"]["step"] == "lifetime"
+    assert [c["id"] for c in lifetime["candidates"]] == ["lifetime:per_call", "lifetime:per_program", "cobol:translate"]
+    resolve(worker, lifetime, "lifetime:per_program")
+    resolve(worker, weekday, "cobol:translate")
+
+    done = worker.call("finalize")
+    assert done["status"] == "ok", done
+    assert done["result"]["equivalence"] == "partial"
+    [used] = done["result"]["libraries_used"]
+    uses = {u["part"]: u for u in used["uses"]}
+    assert uses["DATEADD"]["outcome"] == "library" and uses["DATEADD"]["chain"] == ["Dates.addDays(int,int)"]
+    assert uses["DATEFMT"]["chain"] == ["DateFormatter.new()", "DateFormatter.format(int)"]
+    assert uses["WEEKDAY"]["outcome"] == "translated" and "start step" in uses["WEEKDAY"]["reason"]
+    java = (tmp_path / "out/src/main/java/proto/Billing.java").read_text()
+    assert "// Library acme.dates, not equivalence-checked: Decided by test (confidence 0.90)" in java
+    # Library types are imported once (written fully qualified only on a name clash).
+    assert "import com.acme.dates.Dates;" in java and "import com.acme.dates.DateFormatter;" in java
+    assert "Dates.addDays(wsInvoiceDate.intValue(), wsTermsDays.intValue())" in java and "com.acme.dates.Dates.addDays" not in java
+    assert "Uses libraries (not equivalence-checked against the COBOL): acme.dates (lib)." in java
+    assert "private DateFormatter acmeDatesDateFormatter;" in java
+    assert "wsDueText.set(acmeDatesDateFormatter().format(wsDueDate.intValue()));" in java
+    assert "Weekday.instance()" in java and "LIBRARY" not in java
+
+
+def test_a_chain_continues_through_library_types(worker, tmp_path):
+    _, _, datefmt = translate_billing(worker, tmp_path)
+    # CalendarDate.ofNumber(..) gives a CalendarDate; only .iso() reaches a String, so it is taken without asking.
+    r = resolve(worker, datefmt, "library:acme.dates:CalendarDate.ofNumber(int)")
+    assert r["result"]["new_decisions"] == []
+    worker.call("resolve", {"resolutions": []})
+    used = worker.call("finalize")["result"]["libraries_used"][0]["uses"]
+    assert [u["chain"] for u in used if u["part"] == "DATEFMT"] == [["CalendarDate.ofNumber(int)", "CalendarDate.iso()"]]
+
+
+def test_cobol_translate_everywhere_writes_what_a_run_without_libraries_writes(worker, tmp_path):
+    for d in translate_billing(worker, tmp_path / "lib"):
+        resolve(worker, d, "cobol:translate")
+    done = worker.call("finalize")
+    assert done["status"] == "ok" and done["result"]["equivalence"] == "exact"
+    assert all(u["outcome"] == "translated" for u in done["result"]["libraries_used"][0]["uses"])
+    assert translate_billing(worker, tmp_path / "plain", session="s2", libraries=[]) == []
+    assert worker.call("finalize", session="s2")["status"] == "ok"
+    for java in (tmp_path / "plain/out").rglob("*.java"):
+        assert (tmp_path / "lib/out" / java.relative_to(tmp_path / "plain/out")).read_text() == java.read_text(), java
+
+
+def test_a_library_without_a_binding_member_leaves_the_translation(worker, tmp_path):
+    only_bool = tmp_path / "Leap.java"
+    only_bool.write_text("package acme; public final class Leap { public static boolean leap(int y) { return false; } }")
+    decisions = translate_billing(worker, tmp_path, libraries=[{
+        "id": "leap", "source": [{"kind": "program", "names": ["DATEADD"]}], "target": {"kind": "path", "path": str(only_bool)}}])
+    assert decisions == []
+    done = worker.call("finalize")
+    assert done["status"] == "ok" and done["result"]["equivalence"] == "exact"
+    [use] = done["result"]["libraries_used"][0]["uses"]
+    assert use["outcome"] == "translated" and use["reason"].startswith("library not offered: no public member")

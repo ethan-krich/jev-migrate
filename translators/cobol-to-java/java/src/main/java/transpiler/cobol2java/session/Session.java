@@ -94,6 +94,8 @@ public final class Session {
     private final ContextGraph.Budget contextBudget;
     /** initialize.libraries: COBOL parts mapped to installed Java libraries (none by default). */
     private Libraries libraries = Libraries.NONE;
+    /** What translations see of the libraries, and the record of every use site. */
+    private transpiler.cobol2java.library.LibraryScope libraryScope = transpiler.cobol2java.library.LibraryScope.NONE;
     private final Map<String, ProgramState> programs = new LinkedHashMap<>();
     private final List<String> copybooks = new ArrayList<>();
     private final Map<String, String> programDirectory = new HashMap<>();
@@ -189,7 +191,26 @@ public final class Session {
         }
         session.checkNameCollisions();
         session.checkLibraries();
+        if (!libraries.isEmpty()) {
+            session.libraryScope = new transpiler.cobol2java.library.LibraryScope(libraries, session::programFile, session::sourceText);
+        }
         return session;
+    }
+
+    /** The project file of the program a CALL name reaches (its PROGRAM-ID or an ENTRY of it). */
+    private Optional<String> programFile(String name) {
+        String fqcn = programDirectory.get(name);
+        return programs.values().stream().filter(ps -> !ps.failed && ps.fqcn().equals(fqcn)).map(ps -> ps.relativePath).findFirst();
+    }
+
+    /** A program file's source text (for a provider to read the COBOL a library would replace). */
+    private Optional<String> sourceText(String relativePath) {
+        ProgramState ps = programs.get(relativePath);
+        try {
+            return ps == null ? Optional.empty() : Optional.of(Files.readString(ps.path, StandardCharsets.ISO_8859_1));
+        } catch (IOException e) {
+            return Optional.empty();
+        }
     }
 
     /** The COBOL side of the libraries, checked against the parsed programs (invalid_library lists every problem). */
@@ -621,7 +642,8 @@ public final class Session {
         }
         return new ProgramTranslator(new ProgramTranslator.Input(unit, ps.sourceMap, ps.relativePath, programId,
                 ps.packageName, className, layout.runtimePackage(), registry, builtins,
-                pid -> Optional.ofNullable(classes.get(pid)), dialect, parameters, classes, Map.copyOf(entries), containers)).translate();
+                pid -> Optional.ofNullable(classes.get(pid)), dialect, parameters, classes, Map.copyOf(entries), containers, libraryScope))
+                .translate();
     }
 
     private void register(Decision d) {
@@ -805,6 +827,13 @@ public final class Session {
         ArrayNode written = result.putArray("files_written");
         ArrayNode programList = result.putArray("programs");
         programs.values().forEach(ps -> programList.add(programJson(ps)));
+        if (!libraries.isEmpty()) {
+            // Library uses are not equivalence-checked: every one is reported, whatever was chosen.
+            Path target = libraries.targetProject();
+            result.set("libraries_used", libraryScope.report(lib -> target == null ? null
+                    : transpiler.cobol2java.library.TargetProject.check(target, lib.coordinates())));
+            result.put("equivalence", libraryScope.equivalence());
+        }
         if (!problems.isEmpty()) {
             result.put("message", "no files were written: " + problems.size() + " file(s) are not fully translated");
             return new Outcome(Protocol.STATUS_INCOMPLETE, result);
@@ -812,6 +841,7 @@ public final class Session {
         try {
             for (ProgramState ps : programs.values()) {
                 ProgramTranslator.finish(ps.java);
+                importLibraries(ps);
                 write(ps.outputPath, ps.java.toString());
                 ObjectNode w = written.addObject();
                 w.put("path", outputRoot.relativize(ps.outputPath).toString().replace('\\', '/'));
@@ -833,6 +863,34 @@ public final class Session {
         }
         state = State.FINALIZED;
         return new Outcome(Protocol.STATUS_OK, result);
+    }
+
+    /**
+     * Imports the library types a program's library calls name (qualified on a clash) and says in
+     * its class Javadoc which libraries it uses, since those calls are not equivalence-checked.
+     */
+    private void importLibraries(ProgramState ps) {
+        List<transpiler.cobol2java.library.LibraryScope.Use> used = libraryScope.uses().stream()
+                .filter(u -> u.outcome.equals("library") && u.file.equals(ps.relativePath)).toList();
+        if (used.isEmpty()) {
+            return;
+        }
+        List<String> types = used.stream().flatMap(u -> u.types.stream()).distinct().toList();
+        List<String> names = new ArrayList<>();
+        for (Libraries.Library lib : libraries.all()) {
+            if (used.stream().anyMatch(u -> u.library.equals(lib.id()))) {
+                names.add(lib.id() + " (" + (lib.coordinates() != null ? lib.coordinates()
+                        : outputRelative(lib.target())) + ")");
+            }
+        }
+        transpiler.cobol2java.translate.LibraryImports.apply(ps.java, types,
+                "Uses libraries (not equivalence-checked against the COBOL): " + String.join(", ", names) + ".");
+    }
+
+    /** A library source path as the Javadoc names it: its file name, not the machine's absolute path. */
+    private static String outputRelative(String path) {
+        Path p = Path.of(path);
+        return p.getFileName() == null ? path : p.getFileName().toString();
     }
 
     private void write(Path path, String content) throws IOException {
