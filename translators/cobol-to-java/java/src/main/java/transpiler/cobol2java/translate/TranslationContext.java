@@ -136,6 +136,16 @@ public interface TranslationContext {
         return Optional.empty();
     }
 
+    /** Whether the session declares libraries (the library facts are computed only then). */
+    default boolean declaresLibraries() {
+        return false;
+    }
+
+    /** The library claiming a verb ({@code Cobol.operation("MOVE")}), or empty. */
+    default Optional<transpiler.cobol2java.library.Libraries.Library> operationLibrary(String verb) {
+        return Optional.empty();
+    }
+
     /** The ENTRY number a CALL name denotes in its program (0: a PROGRAM-ID). */
     int entryIndex(String name);
 

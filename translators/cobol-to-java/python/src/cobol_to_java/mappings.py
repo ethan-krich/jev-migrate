@@ -79,13 +79,13 @@ CANDIDATE_HANDLERS = frozenset({
 
 # Facts the worker computes per operation instance; usable as `when` condition keys.
 FACTS = MappingProxyType({
-    "MOVE": frozenset({"source_category", "target_category", "source_figurative"}),
+    "MOVE": frozenset({"source_category", "target_category", "source_figurative", "operation_in_library"}),
     "ADD": frozenset({"form", "rounded", "size_error"}),
     "SUBTRACT": frozenset({"form", "rounded", "size_error"}),
     "MULTIPLY": frozenset({"form", "rounded", "size_error"}),
     "DIVIDE": frozenset({"form", "rounded", "size_error", "remainder"}),
     "COMPUTE": frozenset({"rounded", "size_error", "receivers"}),
-    "DISPLAY": frozenset({"upon", "no_advancing", "operands"}),
+    "DISPLAY": frozenset({"upon", "no_advancing", "operands", "operation_in_library"}),
     "IF": frozenset({"has_else"}),
     "PERFORM": frozenset({"form", "loop", "test", "thru"}),
     "STOP": frozenset({"kind"}),
@@ -95,7 +95,7 @@ FACTS = MappingProxyType({
     "ENTRY": frozenset(),
     "SET": frozenset({"form"}),
     "EVALUATE": frozenset({"subjects", "has_other", "has_thru"}),
-    "ACCEPT": frozenset({"from"}),
+    "ACCEPT": frozenset({"from", "operation_in_library"}),
     "EXHIBIT": frozenset({"named", "changed"}),
     "INITIALIZE": frozenset({"replacing", "to_value", "with_filler", "then_default"}),
     "SEARCH": frozenset({"all", "varying", "at_end"}),
@@ -129,6 +129,7 @@ OPERATIONS = frozenset({
 })
 
 PRIORITY = 100
+LIBRARY_PRIORITY = PRIORITY + 10
 
 # (decision reason, operation) -> importance tier, "*" matching anything. The worker puts the
 # tier of the most specific entry on every decision: (reason, operation), then (*, operation),
@@ -168,10 +169,15 @@ DEFAULT_IMPORTANCE = MappingProxyType({
 })
 
 # Rules with the library strategy: (id, source, when, description). They match only when
-# transpile(libraries=...) claims the part, and turn its use into a library_call decision.
+# transpile(libraries=...) claims the part, and turn its use into a library_call decision. They
+# take LIBRARY_PRIORITY so they win over the handler rules of the same verb. (A claimed FUNCTION is
+# offered wherever it appears, whatever the rule.)
 DEFAULT_LIBRARY_RULES: tuple[tuple[str, str, dict, str], ...] = (
     ("cobol.call.library", "CALL", {"program_in_library": True},
-     "CALL of a program a library claims: library calls or the exact translation (library_call)"),
+     "CALL of a program or system routine a library claims: library calls or the exact translation (library_call)"),
+    ("cobol.move.library", "MOVE", {"operation_in_library": True}, "MOVE claimed by a library (library_call)"),
+    ("cobol.display.library", "DISPLAY", {"operation_in_library": True}, "DISPLAY claimed by a library (library_call)"),
+    ("cobol.accept.library", "ACCEPT", {"operation_in_library": True}, "ACCEPT claimed by a library (library_call)"),
 )
 
 # (id, source, handler, when, description)

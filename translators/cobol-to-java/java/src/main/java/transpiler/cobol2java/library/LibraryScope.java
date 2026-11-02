@@ -91,12 +91,21 @@ public final class LibraryScope {
         return libraries;
     }
 
-    /** The library claiming the program a CALL names, by PROGRAM-ID or by its file's path. */
+    /**
+     * The library claiming what a CALL names: a program (by PROGRAM-ID or by its file's path) or a
+     * system routine ({@code Cobol.operation("CALL 'CBL_TOUPPER'")}).
+     */
     public Optional<Libraries.Library> program(String name) {
         if (libraries.isEmpty() || name == null) {
             return Optional.empty();
         }
-        return libraries.program(name, programFiles.apply(name).orElse(null));
+        return libraries.program(name, programFiles.apply(name).orElse(null))
+                .or(() -> libraries.operation("CALL '" + name + "'"));
+    }
+
+    /** {@code program}, or {@code operation} when a CALL's target is claimed as a system routine. */
+    public String programSelector(String name) {
+        return libraries.program(name, programFiles.apply(name).orElse(null)).isPresent() ? "program" : "operation";
     }
 
     /** The project file of a CALLed program, or empty. */

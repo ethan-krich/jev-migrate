@@ -81,3 +81,8 @@ def test_transpile_checks_libraries_before_running(tmp_path):
         transpile(tmp_path, output=tmp_path / "out", libraries=libs, core="/nonexistent")
     with pytest.raises(TranspilerError, match="only used with libraries"):
         transpile(tmp_path, output=tmp_path / "out", target_project=tmp_path, core="/nonexistent")
+
+
+def test_operation_names_are_normalised_but_call_literals_keep_their_case():
+    assert Cobol.operation("function  upper-case", "display").names == ("FUNCTION UPPER-CASE", "DISPLAY")
+    assert Cobol.operation("CALL 'CBL_toupper'", 'call "X"').names == ("CALL 'CBL_toupper'", "CALL 'X'")

@@ -359,7 +359,7 @@ def test_the_cobol_side_is_checked_against_the_parse(worker, tmp_path):
     problems = r["error"]["details"]["problems"]
     assert len(problems) == 5, problems
     assert "matches no program" in problems[0] and "paragraph NOPE" in problems[1] and "copybook NOREC" in problems[2]
-    assert "not a COBOL verb" in problems[3] and "does not claim" in problems[4]
+    assert "not an operation a library can claim" in problems[3] and "does not claim" in problems[4]
 
 
 def resolve(worker, decision: dict, candidate: str, session: str = "s") -> dict:
@@ -465,3 +465,81 @@ def test_a_library_without_a_binding_member_leaves_the_translation(worker, tmp_p
     assert done["status"] == "ok" and done["result"]["equivalence"] == "exact"
     [use] = done["result"]["libraries_used"][0]["uses"]
     assert use["outcome"] == "translated" and use["reason"].startswith("library not offered: no public member")
+
+
+OPS_PROGRAM = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. OPS.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-NAME  PIC X(10) VALUE "ada".
+       01 WS-UP    PIC X(10).
+       01 WS-DATE  PIC 9(8) VALUE 20261115.
+       01 WS-DAYS  PIC 9(7).
+       01 WS-TODAY PIC 9(8).
+       PROCEDURE DIVISION.
+           MOVE FUNCTION UPPER-CASE(WS-NAME) TO WS-UP.
+           COMPUTE WS-DAYS = FUNCTION INTEGER-OF-DATE(WS-DATE) + 1.
+           DISPLAY "HELLO " WS-UP.
+           ACCEPT WS-TODAY FROM DATE YYYYMMDD.
+           CALL "CBL_TOUPPER" USING WS-NAME BY VALUE 10.
+           STOP RUN.
+"""
+OPS_LIBRARY = """\
+package acme.ops;
+
+/** Text, dates and logging. */
+public final class Ops {
+    private Ops() {}
+    /** The text in upper case. */
+    public static String upper(String s) { return s.toUpperCase(); }
+    /** The day number of a YYYYMMDD date, 1 for 1601-01-01. */
+    public static int dayNumber(int yyyymmdd) { return 0; }
+    /** Writes a line to the log. */
+    public static void log(String a, String b) {}
+    /** Today as YYYYMMDD. */
+    public static int today() { return 0; }
+}
+"""
+
+
+def test_operations_claim_functions_verbs_and_system_routines(worker, tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "OPS.cbl").write_text(OPS_PROGRAM)
+    lib = tmp_path / "Ops.java"
+    lib.write_text(OPS_LIBRARY)
+    params = init_params(tmp_path, [src / "OPS.cbl"], src)
+    params["options"] = LIBRARY_DIALECT
+    params["libraries"] = {"version": 1, "libraries": [{
+        "id": "acme.ops", "target": {"kind": "path", "path": str(lib)},
+        "source": [{"kind": "operation", "names": ["FUNCTION UPPER-CASE", "FUNCTION INTEGER-OF-DATE", "DISPLAY", "ACCEPT",
+                                                   "CALL 'CBL_TOUPPER'"]}]}]}
+    assert worker.call("initialize", params)["status"] == "ok"
+    decisions = worker.call("translate")["result"]["decisions"]
+    by_part = {d["library"]["part"]["name"]: d for d in decisions}
+    assert list(by_part) == ["FUNCTION UPPER-CASE", "FUNCTION INTEGER-OF-DATE", "DISPLAY", "ACCEPT"]
+    upper = by_part["FUNCTION UPPER-CASE"]
+    assert [c["id"] for c in upper["candidates"]] == ["library:acme.ops:Ops.upper(String)", "cobol:translate"]
+    days = by_part["FUNCTION INTEGER-OF-DATE"]
+    assert days["candidates"][0]["id"] == "library:acme.ops:Ops.dayNumber(int)"
+    assert by_part["DISPLAY"]["candidates"][0]["id"] == "library:acme.ops:Ops.log(String,String)"
+    assert by_part["ACCEPT"]["candidates"][0]["id"] == "library:acme.ops:Ops.today()"
+    todo = list(decisions)
+    while todo:
+        d = todo.pop(0)
+        todo += resolve(worker, d, d["candidates"][0]["id"])["result"]["new_decisions"]
+    done = worker.call("finalize")
+    assert done["status"] == "ok", done
+    uses = {u["part"]: u for u in done["result"]["libraries_used"][0]["uses"]}
+    # CBL_TOUPPER passes a BY VALUE length the library has no parameter for: not offered.
+    assert uses["CALL 'CBL_TOUPPER'"]["outcome"] == "translated" and "library not offered" in uses["CALL 'CBL_TOUPPER'"]["reason"]
+    java = (tmp_path / "out/src/main/java/proto/Ops.java").read_text()
+    # The program's own class is Ops, so the library's Ops stays fully qualified and is not imported.
+    assert "import acme.ops.Ops;" not in java
+    assert "wsUp.set(acme.ops.Ops.upper(wsName.get()));" in java
+    # The statement around a library function stays exact: the + 1 and the store into WS-DAYS are as without the library.
+    assert "wsDays.store(Arithmetic.plus(BigDecimal.valueOf(acme.ops.Ops.dayNumber(wsDate.intValue())), BigDecimal.ONE)" in java
+    assert 'acme.ops.Ops.log("HELLO ", wsUp.get());' in java
+    assert "wsToday.move(BigDecimal.valueOf(acme.ops.Ops.today()));" in java
+    assert "SystemRoutines.toUpper" in java

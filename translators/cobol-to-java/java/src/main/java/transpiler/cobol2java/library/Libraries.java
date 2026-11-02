@@ -26,9 +26,12 @@ import transpiler.cobol2java.protocol.ProtocolException;
 public final class Libraries {
     public static final Libraries NONE = new Libraries(List.of(), null);
 
+    /** The verbs a library can claim: each statement's operands and receiver map to a call's arguments and result. */
+    public static final Set<String> VERBS = Set.of("MOVE", "DISPLAY", "ACCEPT");
+
     /** The operations a library can claim (verbs, intrinsic functions, system routines), as {@code Cobol.operation} names them. */
     public static final java.util.function.Predicate<String> OPERATION_NAME =
-            n -> n.matches("FUNCTION [A-Z0-9-]+|CALL '[^']+'|[A-Z][A-Z-]*");
+            n -> n.matches("FUNCTION [A-Z0-9-]+|CALL '[^']+'") || VERBS.contains(n);
 
     /** A COBOL part a library claims. {@code names} are as written (PROGRAM-IDs) or upper case (the others). */
     public record Selector(String kind, List<String> names, String pattern, String program) {}
@@ -203,7 +206,8 @@ public final class Libraries {
                     case "operation" -> {
                         for (String n : s.names()) {
                             if (!OPERATION_NAME.test(n)) {
-                                problems.add(where + ": '" + n + "' is not a COBOL verb, FUNCTION name or CALL 'routine'");
+                                problems.add(where + ": '" + n + "' is not an operation a library can claim: FUNCTION name, CALL 'routine' or one of "
+                                        + new java.util.TreeSet<>(VERBS));
                             }
                             parts.add(n);
                         }
@@ -271,7 +275,7 @@ public final class Libraries {
     }
 
     private Optional<Library> find(String kind, String name, String programId) {
-        String upper = name.toUpperCase(Locale.ROOT);
+        String upper = kind.equals("operation") && name.startsWith("CALL '") ? name : name.toUpperCase(Locale.ROOT);
         for (Library lib : libraries) {
             for (Selector s : lib.selectors()) {
                 if (s.kind().equals(kind) && s.names().contains(upper)

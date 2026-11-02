@@ -38,6 +38,18 @@ final class LibrarySite {
     /** The exact translation, generated in place after the anchor. */
     record Alternative(EmptyStmt anchor, List<Statement> statements, List<Decision> nested, boolean translated, String preview) {}
 
+    /** What a complete chain generates: its statements and the decisions they raise. */
+    record Generated(List<Statement> statements, List<Decision> nested) {}
+
+    /**
+     * Generates the code for a complete chain: {@code steps} storing into {@code out};
+     * {@code instance} is the per-program object a chain starts with (null: created per use).
+     * {@code keep}: the code is the one kept (not a preview), so it may change the class.
+     */
+    interface Finisher {
+        Generated generate(List<LibraryChain.Step> steps, LibraryChain.Out out, Expression instance, boolean keep) throws HandlerException;
+    }
+
     private final ProgramTranslator t;
     private final OpUnit unit;
     private final BlockStmt block;
@@ -48,9 +60,7 @@ final class LibrarySite {
     private final ObjectNode part;
     private final String partLabel;
     private final Alternative alternative;
-    /** Statements that follow the library call (NOT ON EXCEPTION) and the decisions they raise. */
-    private final List<Statement> tail;
-    private final List<Decision> tailNested;
+    private final Finisher finisher;
     private final ContextGraph graph;
 
     private final List<LibraryChain.Step> steps = new ArrayList<>();
@@ -60,8 +70,7 @@ final class LibrarySite {
     private LibraryChain.Out out;
 
     LibrarySite(ProgramTranslator t, OpUnit unit, BlockStmt block, Map<String, Object> facts, String ruleId, LibraryChain chain,
-            LibraryScope.Use use, ObjectNode part, String partLabel, Alternative alternative, List<Statement> tail,
-            List<Decision> tailNested, ContextGraph graph) {
+            LibraryScope.Use use, ObjectNode part, String partLabel, Alternative alternative, Finisher finisher, ContextGraph graph) {
         this.t = t;
         this.unit = unit;
         this.block = block;
@@ -72,8 +81,7 @@ final class LibrarySite {
         this.part = part;
         this.partLabel = partLabel;
         this.alternative = alternative;
-        this.tail = tail;
-        this.tailNested = tailNested;
+        this.finisher = finisher;
         this.graph = graph;
     }
 
@@ -202,11 +210,10 @@ final class LibrarySite {
                 chosen -> complete(chosen.equals(PER_PROGRAM))));
     }
 
-    /** Replaces the exact translation with the library call; returns the decisions of the statements after it. */
+    /** Replaces the exact translation with the library call; returns the decisions its code raises. */
     private List<Decision> complete(boolean perProgram) {
-        Statement s = build(out, perProgram, true);
-        List<Statement> generated = new ArrayList<>(List.of(s));
-        generated.addAll(tail);
+        Generated g = build(out, perProgram, true);
+        List<Statement> generated = new ArrayList<>(g.statements());
         int index = block.getStatements().indexOf(alternative.anchor());
         if (index < 0) {
             throw new IllegalStateException("the anchor of " + partLabel + " is no longer in the AST");
@@ -220,10 +227,10 @@ final class LibrarySite {
         use.decidedBy = notes.isEmpty() ? null : String.join("; ", notes);
         steps.forEach(st -> use.chain.add(st.member().id()));
         steps.forEach(st -> use.types.add(st.member().importName()));
-        Statement plain = s.clone();
+        Statement plain = generated.getFirst().clone();
         plain.removeComment();
         use.statement = plain.toString();
-        return tailNested;
+        return g.nested();
     }
 
     /** {@code cobol:translate} at any step: the exact translation stays, and its own decisions are raised. */
@@ -309,18 +316,14 @@ final class LibrarySite {
     }
 
     private String previewStatement(LibraryChain.Out o, boolean perProgram) {
-        return build(o, perProgram).toString();
+        return String.join("\n", build(o, perProgram, false).statements().stream().map(Statement::toString).toList());
     }
 
-    private Statement build(LibraryChain.Out o, boolean perProgram) {
-        return build(o, perProgram, false);
-    }
-
-    /** {@code declare}: add the per-program field and its accessor to the class (only for the statement kept). */
-    private Statement build(LibraryChain.Out o, boolean perProgram, boolean declare) {
-        Expression instance = perProgram ? t.libraryInstance(chain.library().id(), steps.getFirst().member(), declare) : null;
+    /** {@code keep}: the code kept (adds the per-program field and accessor to the class); else a preview. */
+    private Generated build(LibraryChain.Out o, boolean perProgram, boolean keep) {
+        Expression instance = perProgram ? t.libraryInstance(chain.library().id(), steps.getFirst().member(), keep) : null;
         try {
-            return chain.statement(steps, o, instance);
+            return finisher.generate(steps, o, instance, keep);
         } catch (HandlerException e) {
             throw new IllegalStateException(e.getMessage(), e);
         }

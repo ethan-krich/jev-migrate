@@ -14,6 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.antlr.v4.runtime.ParserRuleContext;
 import transpiler.cobol2java.library.JavaMember;
 import transpiler.cobol2java.library.Libraries;
@@ -38,9 +39,15 @@ final class LibraryChain {
 
     /**
      * An output: where the final value goes ({@code receiver} null: a {@code void} call), and
-     * the input it may also read ({@code optional}: an in-out item; -1 when none).
+     * the input it may also read ({@code optional}: an in-out item; -1 when none). {@code value}
+     * {@code numeric} or {@code text}: the value of an expression (a function's result), stored
+     * nowhere, which must be an {@code int}, {@code long} or {@code BigDecimal}, or a {@code String}.
      */
-    record Out(String id, Operand receiver, String label, int optional) {}
+    record Out(String id, Operand receiver, String label, int optional, String value) {
+        Out(String id, Operand receiver, String label, int optional) {
+            this(id, receiver, label, optional, null);
+        }
+    }
 
     /** A call of the chain: the member and the input each parameter takes. */
     record Step(JavaMember member, int[] binding) {
@@ -160,9 +167,6 @@ final class LibraryChain {
 
     /** Whether a complete chain exists for output {@code o} from a value of {@code type} after {@code depth} calls. */
     boolean feasible(Out o, String type, int mask, int depth) {
-        if (excluded(o, mask)) {
-            return false;
-        }
         String key = o.id() + "|" + type + "|" + mask + "|" + depth;
         Boolean known = memo.get(key);
         if (known != null) {
@@ -193,16 +197,14 @@ final class LibraryChain {
         if (o.optional() >= 0) {
             required &= ~(1 << o.optional());
         }
-        return (mask & required) == required && !excluded(o, mask) && storable(type, o);
-    }
-
-    /** Inputs no output may take: none yet (an output's optional input is its own in-out item). */
-    private static boolean excluded(Out o, int mask) {
-        return false;
+        return (mask & required) == required && storable(type, o);
     }
 
     private boolean storable(String type, Out o) {
         return storable.computeIfAbsent(type + "|" + o.id(), k -> {
+            if (o.value() != null) {
+                return o.value().equals("text") ? type.equals("String") : Set.of("int", "long", "BigDecimal").contains(type);
+            }
             if (o.receiver() == null) {
                 return type.equals("void");
             }
@@ -277,6 +279,13 @@ final class LibraryChain {
         String type = steps.getLast().member().returnType();
         return JavaTypes.result(value, type, out.receiver(), c)
                 .orElseThrow(() -> HandlerException.unsupported("the chain's " + type + " cannot be stored into " + out.label()));
+    }
+
+    /** The value of a chain ending in an expression output: a {@code BigDecimal} or a {@code String}. */
+    Expression value(List<Step> steps, Expression perProgram) {
+        Expression value = expression(steps, perProgram);
+        String type = steps.getLast().member().returnType();
+        return type.equals("int") || type.equals("long") ? Ast.staticCall("BigDecimal", "valueOf", value) : value;
     }
 
     /** How a binding passes the inputs: {@code yyyymmdd = WS-DATE, days = WS-DAYS}. */

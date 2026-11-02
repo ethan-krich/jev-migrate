@@ -72,6 +72,15 @@ class CobolSelector:
         return d
 
 
+def _operation(name: str) -> str:
+    """``function integer-of-date`` -> ``FUNCTION INTEGER-OF-DATE``; a CALL 'routine' keeps its name's case
+    (CALL literals are case-sensitive) and is written with single quotes."""
+    words = name.split(None, 1)
+    if words and words[0].upper() == "CALL" and len(words) == 2:
+        return "CALL '" + words[1].strip().strip("'\"") + "'"
+    return " ".join(name.upper().split())
+
+
 class Cobol:
     """Factories for the COBOL side of a :class:`Library`."""
 
@@ -88,7 +97,7 @@ class Cobol:
     @staticmethod
     def operation(*names: str) -> CobolSelector:
         """A verb, intrinsic function or system routine (``FUNCTION INTEGER-OF-DATE``, ``CALL 'CBL_TOUPPER'``)."""
-        return CobolSelector("operation", tuple(" ".join(n.upper().split()) for n in names))
+        return CobolSelector("operation", tuple(_operation(n) for n in names))
 
     @staticmethod
     def copybook(*names: str) -> CobolSelector:

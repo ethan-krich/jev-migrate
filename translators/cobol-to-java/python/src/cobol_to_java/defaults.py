@@ -7,7 +7,7 @@ from pathlib import Path
 from transpiler import HandlerCatalog, MappingRegistry, Strategy
 
 from .layout import Layout
-from .mappings import BUILTIN_HANDLERS, DEFAULT_IMPORTANCE, DEFAULT_LIBRARY_RULES, DEFAULT_RULES, FACTS, OPERATIONS, PRIORITY
+from .mappings import BUILTIN_HANDLERS, DEFAULT_IMPORTANCE, DEFAULT_LIBRARY_RULES, DEFAULT_RULES, FACTS, LIBRARY_PRIORITY, OPERATIONS, PRIORITY
 
 LANGUAGE_PAIR = "cobol-to-java"
 
@@ -21,7 +21,7 @@ def default_mappings() -> MappingRegistry:
         registry.add(source, Strategy.BUILTIN, handler=handler, when=when, priority=PRIORITY, id=rule_id,
                      description=description)
     for rule_id, source, when, description in DEFAULT_LIBRARY_RULES:
-        registry.add(source, Strategy.LIBRARY, when=when, priority=PRIORITY, id=rule_id, description=description)
+        registry.add(source, Strategy.LIBRARY, when=when, priority=LIBRARY_PRIORITY, id=rule_id, description=description)
     return registry
 
 
