@@ -2971,6 +2971,17 @@ public final class ProgramTranslator implements TranslationContext {
                         return;
                     }
                 }
+                case "PERFORM" -> {
+                    var p = (io.proleap.cobol.asg.metamodel.procedure.perform.PerformStatement) unit.statement();
+                    String name = Boolean.TRUE.equals(facts.get("paragraph_in_library"))
+                            ? p.getPerformProcedureStatement().getCalls().getFirst().getName() : null;
+                    var lib = name == null ? null : paragraphLibrary(name).orElse(null);
+                    if (lib != null) {
+                        plain.put("paragraph_in_library", false);
+                        paragraphUse(unit, block, facts, plain, rule.id(), lib, name.toUpperCase(Locale.ROOT));
+                        return;
+                    }
+                }
                 case "MOVE", "DISPLAY", "ACCEPT" -> {
                     var lib = Boolean.TRUE.equals(facts.get("operation_in_library"))
                             ? scope.libraries().operation(unit.operation()).orElse(null) : null;
@@ -3149,6 +3160,193 @@ public final class ProgramTranslator implements TranslationContext {
         startUse(unit, block, facts, ruleId, chain, alt, use, part("operation", verb), verb + " (" + unit.location().text().replace('\n', ' ') + ")",
                 (steps, out, instance, keep) -> new LibrarySite.Generated(List.of(chain.statement(steps, out, instance)), List.of()),
                 problem);
+    }
+
+    /**
+     * The library claiming a paragraph or section of this program: by name ({@code Cobol.paragraph}),
+     * or because its body is one COPY of a claimed copybook ({@code Cobol.copybook}).
+     */
+    @Override
+    public Optional<transpiler.cobol2java.library.Libraries.Library> paragraphLibrary(String name) {
+        var libs = in.libraries().libraries();
+        if (libs.isEmpty()) {
+            return Optional.empty();
+        }
+        var direct = libs.paragraph(name, in.programId());
+        if (direct.isPresent()) {
+            return direct;
+        }
+        String copybook = procedureCopybook(name);
+        return copybook == null ? Optional.empty() : libs.copybook(copybook);
+    }
+
+    /** The copybook a paragraph's whole body is copied from (one COPY in the PROCEDURE DIVISION), or null. */
+    private String procedureCopybook(String name) {
+        ParserRuleContext body = procedureBody(name);
+        if (body == null || !in.sourceMap().exact()) {
+            return null;
+        }
+        var statements = findAll(body, CobolParser.StatementContext.class);
+        if (statements.isEmpty()) {
+            return null;
+        }
+        java.util.OptionalInt line = in.sourceMap().copyLine(statements.getFirst().getStart().getLine());
+        if (line.isEmpty() || statements.stream().anyMatch(st -> !in.sourceMap().copyLine(st.getStart().getLine()).equals(line))) {
+            return null;
+        }
+        String[] lines = in.libraries().text(in.sourceFile()).orElse("").split("\n", -1);
+        if (line.getAsInt() < 1 || line.getAsInt() > lines.length) {
+            return null;
+        }
+        var m = java.util.regex.Pattern.compile("(?i)\\bCOPY\\s+\"?([A-Za-z0-9][A-Za-z0-9-]*)").matcher(lines[line.getAsInt() - 1]);
+        return m.find() ? m.group(1).toUpperCase(Locale.ROOT) : null;
+    }
+
+    /** The parse tree of a paragraph or section of this program, by name; null when none (or several) has it. */
+    private ParserRuleContext procedureBody(String name) {
+        var pd = in.unit().getProcedureDivision();
+        if (pd == null) {
+            return null;
+        }
+        List<ParserRuleContext> found = new ArrayList<>();
+        for (Paragraph p : pd.getParagraphs()) {
+            if (p.getName().equalsIgnoreCase(name)) {
+                found.add(p.getCtx());
+            }
+        }
+        for (Section sec : pd.getSections()) {
+            if (sec.getName().equalsIgnoreCase(name)) {
+                found.add(sec.getCtx());
+            }
+            for (Paragraph p : sec.getParagraphs()) {
+                if (p.getName().equalsIgnoreCase(name)) {
+                    found.add(p.getCtx());
+                }
+            }
+        }
+        return found.size() == 1 ? found.getFirst() : null;
+    }
+
+    /**
+     * A PERFORM of a claimed paragraph or section. Its signature comes from the data it uses: the
+     * items it reads before writing them are the inputs, and the item it writes (or the group all
+     * the items it writes belong to) is the output. It is offered only when the paragraph is
+     * self-contained: run once by this PERFORM, no GO TO, ALTER, PERFORM, STOP RUN, GOBACK or EXIT
+     * PROGRAM in it, and not inside a PERFORM ... THRU range. Its body is still translated either way.
+     */
+    private void paragraphUse(OpUnit unit, BlockStmt block, Map<String, Object> facts, Map<String, Object> plain, String ruleId,
+            transpiler.cobol2java.library.Libraries.Library lib, String name) {
+        LibrarySite.Alternative alt = alternative(unit, block, plain, lib.id());
+        String copybook = in.libraries().libraries().paragraph(name, in.programId()).isPresent() ? null : procedureCopybook(name);
+        String selector = copybook == null ? "paragraph" : "copybook";
+        var use = in.libraries().record(lib.id(), in.programId(), in.sourceFile(), unit.location().line(), selector,
+                copybook == null ? name : copybook);
+        ParserRuleContext body = procedureBody(name);
+        var part = part(selector, copybook == null ? name : copybook);
+        part.put("file", in.sourceFile());
+        String problem = body == null ? "the paragraph is not found in this program" : selfContained(body, name);
+        if (body != null) {
+            String text = words(body);
+            part.put("text", text.length() > transpiler.cobol2java.library.LibraryScope.MAX_PART_CHARS
+                    ? text.substring(0, transpiler.cobol2java.library.LibraryScope.MAX_PART_CHARS) + " ..." : text);
+        }
+        if (problem == null && !"once".equals(facts.get("loop"))) {
+            problem = "this PERFORM runs the paragraph " + facts.get("loop") + " (a library call replaces a PERFORM that runs it once)";
+        }
+        List<LibraryChain.In> ins = new ArrayList<>();
+        List<LibraryChain.Out> outs = new ArrayList<>();
+        if (problem == null) {
+            var usage = transpiler.cobol2java.context.ContextGraph.usage(body, in.unit().getProgram());
+            for (DataDescriptionEntry e : usage.reads()) {
+                DataItem item = items.get(e);
+                if (item == null || !item.dimensions().isEmpty()) {
+                    problem = "it reads " + e.getName() + ", which is " + (item == null ? "not supported" : "a table element");
+                    break;
+                }
+                Operand o = new Operand.Field(item, List.of(), null);
+                ins.add(new LibraryChain.In(o, label(o)));
+            }
+            List<DataItem> written = usage.writes().stream().map(items::get).toList();
+            if (problem == null && written.contains(null)) {
+                problem = "it writes an item that is not supported";
+            }
+            if (problem == null) {
+                if (written.isEmpty()) {
+                    outs.add(new LibraryChain.Out("none", null, "nothing", -1));
+                } else {
+                    DataItem target = written.size() == 1 ? written.getFirst() : commonGroup(written);
+                    if (target == null || !target.dimensions().isEmpty()) {
+                        problem = "it writes several unrelated items " + written.stream().map(DataItem::cobolName).toList()
+                                + " (a library call gives one result)";
+                    } else {
+                        Operand o = new Operand.Field(target, List.of(), null);
+                        outs.add(new LibraryChain.Out("item:" + label(o), o, label(o), -1));
+                    }
+                }
+            }
+        }
+        LibraryChain chain = new LibraryChain(lib, ins, outs, lib.hintsFor(copybook == null ? name : copybook), this,
+                unit.statement().getCtx());
+        startUse(unit, block, facts, ruleId, chain, alt, use, part, "PERFORM " + name,
+                (steps, out, instance, keep) -> new LibrarySite.Generated(List.of(chain.statement(steps, out, instance)), List.of()),
+                problem);
+    }
+
+    /** Why a paragraph is not self-contained, or null when it is. */
+    private String selfContained(ParserRuleContext body, String name) {
+        for (var st : findAll(body, ParserRuleContext.class)) {
+            if (st instanceof CobolParser.GoToStatementContext) {
+                return "it contains GO TO";
+            }
+            if (st instanceof CobolParser.AlterStatementContext) {
+                return "it contains ALTER";
+            }
+            if (st instanceof CobolParser.PerformStatementContext ps && ps.performProcedureStatement() != null) {
+                return "it PERFORMs other paragraphs";
+            }
+            if (st instanceof CobolParser.StopStatementContext || st instanceof CobolParser.GobackStatementContext
+                    || st instanceof CobolParser.ExitStatementContext ex && ex.PROGRAM() != null) {
+                return "it ends the program (STOP RUN, GOBACK or EXIT PROGRAM)";
+            }
+        }
+        // Inside a PERFORM ... THRU range anywhere in the program: the range runs it as part of a sequence.
+        List<String> order = new ArrayList<>();
+        var pd = in.unit().getProcedureDivision();
+        pd.getParagraphs().forEach(p -> order.add(p.getName().toUpperCase(Locale.ROOT)));
+        for (Section sec : pd.getSections()) {
+            order.add(sec.getName().toUpperCase(Locale.ROOT));
+            sec.getParagraphs().forEach(p -> order.add(p.getName().toUpperCase(Locale.ROOT)));
+        }
+        for (var ps : findAll(pd.getCtx(), CobolParser.PerformProcedureStatementContext.class)) {
+            if (ps.procedureName().size() > 1) {
+                int from = order.indexOf(ps.procedureName(0).getText().toUpperCase(Locale.ROOT));
+                int thru = order.indexOf(ps.procedureName(ps.procedureName().size() - 1).getText().toUpperCase(Locale.ROOT));
+                int at = order.indexOf(name);
+                if (from >= 0 && thru >= 0 && at >= Math.min(from, thru) && at <= Math.max(from, thru)) {
+                    return "it is part of a PERFORM " + ps.procedureName(0).getText() + " THRU "
+                            + ps.procedureName(ps.procedureName().size() - 1).getText() + " range";
+                }
+            }
+        }
+        return null;
+    }
+
+    /** The innermost group all {@code items} belong to, or null. */
+    private static DataItem commonGroup(List<DataItem> items) {
+        for (DataItem g = items.getFirst().parent(); g != null; g = g.parent()) {
+            DataItem group = g;
+            if (items.stream().allMatch(i -> {
+                for (DataItem p = i.parent(); p != null; p = p.parent()) {
+                    if (p == group) {
+                        return true;
+                    }
+                }
+                return false;
+            })) {
+                return group;
+            }
+        }
+        return null;
     }
 
     /** Library overrides of intrinsic functions: the expression standing for a claimed FUNCTION while a statement is generated. */

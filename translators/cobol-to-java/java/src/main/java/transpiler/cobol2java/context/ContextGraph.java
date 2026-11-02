@@ -308,6 +308,49 @@ public final class ContextGraph {
         return USAGE.contains(s.getStatementType()) ? "usage" : "reads";
     }
 
+    /**
+     * The data items a piece of procedure code reads before it writes them, and the items it writes,
+     * in source order (within a statement, its reads come before its writes). A statement nested in
+     * another (an IF branch) counts where it is written.
+     */
+    public record Usage(List<DataDescriptionEntry> reads, List<DataDescriptionEntry> writes) {}
+
+    public static Usage usage(ParserRuleContext code, Program program) {
+        List<DataDescriptionEntry> reads = new ArrayList<>();
+        List<DataDescriptionEntry> writes = new ArrayList<>();
+        record Ref(ParserRuleContext ctx, DataDescriptionEntry entry) {}
+        Map<ParserRuleContext, List<Ref>> byStatement = new LinkedHashMap<>();
+        ArrayDeque<ParseTree> stack = new ArrayDeque<>();
+        stack.push(code);
+        while (!stack.isEmpty()) {
+            ParseTree t = stack.pop();
+            if (t instanceof ParserRuleContext rc && program.getASGElementRegistry().getASGElement(rc) instanceof Call call
+                    && call.unwrap() instanceof DataDescriptionEntryCall dc && dc.getDataDescriptionEntry() != null) {
+                Statement s = statementOf(dc);
+                if (s != null) {
+                    byStatement.computeIfAbsent(s.getCtx(), k -> new ArrayList<>()).add(new Ref(rc, dc.getDataDescriptionEntry()));
+                }
+                continue;
+            }
+            for (int i = t.getChildCount() - 1; i >= 0; i--) {
+                stack.push(t.getChild(i));
+            }
+        }
+        for (var e : byStatement.entrySet()) {
+            List<DataDescriptionEntry> written = new ArrayList<>();
+            for (Ref ref : e.getValue()) {
+                DataDescriptionEntry entry = ref.entry();
+                if (receives(ref.ctx(), e.getKey())) {
+                    written.add(entry);
+                } else if (!writes.contains(entry) && !reads.contains(entry)) {
+                    reads.add(entry);
+                }
+            }
+            written.stream().filter(w -> !writes.contains(w)).forEach(writes::add);
+        }
+        return new Usage(reads, writes);
+    }
+
     /** Whether the identifier at {@code ctx} receives a value in the statement (from the grammar rule it sits in). */
     private static boolean receives(ParserRuleContext ctx, ParserRuleContext statement) {
         for (ParserRuleContext p = ctx; p != null && p != statement; p = p.getParent()) {

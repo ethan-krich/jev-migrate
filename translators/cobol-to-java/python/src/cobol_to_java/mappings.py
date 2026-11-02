@@ -87,7 +87,7 @@ FACTS = MappingProxyType({
     "COMPUTE": frozenset({"rounded", "size_error", "receivers"}),
     "DISPLAY": frozenset({"upon", "no_advancing", "operands", "operation_in_library"}),
     "IF": frozenset({"has_else"}),
-    "PERFORM": frozenset({"form", "loop", "test", "thru"}),
+    "PERFORM": frozenset({"form", "loop", "test", "thru", "paragraph_in_library"}),
     "STOP": frozenset({"kind"}),
     "EXIT": frozenset({"kind"}),
     "CALL": frozenset({"program", "program_kind", "program_in_project", "program_in_library", "using"}),
@@ -175,6 +175,8 @@ DEFAULT_IMPORTANCE = MappingProxyType({
 DEFAULT_LIBRARY_RULES: tuple[tuple[str, str, dict, str], ...] = (
     ("cobol.call.library", "CALL", {"program_in_library": True},
      "CALL of a program or system routine a library claims: library calls or the exact translation (library_call)"),
+    ("cobol.perform.library", "PERFORM", {"paragraph_in_library": True},
+     "PERFORM of a paragraph or section a library claims (by name, or as a procedure copybook) (library_call)"),
     ("cobol.move.library", "MOVE", {"operation_in_library": True}, "MOVE claimed by a library (library_call)"),
     ("cobol.display.library", "DISPLAY", {"operation_in_library": True}, "DISPLAY claimed by a library (library_call)"),
     ("cobol.accept.library", "ACCEPT", {"operation_in_library": True}, "ACCEPT claimed by a library (library_call)"),

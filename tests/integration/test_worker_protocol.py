@@ -543,3 +543,86 @@ def test_operations_claim_functions_verbs_and_system_routines(worker, tmp_path):
     assert 'acme.ops.Ops.log("HELLO ", wsUp.get());' in java
     assert "wsToday.move(BigDecimal.valueOf(acme.ops.Ops.today()));" in java
     assert "SystemRoutines.toUpper" in java
+
+
+PARAGRAPHS = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PARAS.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-DATE  PIC 9(8) VALUE 20261115.
+       01 WS-DAYS  PIC S9(4) VALUE 30.
+       01 WS-DUE   PIC 9(8).
+       01 WS-WORK  PIC 9(7).
+       01 WS-I     PIC 9.
+       PROCEDURE DIVISION.
+       MAIN.
+           PERFORM CALC-DUE.
+           PERFORM CALC-DUE 2 TIMES.
+           PERFORM COPIED.
+           PERFORM JUMPY.
+           PERFORM FIRST-P THRU LAST-P.
+           PERFORM FIRST-P.
+           PERFORM SCRATCH.
+           DISPLAY WS-DUE.
+           STOP RUN.
+      * The due date: the invoice date plus the terms in days.
+       CALC-DUE.
+           IF WS-DAYS > 0
+               COMPUTE WS-DUE = WS-DATE + WS-DAYS
+           END-IF.
+       SCRATCH.
+           COMPUTE WS-WORK = FUNCTION INTEGER-OF-DATE(WS-DATE).
+           ADD WS-DAYS TO WS-WORK.
+           COMPUTE WS-DUE = FUNCTION DATE-OF-INTEGER(WS-WORK).
+       COPIED.
+           COPY DUECALC.
+       JUMPY.
+           IF WS-DAYS > 0 GO TO JUMPY-EXIT END-IF.
+       JUMPY-EXIT.
+           EXIT.
+       FIRST-P.
+           MOVE 1 TO WS-I.
+       LAST-P.
+           EXIT.
+"""
+DUECALC = """\
+           COMPUTE WS-DUE = WS-DATE + WS-DAYS.
+"""
+
+
+def test_paragraphs_and_procedure_copybooks_are_claimed_at_their_performs(worker, tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "PARAS.cbl").write_text(PARAGRAPHS)
+    (src / "DUECALC.cpy").write_text(DUECALC)
+    params = library_params(tmp_path, [acme_dates(source=[
+        {"kind": "paragraph", "names": ["CALC-DUE", "JUMPY", "FIRST-P", "LAST-P", "SCRATCH"], "program": "PARAS"},
+        {"kind": "copybook", "names": ["DUECALC"]}])])
+    params["source_root"] = str(src)
+    params["files"] = [{"path": str(src / "PARAS.cbl"), "role": "program"}, {"path": str(src / "DUECALC.cpy"), "role": "copybook"}]
+    assert worker.call("initialize", params)["status"] == "ok"
+    decisions = worker.call("translate")["result"]["decisions"]
+    parts = [(d["library"]["part"]["kind"], d["library"]["part"]["name"], d["source"]["line"]) for d in decisions]
+    assert parts == [("paragraph", "CALC-DUE", 12), ("copybook", "DUECALC", 14)]
+    calc = decisions[0]
+    # CALC-DUE reads WS-DAYS (the IF) and WS-DATE before writing anything, and writes WS-DUE only.
+    assert "COMPUTE WS-DUE" in calc["library"]["part"]["text"]
+    ids = [c["id"] for c in calc["candidates"]]
+    assert "library:acme.dates:Dates.addDays(int,int)" in ids and ids[-1] == "cobol:translate"
+    [args] = resolve(worker, calc, "library:acme.dates:Dates.addDays(int,int)")["result"]["new_decisions"]
+    assert {c["id"] for c in args["candidates"]} == {"args:0,1", "args:1,0", "cobol:translate"}
+    resolve(worker, args, "args:1,0")  # inputs in read order: WS-DAYS, WS-DATE
+    resolve(worker, decisions[1], "cobol:translate")
+    done = worker.call("finalize")
+    assert done["status"] == "ok", done
+    uses = {(u["part"], u["line"]): u for u in done["result"]["libraries_used"][0]["uses"]}
+    assert uses[("CALC-DUE", 12)]["outcome"] == "library"
+    assert "runs the paragraph times" in uses[("CALC-DUE", 13)]["reason"]
+    assert "GO TO" in uses[("JUMPY", 15)]["reason"]
+    assert "PERFORM FIRST-P THRU LAST-P range" in uses[("FIRST-P", 17)]["reason"]
+    assert "several unrelated items [WS-WORK, WS-DUE]" in uses[("SCRATCH", 18)]["reason"]
+    java = (tmp_path / "out/src/main/java/proto/Paras.java").read_text()
+    assert "wsDue.move(BigDecimal.valueOf(Dates.addDays(wsDate.intValue(), wsDays.intValue())));" in java
+    # The paragraph body is still translated (it can be fallen into, or PERFORMed in a loop).
+    assert "calcDue" in java.replace("CalcDue", "calcDue")

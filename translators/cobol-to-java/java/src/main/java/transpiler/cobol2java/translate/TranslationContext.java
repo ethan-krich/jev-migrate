@@ -136,6 +136,11 @@ public interface TranslationContext {
         return Optional.empty();
     }
 
+    /** The library claiming a paragraph or section of this program, by name or through its copybook, or empty. */
+    default Optional<transpiler.cobol2java.library.Libraries.Library> paragraphLibrary(String name) {
+        return Optional.empty();
+    }
+
     /** Whether the session declares libraries (the library facts are computed only then). */
     default boolean declaresLibraries() {
         return false;

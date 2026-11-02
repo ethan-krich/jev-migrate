@@ -46,7 +46,7 @@ public final class Facts {
             Map.entry("COMPUTE", Set.of("rounded", "size_error", "receivers")),
             Map.entry("DISPLAY", Set.of("upon", "no_advancing", "operands", "operation_in_library")),
             Map.entry("IF", Set.of("has_else")),
-            Map.entry("PERFORM", Set.of("form", "loop", "test", "thru")),
+            Map.entry("PERFORM", Set.of("form", "loop", "test", "thru", "paragraph_in_library")),
             Map.entry("STOP", Set.of("kind")),
             Map.entry("EXIT", Set.of("kind")),
             Map.entry("CALL", Set.of("program", "program_kind", "program_in_project", "program_in_library", "using")),
@@ -184,6 +184,10 @@ public final class Facts {
                 };
                 f.put("test", test != null && test.getTestClauseType() == TestClause.TestClauseType.AFTER ? "after" : "before");
                 f.put("thru", !inline && p.getPerformProcedureStatement().getCalls().size() > 1);
+                if (ctx.declaresLibraries()) {
+                    f.put("paragraph_in_library", !inline && p.getPerformProcedureStatement().getCalls().size() == 1
+                            && ctx.paragraphLibrary(p.getPerformProcedureStatement().getCalls().getFirst().getName()).isPresent());
+                }
             }
             case "STOP" -> f.put("kind", switch (((StopStatement) s).getStopType()) {
                 case STOP_RUN -> "run";

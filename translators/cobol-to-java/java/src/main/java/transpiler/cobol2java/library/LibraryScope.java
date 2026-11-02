@@ -113,6 +113,11 @@ public final class LibraryScope {
         return programFiles.apply(name);
     }
 
+    /** A source file's whole text. */
+    public Optional<String> text(String file) {
+        return sources.apply(file);
+    }
+
     /** A source file's text, capped at {@link #MAX_PART_CHARS}. */
     public Optional<String> source(String file) {
         return sources.apply(file).map(t -> t.length() > MAX_PART_CHARS ? t.substring(0, MAX_PART_CHARS) + "\n..." : t);
