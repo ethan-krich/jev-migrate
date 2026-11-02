@@ -1,0 +1,8 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <!-- The demo date library. jev-smoke.sh installs it (jar + sources jar) into a scratch Maven
+       repository under build/, standing in for a dependency the target project already has. -->
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>acme-dates</artifactId>
+  <version>1.0</version>
+</project>

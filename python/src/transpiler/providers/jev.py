@@ -66,11 +66,30 @@ TASK = (
     "itself behaves and the handler reproduces it; it is not a loss of semantics. Use the data definitions in the "
     "context (PICTURE, USAGE, VALUE) to check the operands' categories against what the description covers."
 )
+LIBRARY_TASK = (
+    "The user mapped a part of this COBOL program (a called program, an operation, a paragraph or a copybook; "
+    "decision.library.part has its COBOL source) to a Java library already installed in their target project, and "
+    "this statement uses that part. The call into the library is built one step at a time (decision.library.step: "
+    "start = the first call, args = which COBOL item each parameter takes, next = a further call on the value so far "
+    "or end, result = which COBOL item receives the value, lifetime = one object per use or per program); "
+    "decision.library.chain lists the calls already chosen. The library candidates are NOT tested against the "
+    "original COBOL: judge from their Java docs (signature and Javadoc), their parameter names, their preview and "
+    "the COBOL part's source and comments whether they do what the COBOL does with these items. The user chose this "
+    "library for this code, so prefer a library candidate that does what the COBOL part does. Choose cobol:translate "
+    "(the exact translation of the COBOL) only if no library candidate does anything close to what the COBOL does; "
+    "for args and result, pick the binding whose parameter names and docs match what each COBOL item holds."
+)
+LIBRARY_ABSTAIN_CRITERION = "Neither a library candidate nor cobol:translate fits this step."
+# Jev's input limit in characters, measured with scripts/jev-smoke.sh (see docs/architecture.md); the
+# options of a decision may use what is left after the rest of the state, with 25% left free.
+JEV_INPUT_CHARS = 32000
+STATE_OVERHEAD_CHARS = 4000
 WHY_ASKED: Mapping[str, str] = {
     "missing_mapping": "No mapping rule is configured for this statement's facts, so no handler was chosen automatically.",
     "unsupported_construct": "The translator could not prove that the standard translation is exact here.",
     "missing_target_api": "The statement depends on something outside the translation project.",
     "callback_required": "The mapping rule asks for a person's decision.",
+    "library_call": "The statement uses a part of the program that the user mapped to a Java library.",
 }
 ABSTAIN_CRITERION = ("No candidate fits: each one either excludes something this statement has, or is correct only "
                      "under a condition the program does not guarantee.")
@@ -145,13 +164,29 @@ class ContextBudget:
     max_chars: int = 4000
     max_depth: int = 2
     max_expansions: int = 2
+    # Characters of a decision's options (descriptions, previews, docs) sent to Jev; None: what Jev's
+    # input limit leaves after the state, the question and max_chars, with 25% left free. A decision
+    # whose options do not fit is held as too_many_options instead of being cut.
+    max_option_chars: int | None = None
 
     def __post_init__(self) -> None:
         if min(self.max_chars, self.max_depth, self.max_expansions) < 0:
             raise ValueError("context budget values must be non-negative")
+        if self.max_option_chars is not None and self.max_option_chars <= 0:
+            raise ValueError("max_option_chars must be positive")
+
+    @property
+    def option_chars(self) -> int:
+        """The option budget in effect."""
+        if self.max_option_chars is not None:
+            return self.max_option_chars
+        return max(1, int((JEV_INPUT_CHARS - STATE_OVERHEAD_CHARS - self.max_chars) * 0.75))
 
     def to_json(self) -> dict[str, int]:
-        return {"max_chars": self.max_chars, "max_depth": self.max_depth, "max_expansions": self.max_expansions}
+        d = {"max_chars": self.max_chars, "max_depth": self.max_depth, "max_expansions": self.max_expansions}
+        if self.max_option_chars is not None:
+            d["max_option_chars"] = self.max_option_chars
+        return d
 
 
 class SystemOneClient(Protocol):
@@ -329,6 +364,9 @@ class JevProvider(DecisionProvider):
         truncated = [r for r in refs if r.get("truncated")]
         can_expand = bool(truncated) and left > 0
         questions = self.questions(request, truncated if can_expand else [])
+        held = self.too_many_options(request, questions)
+        if held is not None:
+            return held
         state = self.state(request, refs, expansions)
         response = self.client.system_one(state, questions, model=self.model)
         pick = response.choices["pick"]
@@ -347,6 +385,28 @@ class JevProvider(DecisionProvider):
         gate = self.gate.check(request.importance, pick)
         candidate = None if gate == "abstained" else pick.choice
         return DecisionResponse(candidate, gate=gate, **common)
+
+    def too_many_options(self, request: DecisionRequest, questions: Mapping[str, Any]) -> DecisionResponse | None:
+        """A held answer when the options do not fit :attr:`ContextBudget.option_chars`. Options are
+        never dropped to fit (a cut could hide the right one): the user narrows the library instead."""
+        criteria = questions["pick"]["criteria"]
+        size = sum(len(json.dumps(v)) for k, v in criteria.items() if k not in (ABSTAIN, NEED_CONTEXT))
+        if size <= self.context.option_chars:
+            return None
+        rationale = (f"too_many_options: {len(request.candidates)} options use {size} characters, over the "
+                     f"{self.context.option_chars} Jev can read with room to spare")
+        if request.library:
+            owners: dict[str, int] = {}
+            for c in request.candidates:
+                if c.handler == "library" and c.id.startswith("library:"):
+                    owner = c.id.split(":", 2)[2].split("(")[0].rsplit(".", 1)[0]
+                    owners[owner] = owners.get(owner, 0) + len(json.dumps(criteria.get(c.id, "")))
+            top = sorted(owners.items(), key=lambda kv: -kv[1])[:5]
+            part = request.library.get("part", {}).get("name", "")
+            rationale += (f"; narrow library {request.library.get('id')!r} for {part} with expose= or hints=; "
+                          f"the classes with the most options: {', '.join(o for o, _ in top)}")
+        return DecisionResponse(None, decision_id=request.id, fingerprint=request.fingerprint, gate="abstained",
+                                rationale=rationale, held_reason="too_many_options")
 
     @staticmethod
     def attempt(request: DecisionRequest, pick: ChoiceLike, common: Mapping[str, Any]) -> DecisionResponse:
@@ -379,13 +439,16 @@ class JevProvider(DecisionProvider):
                 "expansions": expansions,
             }
         reason = str(request.reason)
+        decision = {"id": request.id, "fingerprint": request.fingerprint, "cobol": request.source.text,
+                    "operation": request.operation, "facts": request.context.get("facts", {}),
+                    "why_asked": f"{WHY_ASKED.get(reason, reason)} {request.message}",
+                    "program_id": request.context.get("program_id"),
+                    "file": request.source.file, "line": request.source.line}
+        if request.library:
+            decision["library"] = request.library
         return {
-            "task": TASK,
-            "decision": {"id": request.id, "fingerprint": request.fingerprint, "cobol": request.source.text,
-                         "operation": request.operation, "facts": request.context.get("facts", {}),
-                         "why_asked": f"{WHY_ASKED.get(reason, reason)} {request.message}",
-                         "program_id": request.context.get("program_id"),
-                         "file": request.source.file, "line": request.source.line},
+            "task": LIBRARY_TASK if request.library else TASK,
+            "decision": decision,
             "candidates": [{"id": c.id, "description": c.description, "java": c.preview, **({"docs": list(c.docs)} if c.docs else {})}
                            for c in request.candidates],
             "context": list(refs),
@@ -408,14 +471,12 @@ class JevProvider(DecisionProvider):
             if c.slots:
                 option["then_asks"] = [f"{s.name}: {s.description}" for s in c.slots]
             criteria[c.id] = option
-        criteria[ABSTAIN] = ABSTAIN_CRITERION
+        criteria[ABSTAIN] = LIBRARY_ABSTAIN_CRITERION if request.library else ABSTAIN_CRITERION
         if truncated:
             criteria[NEED_CONTEXT] = "Deciding needs a context node that is shown truncated."
-        questions: dict[str, Any] = {"pick": {
-            "type": "choice",
-            "instructions": f"Which handler's description covers `{request.source.text}` as written?",
-            "criteria": criteria,
-        }}
+        instructions = (f"Which candidate does, at this step, what the COBOL part does for `{request.source.text}`?"
+                        if request.library else f"Which handler's description covers `{request.source.text}` as written?")
+        questions: dict[str, Any] = {"pick": {"type": "choice", "instructions": instructions, "criteria": criteria}}
         if truncated:
             questions["refs"] = {
                 "type": "choice",

@@ -22,7 +22,7 @@ def test_smoke_output_without_live_jev(monkeypatch, capsys, tmp_path):
     monkeypatch.setenv("JEV_VERBOSE", "1")
     monkeypatch.setattr(transpiler, "JevProvider", lambda *a, **kw: object())
     setting = SimpleNamespace(field="order", value="ascii", resolution=SimpleNamespace(confidence=0.8))
-    result = SimpleNamespace(status="ok", ok=True, settings=[setting],
+    result = SimpleNamespace(status="ok", ok=True, settings=[setting], decisions=[], libraries_used=[],
                              report={"settings": [{"resolution": {"probabilities": {"ascii": 0.8}}}]},
                              summary=lambda: "status: ok (1 program(s), 1 file(s) written)")
 

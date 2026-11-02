@@ -279,3 +279,47 @@ def test_result_resolutions_and_review_queue(tmp_path):
     queue = result.review_queue()
     assert [i.decision.id for i in queue] == ["decision-2", "decision-3", "decision-1", "decision-4"]
     assert [i.tier_mismatch for i in queue] == [False, False, True, True]
+
+
+def library_request(n_options=2, description="calls Dates.addDays of the library acme.dates"):
+    candidates = [{"id": f"library:acme.dates:Dates.m{i}(int,int)", "handler": "library", "description": description,
+                   "preview": f"Dates.m{i}(a.intValue(), b.intValue())",
+                   "docs": [{"signature": f"int Dates.m{i}(int a, int b)", "summary": "Adds days."}]} for i in range(n_options)]
+    candidates.append({"id": "cobol:translate", "handler": "translate", "description": "translate CALL 'DATEADD' exactly",
+                       "preview": "ProgramSupport.call(this, Dateadd.instance(), false, a.view(), b.view());"})
+    return DecisionRequest.from_json({
+        "id": "decision-1", "fingerprint": "sha256:ab", "reason": "library_call", "operation": "CALL", "message": "claimed",
+        "importance": "high", "state": "pending",
+        "source": {"file": "B.cbl", "line": 12, "column": 12, "text": "CALL \"DATEADD\" USING A B C"},
+        "context": {"facts": {"library": "acme.dates", "step": "start"}, "refs": []},
+        "library": {"id": "acme.dates", "java": "com.acme:acme-dates:2.3.1", "step": "start", "chain": [],
+                    "part": {"kind": "program", "name": "DATEADD", "text": "PROCEDURE DIVISION USING ..."}},
+        "candidates": candidates,
+    })
+
+
+def test_library_decisions_tell_jev_to_prefer_the_untested_library():
+    r = library_request()
+    state = JevProvider.state(r, [], 0)
+    assert "NOT tested against the original COBOL" in state["task"] and "prefer a library candidate" in state["task"]
+    assert "Choose cobol:translate" in state["task"] and "tested handler" not in state["task"]
+    assert state["decision"]["library"]["part"]["name"] == "DATEADD"
+    q = JevProvider.questions(r, [])["pick"]
+    assert "cobol:translate" in q["criteria"] and q["criteria"]["library:acme.dates:Dates.m0(int,int)"]["docs"]
+    assert "what the COBOL part does" in q["instructions"]
+    # An ordinary decision keeps the handler task.
+    assert "tested handler" in JevProvider.state(request(), [], 0)["task"]
+
+
+def test_options_over_the_budget_are_held_never_cut():
+    client = RecordedJevClient({"sha256:ab": {"pick": pick("cobol:translate", 0.9)}})
+    jev = JevProvider("jev-test", client=client, context=ContextBudget(max_option_chars=800))
+    [answer] = jev.decide([library_request(n_options=6)])
+    assert answer.gate == "abstained" and answer.held_reason == "too_many_options" and answer.candidate_id is None
+    assert "narrow library 'acme.dates' for DATEADD with expose= or hints=" in answer.rationale
+    assert "Dates" in answer.rationale and client.calls == []
+    assert answer.to_json()["held_reason"] == "too_many_options"
+    [fits] = JevProvider("jev-test", client=client).decide([library_request(n_options=2)])
+    assert fits.gate == "passed" and fits.candidate_id == "cobol:translate"
+    assert ContextBudget().option_chars == int((32000 - 4000 - 4000) * 0.75)
+    assert ContextBudget(**ContextBudget(max_option_chars=900).to_json()).max_option_chars == 900

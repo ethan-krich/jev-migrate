@@ -61,6 +61,7 @@ std::expected<DecisionResponse, std::string> parse_decision_response(const json&
   r.fingerprint = j.value("fingerprint", std::string{});
   r.provider = j.value("provider", std::string{});
   r.rationale = j.value("rationale", std::string{});
+  if (j.contains("held_reason") && j["held_reason"].is_string()) r.held_reason = j["held_reason"].get<std::string>();
   if (j.contains("gate")) {
     if (!j["gate"].is_string() || std::ranges::find(kGates, j["gate"].get<std::string>()) == kGates.end())
       return std::unexpected(std::format("gate must be one of passed, below_floor, abstained, need_context, not {}",
