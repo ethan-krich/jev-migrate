@@ -3156,7 +3156,7 @@ public final class ProgramTranslator implements TranslationContext {
         } catch (HandlerException e) {
             problem = e.getMessage();
         }
-        LibraryChain chain = new LibraryChain(lib, ins, outs, lib.hintsFor(verb), this, unit.statement().getCtx());
+        LibraryChain chain = withRecords(new LibraryChain(lib, ins, outs, lib.hintsFor(verb), this, unit.statement().getCtx()));
         startUse(unit, block, facts, ruleId, chain, alt, use, part("operation", verb), verb + " (" + unit.location().text().replace('\n', ' ') + ")",
                 (steps, out, instance, keep) -> new LibrarySite.Generated(List.of(chain.statement(steps, out, instance)), List.of()),
                 problem);
@@ -3285,8 +3285,8 @@ public final class ProgramTranslator implements TranslationContext {
                 }
             }
         }
-        LibraryChain chain = new LibraryChain(lib, ins, outs, lib.hintsFor(copybook == null ? name : copybook), this,
-                unit.statement().getCtx());
+        LibraryChain chain = withRecords(new LibraryChain(lib, ins, outs, lib.hintsFor(copybook == null ? name : copybook), this,
+                unit.statement().getCtx()));
         startUse(unit, block, facts, ruleId, chain, alt, use, part, "PERFORM " + name,
                 (steps, out, instance, keep) -> new LibrarySite.Generated(List.of(chain.statement(steps, out, instance)), List.of()),
                 problem);
@@ -3347,6 +3347,119 @@ public final class ProgramTranslator implements TranslationContext {
             }
         }
         return null;
+    }
+
+    /** Field pairings of record conversions decided in this program (record and class to pairing). */
+    private final Map<String, int[]> recordPairings = new LinkedHashMap<>();
+
+    /** {@code chain} with the record conversions its operands allow, and the pairings decided so far. */
+    private LibraryChain withRecords(LibraryChain chain) {
+        List<Operand> operands = new ArrayList<>();
+        chain.ins().forEach(i -> operands.add(i.operand()));
+        chain.outs().stream().filter(o -> o.receiver() != null).forEach(o -> operands.add(o.receiver()));
+        List<LibraryChain.RecordMapping> mappings = new ArrayList<>();
+        for (Operand o : operands) {
+            if (o instanceof Operand.Field f && f.item().isGroup() && f.subscripts().isEmpty() && f.refmod() == null
+                    && mappings.stream().noneMatch(m -> m.record() == f.item())) {
+                mappings.addAll(recordMappings(chain.library(), f.item()));
+            }
+        }
+        return chain.withRecords(mappings, recordPairings);
+    }
+
+    /**
+     * The library classes a record of a claimed data copybook converts to: a public constructor
+     * taking as many parameters as the record has elementary fields, each parameter with an
+     * accessor of the same name ({@code year()} or {@code getYear()}) and type, and the pairings of
+     * fields to parameters that bind exactly both ways. A record with a nested group, a table or
+     * more than {@link LibraryChain#MAX_INPUTS} fields converts to nothing.
+     */
+    private List<LibraryChain.RecordMapping> recordMappings(transpiler.cobol2java.library.Libraries.Library lib, DataItem record) {
+        String copybook = copybookOf(record);
+        if (copybook == null || !in.libraries().libraries().copybook(copybook).map(l -> l == lib).orElse(false)) {
+            return List.of();
+        }
+        List<Operand.Field> fields = new ArrayList<>();
+        for (DataItem child : record.children()) {
+            if (child.isCondition() || child.isFiller()) {
+                continue;
+            }
+            if (child.isGroup() || !child.dimensions().isEmpty() || child.kind() == DataItem.Kind.UNSUPPORTED) {
+                return List.of();
+            }
+            fields.add(new Operand.Field(child));
+        }
+        if (fields.isEmpty() || fields.size() > LibraryChain.MAX_INPUTS) {
+            return List.of();
+        }
+        List<LibraryChain.RecordMapping> out = new ArrayList<>();
+        for (var ctor : lib.index().members()) {
+            if (ctor.kind() != transpiler.cobol2java.library.JavaMember.Kind.CONSTRUCTOR || !ctor.usable()
+                    || ctor.params().size() != fields.size()) {
+                continue;
+            }
+            List<transpiler.cobol2java.library.JavaMember> accessors = new ArrayList<>();
+            for (var p : ctor.params()) {
+                String cap = Character.toUpperCase(p.name().charAt(0)) + p.name().substring(1);
+                lib.index().of(ctor.owner()).stream()
+                        .filter(m -> m.kind() == transpiler.cobol2java.library.JavaMember.Kind.INSTANCE && m.params().isEmpty()
+                                && (m.name().equals(p.name()) || m.name().equals("get" + cap)) && m.returnType().equals(p.type()))
+                        .findFirst().ifPresent(accessors::add);
+            }
+            if (accessors.size() != fields.size()) {
+                continue;
+            }
+            List<int[]> pairings = new ArrayList<>();
+            pair(fields, ctor, accessors, new int[fields.size()], new boolean[fields.size()], 0, pairings);
+            if (!pairings.isEmpty()) {
+                out.add(new LibraryChain.RecordMapping(record, List.copyOf(fields), copybook, ctor, List.copyOf(accessors), pairings));
+            }
+        }
+        return out;
+    }
+
+    /** Every assignment of fields to constructor parameters that binds exactly as an argument and back as a result. */
+    private void pair(List<Operand.Field> fields, transpiler.cobol2java.library.JavaMember ctor,
+            List<transpiler.cobol2java.library.JavaMember> accessors, int[] at, boolean[] used, int k, List<int[]> out) {
+        if (k == at.length) {
+            out.add(at.clone());
+            return;
+        }
+        for (int i = 0; i < fields.size(); i++) {
+            if (used[i]) {
+                continue;
+            }
+            try {
+                boolean in = JavaTypes.argument(fields.get(i), ctor.params().get(k).type(), this, currentCtx).isPresent();
+                boolean back = JavaTypes.result(new com.github.javaparser.ast.expr.NameExpr("v"), accessors.get(k).returnType(),
+                        fields.get(i), this).isPresent();
+                if (in && back) {
+                    used[i] = true;
+                    at[k] = i;
+                    pair(fields, ctor, accessors, at, used, k + 1, out);
+                    used[i] = false;
+                }
+            } catch (HandlerException e) {
+                // Not an exact pair.
+            }
+        }
+    }
+
+    /** The copybook a data item was copied from (its COPY statement in the original source), or null. */
+    private String copybookOf(DataItem item) {
+        if (!in.sourceMap().exact()) {
+            return null;
+        }
+        var line = in.sourceMap().copyLine(item.line());
+        if (line.isEmpty()) {
+            return null;
+        }
+        String[] lines = in.libraries().text(in.sourceFile()).orElse("").split("\n", -1);
+        if (line.getAsInt() < 1 || line.getAsInt() > lines.length) {
+            return null;
+        }
+        var m = java.util.regex.Pattern.compile("(?i)\\bCOPY\\s+\"?([A-Za-z0-9][A-Za-z0-9-]*)").matcher(lines[line.getAsInt() - 1]);
+        return m.find() ? m.group(1).toUpperCase(Locale.ROOT) : null;
     }
 
     /** Library overrides of intrinsic functions: the expression standing for a claimed FUNCTION while a statement is generated. */
@@ -3516,7 +3629,7 @@ public final class ProgramTranslator implements TranslationContext {
             outs.add(new LibraryChain.Out("return_code", new Operand.ReturnCode(), "RETURN-CODE", -1));
             outs.add(new LibraryChain.Out("none", null, "nothing", -1));
         }
-        return new LibraryChain(lib, ins, outs, lib.hintsFor(name), this, call.getCtx());
+        return withRecords(new LibraryChain(lib, ins, outs, lib.hintsFor(name), this, call.getCtx()));
     }
 
     /** How a decision names an operand: the item's name, or the literal as written. */

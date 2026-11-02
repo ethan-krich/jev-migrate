@@ -626,3 +626,77 @@ def test_paragraphs_and_procedure_copybooks_are_claimed_at_their_performs(worker
     assert "wsDue.move(BigDecimal.valueOf(Dates.addDays(wsDate.intValue(), wsDays.intValue())));" in java
     # The paragraph body is still translated (it can be fallen into, or PERFORMed in a loop).
     assert "calcDue" in java.replace("CalcDue", "calcDue")
+
+
+RECORDS = """\
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. RECS.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       COPY DATEREC.
+       01 WS-DAYS PIC S9(4) VALUE 30.
+       PROCEDURE DIVISION.
+           MOVE "20261115" TO DATE-REC.
+           CALL "SHIFT" USING DATE-REC WS-DAYS.
+           DISPLAY DR-YEAR "-" DR-MONTH "-" DR-DAY.
+           CALL "SHIFT" USING DATE-REC WS-DAYS.
+           DISPLAY DR-YEAR "-" DR-MONTH "-" DR-DAY.
+           STOP RUN.
+"""
+DATEREC = """\
+       01 DATE-REC.
+          05 DR-YEAR  PIC 9(4).
+          05 DR-MONTH PIC 99.
+          05 DR-DAY   PIC 99.
+"""
+
+
+def test_data_copybook_records_convert_to_library_classes_at_calls(worker, tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "RECS.cbl").write_text(RECORDS)
+    (src / "DATEREC.cpy").write_text(DATEREC)
+    params = library_params(tmp_path, [acme_dates(source=[{"kind": "program", "names": ["SHIFT"]},
+                                                          {"kind": "copybook", "names": ["DATEREC"]}])])
+    params["source_root"] = str(src)
+    params["files"] = [{"path": str(src / "RECS.cbl"), "role": "program"}, {"path": str(src / "DATEREC.cpy"), "role": "copybook"}]
+    assert worker.call("initialize", params)["status"] == "ok"
+    first, second = worker.call("translate")["result"]["decisions"]
+    ids = [c["id"] for c in first["candidates"]]
+    assert "library:acme.dates:CalendarDate.of(DATE-REC)" in ids, ids
+    convert = next(c for c in first["candidates"] if c["id"] == "library:acme.dates:CalendarDate.of(DATE-REC)")
+    assert "takes the record DATE-REC as a CalendarDate" in convert["description"]
+    r = resolve(worker, first, "library:acme.dates:CalendarDate.of(DATE-REC)")
+    [next_step] = r["result"]["new_decisions"]
+    # The record's object goes on to .plusDays(WS-DAYS); stopping right away (storing it back unchanged) is also offered.
+    assert next_step["library"]["step"] == "next"
+    assert "library:acme.dates:CalendarDate.plusDays(int)" in [c["id"] for c in next_step["candidates"]]
+    [then] = resolve(worker, next_step, "library:acme.dates:CalendarDate.plusDays(int)")["result"]["new_decisions"]
+    # It could go on (.year() into WS-DAYS, the other in-out item); end stores the CalendarDate back into DATE-REC.
+    assert then["library"]["step"] == "next" and then["candidates"][0]["id"] == "end"
+    [fields] = resolve(worker, then, "end")["result"]["new_decisions"]
+    # Three int fields and three int components: the pairing is asked once, with every exact pairing offered.
+    assert fields["library"]["step"] == "fields"
+    fids = [c["id"] for c in fields["candidates"]]
+    assert fids[0] == "fields:DR-YEAR,DR-MONTH,DR-DAY" and len(fids) == 7 and fids[-1] == "cobol:translate"
+    assert "new com.acme.dates.CalendarDate(drYear.intValue(), drMonth.intValue(), drDay.intValue())" in fields["candidates"][0]["preview"]
+    assert resolve(worker, fields, "fields:DR-YEAR,DR-MONTH,DR-DAY")["result"]["new_decisions"] == []
+    # The second CALL reuses the pairing: no fields step.
+    r = resolve(worker, second, "library:acme.dates:CalendarDate.of(DATE-REC)")
+    [again] = r["result"]["new_decisions"]
+    [again_then] = resolve(worker, again, "library:acme.dates:CalendarDate.plusDays(int)")["result"]["new_decisions"]
+    assert resolve(worker, again_then, "end")["result"]["new_decisions"] == []
+    done = worker.call("finalize")
+    assert done["status"] == "ok", done
+    java = (tmp_path / "out/src/main/java/proto/Recs.java").read_text()
+    import re
+    found = re.findall(r"CalendarDate (libraryValue\d+) = new CalendarDate\(drYear.intValue\(\), drMonth.intValue\(\), "
+                       r"drDay.intValue\(\)\).plusDays\(wsDays.intValue\(\)\);", java)
+    assert len(found) == 2
+    var = found[0]
+    assert f"drYear.move(BigDecimal.valueOf({var}.year()));" in java and f"drDay.move(BigDecimal.valueOf({var}.day()));" in java
+    out = tmp_path / "out"
+    subprocess.run(["javac", "-d", str(out / "classes"), "-sourcepath", str(LIBRARY_CALLS / "lib"),
+                    *map(str, (out / "src/main/java").rglob("*.java"))], check=True, capture_output=True)
+    run = subprocess.run(["java", "-cp", str(out / "classes"), "proto.Recs"], capture_output=True, text=True, check=True)
+    assert run.stdout.splitlines() == ["2026-12-15", "2027-01-14"]

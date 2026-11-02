@@ -19,7 +19,8 @@ import transpiler.cobol2java.decision.Candidate;
  */
 public record JavaMember(String owner, String ownerName, String importName, Kind kind, String name, List<Param> params,
         String returnType, Candidate.Doc doc) {
-    public enum Kind { CONSTRUCTOR, STATIC, INSTANCE }
+    /** {@code CONVERT}: not a member of the library but a record of a claimed data copybook taken as an object of the class. */
+    public enum Kind { CONSTRUCTOR, STATIC, INSTANCE, CONVERT }
 
     public record Param(String name, String type) {}
 
@@ -29,6 +30,9 @@ public record JavaMember(String owner, String ownerName, String importName, Kind
 
     /** {@code Dates.format(String,int)}, {@code Formatter.new(String)}: unique within a library. */
     public String id() {
+        if (kind == Kind.CONVERT) {
+            return ownerName + ".of(" + name + ")";
+        }
         return ownerName + "." + (kind == Kind.CONSTRUCTOR ? "new" : name) + "("
                 + String.join(",", params.stream().map(p -> display(p.type())).toList()) + ")";
     }

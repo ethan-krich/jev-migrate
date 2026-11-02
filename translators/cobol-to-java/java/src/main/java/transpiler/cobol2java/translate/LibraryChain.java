@@ -67,6 +67,28 @@ final class LibraryChain {
     /** An offered call: a member and the bindings of it that can still complete a chain. */
     record Option(JavaMember member, List<int[]> bindings) {}
 
+    /**
+     * A record of a claimed data copybook that converts to and from a library class at library
+     * calls: by the class's constructor (record to object) and the accessors named like the
+     * constructor's parameters (object to record). {@code Storage} still holds the record's bytes;
+     * only the call converts. A pairing gives, for each constructor parameter, the field it takes
+     * (and that its accessor writes back); only exact pairs ({@link JavaTypes}) are listed.
+     */
+    record RecordMapping(DataItem record, List<Operand.Field> fields, String copybook, JavaMember constructor,
+            List<JavaMember> accessors, List<int[]> pairings) {
+        String key() {
+            return record.cobolName() + "|" + constructor.owner();
+        }
+
+        String describe(int[] pairing) {
+            List<String> parts = new ArrayList<>();
+            for (int k = 0; k < pairing.length; k++) {
+                parts.add(fields.get(pairing[k]).item().cobolName() + " = " + accessors.get(k).name());
+            }
+            return String.join(", ", parts);
+        }
+    }
+
     static final int MAX_INPUTS = 6;
 
     private final Libraries.Library library;
@@ -78,6 +100,9 @@ final class LibraryChain {
     private final Map<String, Boolean> memo = new HashMap<>();
     private final Map<String, Optional<Expression>> args = new HashMap<>();
     private final Map<String, Boolean> storable = new HashMap<>();
+    private final List<RecordMapping> records = new ArrayList<>();
+    /** Pairings already decided (record and class to pairing), shared by the program's use sites. */
+    private Map<String, int[]> pairings = new HashMap<>();
 
     LibraryChain(Libraries.Library library, List<In> ins, List<Out> outs, List<String> hints, TranslationContext c, ParserRuleContext where) {
         this.library = library;
@@ -90,6 +115,69 @@ final class LibraryChain {
 
     Libraries.Library library() {
         return library;
+    }
+
+    /** Adds the record conversions this use site may bind, with the pairings already decided in the program. */
+    LibraryChain withRecords(List<RecordMapping> mappings, Map<String, int[]> decided) {
+        records.addAll(mappings);
+        pairings = decided;
+        return this;
+    }
+
+    /** The conversion of {@code o} to or from {@code type}, or null. */
+    RecordMapping mapping(Operand o, String type) {
+        if (o instanceof Operand.Field f && f.subscripts().isEmpty() && f.refmod() == null) {
+            for (RecordMapping m : records) {
+                if (m.record() == f.item() && m.constructor().owner().equals(type)) {
+                    return m;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** The pairing in effect for a conversion: the decided one, else the first (for previews). */
+    int[] pairing(RecordMapping m) {
+        return pairings.getOrDefault(m.key(), m.pairings().getFirst());
+    }
+
+    boolean decided(RecordMapping m) {
+        return pairings.containsKey(m.key());
+    }
+
+    void decide(RecordMapping m, int[] pairing) {
+        pairings.put(m.key(), pairing);
+    }
+
+    /** The record conversions a complete chain uses: its arguments' and its result's, once each. */
+    List<RecordMapping> conversions(List<Step> steps, Out out) {
+        List<RecordMapping> used = new ArrayList<>();
+        for (Step s : steps) {
+            for (int k = 0; k < s.binding().length; k++) {
+                RecordMapping m = mapping(ins.get(s.binding()[k]).operand(), s.member().params().get(k).type());
+                if (m != null && !used.contains(m)) {
+                    used.add(m);
+                }
+            }
+        }
+        RecordMapping result = out.receiver() == null ? null : mapping(out.receiver(), steps.getLast().member().returnType());
+        if (result != null && !used.contains(result)) {
+            used.add(result);
+        }
+        return used;
+    }
+
+    /** The object a record converts to: the constructor with each parameter's paired field. */
+    Expression construct(RecordMapping m, int[] pairing) {
+        NodeList<Expression> a = new NodeList<>();
+        for (int k = 0; k < pairing.length; k++) {
+            try {
+                a.add(JavaTypes.argument(m.fields().get(pairing[k]), m.constructor().params().get(k).type(), c, where).orElseThrow());
+            } catch (HandlerException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+        return new ObjectCreationExpr(null, StaticJavaParser.parseClassOrInterfaceType(m.constructor().owner()), a);
     }
 
     List<In> ins() {
@@ -128,7 +216,26 @@ final class LibraryChain {
                 out.add(new Option(m, ok));
             }
         }
+        // A record input of a claimed data copybook, taken as an object of its class.
+        for (RecordMapping r : records) {
+            for (int i = 0; i < ins.size(); i++) {
+                if (ins.get(i).operand() instanceof Operand.Field f && f.item() == r.record() && f.subscripts().isEmpty()) {
+                    JavaMember convert = convert(r);
+                    int input = i;
+                    if (outs.stream().anyMatch(o -> feasible(o, convert.returnType(), 1 << input, 1))) {
+                        out.add(new Option(convert, List.<int[]>of(new int[] {i})));
+                    }
+                }
+            }
+        }
         return out;
+    }
+
+    /** The start that takes a record as an object of its class (its fields as the constructor's parameters). */
+    static JavaMember convert(RecordMapping r) {
+        JavaMember ctor = r.constructor();
+        return new JavaMember(ctor.owner(), ctor.ownerName(), ctor.importName(), JavaMember.Kind.CONVERT, r.record().cobolName(),
+                List.of(new JavaMember.Param(r.record().cobolName(), ctor.owner())), ctor.owner(), ctor.doc());
     }
 
     /** The bindings of a start or next member, given the inputs used so far, that can still complete a chain. */
@@ -208,6 +315,9 @@ final class LibraryChain {
             if (o.receiver() == null) {
                 return type.equals("void");
             }
+            if (mapping(o.receiver(), type) != null) {
+                return true;
+            }
             try {
                 return JavaTypes.result(new NameExpr("value"), type, o.receiver(), c).isPresent();
             } catch (HandlerException e) {
@@ -229,7 +339,8 @@ final class LibraryChain {
             return;
         }
         for (int i = 0; i < ins.size(); i++) {
-            if ((mask & (1 << i)) == 0 && argument(i, m.params().get(k).type()).isPresent()) {
+            String type = m.params().get(k).type();
+            if ((mask & (1 << i)) == 0 && (argument(i, type).isPresent() || mapping(ins.get(i).operand(), type) != null)) {
                 at[k] = i;
                 bind(m, mask | (1 << i), at, k + 1, out);
             }
@@ -260,13 +371,18 @@ final class LibraryChain {
         for (Step s : steps) {
             NodeList<Expression> a = new NodeList<>();
             for (int k = 0; k < s.binding().length; k++) {
-                a.add(argument(s.binding()[k], s.member().params().get(k).type()).orElseThrow());
+                String type = s.member().params().get(k).type();
+                Operand in = ins.get(s.binding()[k]).operand();
+                RecordMapping m = mapping(in, type);
+                a.add(m != null && argument(s.binding()[k], type).isEmpty() ? construct(m, pairing(m))
+                        : argument(s.binding()[k], type).orElseThrow());
             }
             JavaMember m = s.member();
             value = switch (m.kind()) {
                 case CONSTRUCTOR -> perProgram != null ? perProgram
                         : new ObjectCreationExpr(null, StaticJavaParser.parseClassOrInterfaceType(m.owner()), a);
                 case STATIC -> new MethodCallExpr(StaticJavaParser.parseExpression(m.owner()), m.name(), a);
+                case CONVERT -> a.get(0);
                 case INSTANCE -> new MethodCallExpr(value, m.name(), a);
             };
         }
@@ -277,6 +393,20 @@ final class LibraryChain {
     Statement statement(List<Step> steps, Out out, Expression perProgram) throws HandlerException {
         Expression value = expression(steps, perProgram);
         String type = steps.getLast().member().returnType();
+        RecordMapping m = out.receiver() == null ? null : mapping(out.receiver(), type);
+        if (m != null) {
+            // The object back into the record: each accessor into its paired field, as MOVE stores it.
+            com.github.javaparser.ast.stmt.BlockStmt b = new com.github.javaparser.ast.stmt.BlockStmt();
+            String v = c.fresh("libraryValue");
+            b.addStatement(Ast.declare(StaticJavaParser.parseClassOrInterfaceType(type), v, value));
+            int[] pairing = pairing(m);
+            for (int k = 0; k < pairing.length; k++) {
+                JavaMember accessor = m.accessors().get(k);
+                b.addStatement(JavaTypes.result(new MethodCallExpr(new NameExpr(v), accessor.name()), accessor.returnType(),
+                        m.fields().get(pairing[k]), c).orElseThrow());
+            }
+            return b;
+        }
         return JavaTypes.result(value, type, out.receiver(), c)
                 .orElseThrow(() -> HandlerException.unsupported("the chain's " + type + " cannot be stored into " + out.label()));
     }

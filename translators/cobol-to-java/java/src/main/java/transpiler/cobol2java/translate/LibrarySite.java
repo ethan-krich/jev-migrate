@@ -93,7 +93,11 @@ final class LibrarySite {
             JavaMember m = o.member();
             String id = "library:" + chain.library().id() + ":" + m.id();
             byId.put(id, m);
-            String what = m.kind() == JavaMember.Kind.CONSTRUCTOR ? "creates a " + m.ownerName() : "calls " + m.ownerName() + "." + m.name();
+            String what = switch (m.kind()) {
+                case CONSTRUCTOR -> "creates a " + m.ownerName();
+                case CONVERT -> "takes the record " + m.name() + " as a " + m.ownerName() + " (its fields as the constructor's parameters)";
+                default -> "calls " + m.ownerName() + "." + m.name();
+            };
             candidates.add(new Candidate(id, "library", what + " of the library " + chain.library().id() + " (" + chain.library().java()
                     + ") in place of " + partLabel + "; not equivalence-checked. " + (m.params().isEmpty() ? "No arguments"
                     : "Its arguments (" + chain.describeBinding(m, o.bindings().getFirst()) + (o.bindings().size() > 1 ? ", or another order" : "") + ")")
@@ -182,7 +186,7 @@ final class LibrarySite {
         List<LibraryChain.Out> outs = chain.ends(type(), mask);
         if (outs.size() == 1) {
             out = outs.getFirst();
-            return lifetime();
+            return fields();
         }
         List<Candidate> candidates = new ArrayList<>();
         Map<String, LibraryChain.Out> byId = new LinkedHashMap<>();
@@ -193,8 +197,40 @@ final class LibrarySite {
         }
         return List.of(decision("result", partLabel + ": choose which COBOL item receives the result", candidates, chosen -> {
             out = byId.get(chosen);
-            return lifetime();
+            return fields();
         }));
+    }
+
+    /**
+     * The field pairing of each record conversion the chain uses (a record of a claimed data
+     * copybook to or from a library class), asked once per record and class in the program: a
+     * later use site reuses the answer, and a conversion with one exact pairing is not asked.
+     */
+    private List<Decision> fields() {
+        for (LibraryChain.RecordMapping m : chain.conversions(steps, out)) {
+            if (chain.decided(m)) {
+                continue;
+            }
+            if (m.pairings().size() == 1) {
+                chain.decide(m, m.pairings().getFirst());
+                continue;
+            }
+            List<Candidate> candidates = new ArrayList<>();
+            Map<String, int[]> byId = new LinkedHashMap<>();
+            for (int[] p : m.pairings()) {
+                String id = "fields:" + String.join(",", java.util.Arrays.stream(p).mapToObj(i -> m.fields().get(i).item().cobolName()).toList());
+                byId.put(id, p);
+                candidates.add(new Candidate(id, "library", "record " + m.record().cobolName() + " (copybook " + m.copybook() + ") as a "
+                        + m.constructor().ownerName() + ": " + m.describe(p) + "; decided once for the record in this program",
+                        chain.construct(m, p).toString(), List.of(), List.of(m.constructor().doc())));
+            }
+            return List.of(decision("fields", partLabel + ": choose which field of " + m.record().cobolName() + " each part of "
+                    + m.constructor().ownerName() + " is", candidates, chosen -> {
+                        chain.decide(m, byId.get(chosen));
+                        return fields();
+                    }));
+        }
+        return lifetime();
     }
 
     private List<Decision> lifetime() {

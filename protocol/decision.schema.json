@@ -61,7 +61,7 @@
           "properties": {
             "id": {"type": "string"},
             "java": {"type": "string", "description": "Maven coordinates or source path"},
-            "step": {"enum": ["start", "args", "next", "result", "lifetime"]},
+            "step": {"enum": ["start", "args", "next", "result", "fields", "lifetime"]},
             "chain": {"type": "array", "items": {"type": "string"}, "description": "The calls chosen so far"},
             "part": {
               "type": "object",
