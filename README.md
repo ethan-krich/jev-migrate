@@ -133,12 +133,40 @@ it).
 Jev can also choose a setting the source does not state, such as the collating sequence a
 program was written for, by reading the code that depends on it; every program is then
 translated again with that value (see [setting decisions](docs/worker-protocol.md#setting-decisions)).
-`./scripts/jev-smoke.sh` runs the two projects in
+`./scripts/jev-smoke.sh` runs the setting projects in
 [`examples/cobol-to-java-jev`](examples/cobol-to-java-jev/projects.py) against the live API and
 says whether Jev's pick matches the setting each program was written for
 (`OPENROUTER_API_KEY=... ./scripts/jev-smoke.sh`, or `TYPESAFE_API_KEY=...`; it also reads them
 from a git-ignored `.env`, see `.env.example`). Set `JEV_VERBOSE=1` to include the worker log.
 The script builds the project before running and is not part of any test suite.
+
+### Mapping COBOL parts to Java libraries (opt-in, not equivalence-checked)
+
+When a team has already replaced some COBOL routines with a Java library, the translation can
+call that library instead of translating those routines:
+
+```python
+from cobol_to_java import Cobol, Java, Library, libraries
+
+libs = libraries()
+libs.add(Library(id="acme.dates", cobol=Cobol.path("common/dates/"),
+                 java=Java.maven("com.acme:acme-dates:2.3.1")))   # installed, with its sources jar
+result = transpile("src", output="out", libraries=libs, target_project="../billing-app", provider=jev)
+print(result.equivalence, [(u.part, u.outcome, u.chain) for lib in result.libraries_used for u in lib.uses])
+```
+
+A library can claim called programs (by PROGRAM-ID or path), intrinsic functions, MOVE / DISPLAY /
+ACCEPT, system routines, paragraphs, and copybooks (procedure code, or a data record that converts
+to a library class at the call). The worker reads the library's public API from its sources
+(nothing is downloaded) and each use becomes a chain of `library_call` decisions: which call
+starts it, how the COBOL items bind to its parameters, further calls on the result, which item
+receives it. Every step also offers `cobol:translate`, the exact translation. **Library calls are
+not checked against the original COBOL**: each one is flagged in the Java, the report and the
+first section of `review.md`, and the CLI says to run your tests against both the original
+program and the translation. Details: [library mappings](docs/mapping-api.md#library-mappings).
+The third smoke project, `billing`, maps its date routines to a small Java library; the smoke run
+installs it into a scratch Maven repository, lets Jev build each call, and runs the library
+translation next to the plain one (`JEV_PROJECTS=billing ./scripts/jev-smoke.sh`).
 
 Settings the source does not determine (character set, out-of-range policy, file paths, …) go
 in a [`Dialect`](docs/mapping-api.md#dialect-project-settings):
@@ -229,8 +257,9 @@ The fixtures avoid that pattern.
 | `translators/cobol-to-java/java/` | Gradle build: worker, `runtime/` support library, `proleap/` parser build |
 | `translators/cobol-to-java/python/` | `cobol_to_java`: default mappings, `Layout`, language-pair registration |
 | `translators/cobol-to-java/fixtures/` | COBOL fixtures + recorded GnuCOBOL output |
-| `python/` | `transpiler`: public API, registry, providers (deterministic, static, Jev) and the provider process, callbacks, protocol types |
-| `protocol/` | JSON schemas: worker messages, mappings, decisions |
+| `python/` | `transpiler`: public API, registry, library registry, providers (deterministic, static, Jev) and the provider process, callbacks, protocol types |
+| `protocol/` | JSON schemas: worker messages, mappings, decisions, providers, libraries |
+| `examples/cobol-to-java-jev/` | the projects of `scripts/jev-smoke.sh` (settings, and `billing` with a Java date library) |
 | `tests/` | integration, equivalence, benchmarks (pytest) |
 | `third_party/proleap-cobol-parser` | ProLeap 4.0.0 submodule (MIT), pinned commit |
 

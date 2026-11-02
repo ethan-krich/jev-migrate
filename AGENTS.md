@@ -20,6 +20,18 @@
 - No CI config, monorepo frameworks or extra services. Shell scripts coordinate CMake, Gradle
   and uv.
 
+## Library mappings
+
+- `transpile(libraries=...)` is the one opt-in exception to exact equivalence: a claimed COBOL
+  part may call an installed Java library. Keep it narrow: every use is a `library_call` decision
+  (never chosen silently, `cobol:translate` always offered, nothing written while pending), every
+  use is flagged (Java comment, class Javadoc, report `libraries_used` / `equivalence`,
+  `review.md`, CLI), candidates come only from the library's declarations through exact
+  `JavaTypes` pairs, and nothing is downloaded (local Maven / Gradle caches, sources jar).
+- Without `libraries=` the output, facts and fingerprints must stay unchanged.
+- The library facts and the `cobol.*.library` rules are public API like handler ids: update
+  `cobol_to_java/mappings.py` with them.
+
 ## Commands
 
 `./scripts/setup.sh`, `build.sh`, `test.sh [cpp|java|python]`, `run.sh`.

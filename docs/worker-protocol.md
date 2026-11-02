@@ -8,7 +8,8 @@ The orchestrator and a translator worker exchange newline-delimited JSON:
 Schemas: [`protocol/worker.schema.json`](../protocol/worker.schema.json),
 [`mapping.schema.json`](../protocol/mapping.schema.json),
 [`decision.schema.json`](../protocol/decision.schema.json),
-[`provider.schema.json`](../protocol/provider.schema.json). Tests validate real traffic against
+[`provider.schema.json`](../protocol/provider.schema.json),
+[`library.schema.json`](../protocol/library.schema.json). Tests validate real traffic against
 them.
 
 ## Messages
@@ -29,17 +30,21 @@ them.
 
 Error codes: `malformed_json` (response `id` is null), `invalid_request`,
 `unsupported_protocol`, `unknown_method`, `unknown_session`, `session_exists`, `invalid_state`,
-`invalid_params`, `invalid_mapping`, `internal_error`. After any error the worker keeps serving.
+`invalid_params`, `invalid_mapping`, `invalid_library` (the COBOL or Java side of
+`initialize.libraries` names something that does not exist; `details.problems` lists every
+problem), `library_unavailable` (a library's source cannot be read: not in the local caches, or
+installed without its sources jar; the message says how to fetch it), `internal_error`. After any
+error the worker keeps serving.
 
 ## Methods
 
 | Method | Params | Result |
 |---|---|---|
-| `initialize` | `source_root`, `output_root` (absolute), `target_language`, `files: [{path, role: program\|copybook}]`, `mappings`, `layout`, `options` (the dialect keys of [`Dialect`](mapping-api.md#dialect-project-settings), plus `source_encoding`: `ISO-8859-1`; any other key is `invalid_params`), `settings` (values chosen for [setting decisions](#setting-decisions), written over `options`; only fields a setting decision offers), `copybook_paths`, `importance` (the [importance table](#importance)), `context` (`{max_depth, max_chars}`, the [context](#decision-context) budget) | `programs: [{file, status, program_id, package, class, output_path, diagnostics}]`, `dialect` (the settings in effect). Parse failures are per-file diagnostics, not errors. |
+| `initialize` | `source_root`, `output_root` (absolute), `target_language`, `files: [{path, role: program\|copybook}]`, `mappings`, `layout`, `options` (the dialect keys of [`Dialect`](mapping-api.md#dialect-project-settings), plus `source_encoding`: `ISO-8859-1`; any other key is `invalid_params`), `settings` (values chosen for [setting decisions](#setting-decisions), written over `options`; only fields a setting decision offers), `copybook_paths`, `importance` (the [importance table](#importance)), `context` (`{max_depth, max_chars}`, the [context](#decision-context) budget), `libraries` (optional, [library mappings](#library-mappings)) | `programs: [{file, status, program_id, package, class, output_path, diagnostics}]`, `dialect` (the settings in effect), `libraries: [{id, java, source, hash, classes, members, skipped}]` (with `libraries`). Parse failures are per-file diagnostics, not errors. |
 | `translate` | `files` (relative paths; default all) | `files: [...]`, `decisions: [request…]`. Status `incomplete` if any file has pending decisions or failed. |
 | `resolve` | `resolutions: [{decision_id, fingerprint?, selection: {kind: "candidate", candidate_id}}]` | `applied`, `rejected: [{decision_id, code, message}]`, `new_decisions` (raised by a newly applied structural candidate), `pending` |
 | `expand_context` | `decision_id`, `refs: [ref]`, `max_chars?` | `decision_id`, `refs` (the nodes with their text, then their neighbours one level deeper as truncated nodes), `rejected: [{ref, code: unknown_ref, message}]`. An unknown `decision_id` is `invalid_params`. |
-| `finalize` | — | Writes all files **only** if every program is translated with no pending decision; else `incomplete` with `blocking` and `pending`, nothing written. Result: `files_written`, `programs`. |
+| `finalize` | — | Writes all files **only** if every program is translated with no pending decision; else `incomplete` with `blocking` and `pending`, nothing written. Result: `files_written`, `programs`; with libraries also `libraries_used` and `equivalence` (both written or not). |
 | `shutdown` | — (no session) | `ok`, then the process exits 0 |
 
 Resolution rejection codes: `unknown_decision`, `already_resolved`, `fingerprint_mismatch`,
@@ -92,6 +97,22 @@ decision per slot (in `resolve.new_decisions`), each with its own validated cand
 fact `slot`, so every question stays a flat choice. Nothing is generated until every slot is
 resolved.
 
+### Library mappings
+
+`initialize.libraries` is `{version: 1, libraries: [{id, source: [selector], target, expose?,
+hints?, max_chain?}], caches?: {maven, gradle}, target_project?}`
+([library.schema.json](../protocol/library.schema.json)). The worker indexes each library's Java
+source at `initialize` (a Maven `target` is looked up in `caches`, never downloaded) and checks
+the selectors against the parsed programs. A use of a claimed part is a `library_call` decision
+with a `library` object `{id, java, step, chain, part: {kind, name, file?, text?}}`; its facts
+hold `library`, `library_hash`, `step` and `chain`, so the fingerprint changes with the library's
+sources and with the steps chosen before. Every candidate set ends with `cobol:translate`.
+Resolving a step returns the next step in `new_decisions`; the statement is translated when the
+last step is resolved. `finalize` reports `libraries_used: [{id, java, declared_in_target?,
+target_note?, uses: [{program, file, line, selector, part, outcome, chain, reason?, decided_by?,
+java?}]}]` (`outcome`: `library`, `translated` or `pending`) and `equivalence` (`partial` when
+any use calls a library, else `exact`). The orchestrator copies both into the report unread.
+
 ### Setting decisions
 
 A decision with `setting: {field, values: {candidate_id: value}}` asks for a project setting the
@@ -118,7 +139,8 @@ provider. It speaks the same NDJSON envelope with protocol `transpiler-provider/
 - On startup it emits a `ready` event with `{provider, version}`.
 - `decide {decisions, extra_context?}` returns `{answers}`. An answer is
   `{decision_id, fingerprint?, gate, selection?, need_context?, confidence?, probabilities?,
-  review_priority?, rationale?}`. `gate` is `passed`, `below_floor`, `abstained` or
+  review_priority?, rationale?, held_reason?}` (`held_reason`: why the provider holds a decision
+  without choosing, such as `too_many_options`; reported on the held entry). `gate` is `passed`, `below_floor`, `abstained` or
   `need_context`, in which case `need_context` lists the truncated refs to open.
 - `extra_context: [{decision_id, expansions, expansions_left, refs}]` carries the nodes
   returned by `expand_context` when a decision is asked again.

@@ -5,7 +5,7 @@
 | Layer | Owns | Must not |
 |---|---|---|
 | **Python** `transpiler` (`python/`) | Public API (`transpile`), mutable `MappingRegistry`, result objects, provider and callback types, language-pair discovery (entry point `transpiler.language_pairs`), the provider process (`transpiler.providers.serve`), `JevProvider` and its `Gate` | Contain COBOL or Java transformation logic |
-| **Python** `cobol_to_java` (`translators/cobol-to-java/python/`) | Default mapping table (handler ids only), `DEFAULT_IMPORTANCE`, `Layout` folder convention, handler/fact catalog for early validation | Implement semantics |
+| **Python** `cobol_to_java` (`translators/cobol-to-java/python/`) | Default mapping table (handler ids only), `DEFAULT_IMPORTANCE`, `Layout` folder convention, handler/fact catalog for early validation, the `Library` / `Cobol` / `Java` declarations (data only; the language-agnostic `LibraryRegistry` is in `transpiler.libraries`) | Implement semantics |
 | **C++** `transpiler-core` (`core/`) | File discovery (dirs, files, globs incl. `**`), translator selection from `translators/*/translator.json`, worker and provider process lifecycle, timeouts, NDJSON protocol, decision batching/validation/caching, the gate outcome, the `expand_context` loop, run report and `review.md` | Know about COBOL, Java, ProLeap or JavaParser |
 | **Java** worker (`translators/cobol-to-java/java/`) | Parsing (ProLeap), semantic checks, mapping-rule selection, builtin handlers, JavaParser AST construction, session state (partial ASTs, decisions), importance tiers, the decision context graph, writing output | Execute Python; write output while decisions are pending |
 | **Java** runtime (`…/java/runtime/`) | COBOL data semantics used by generated code: byte-addressed `Storage` per level-01 record with `AlphanumericField` / `NumericField` (zoned, packed, binary) / `EditedField` views (GnuCOBOL byte images), `Bounds` (run-time range checks), `StringOps`, `Functions`, `CobolFile` (sequential), `RelativeFile`, `IndexedFile`, `SortFile`, `PerformStack`, `Display`, `ProgramSupport` (CALL, LINKAGE binding) | Depend on anything; it is copied into every output |
@@ -19,15 +19,17 @@ transpile(source, mappings, layout, provider)                       [Python]
 transpiler-core run --job job.json                                  [C++]
   1. discover()  -> programs + copybooks under source_root
   2. start worker (translator.json command), wait for `ready` event
-  3. initialize  { files, layout, mappings, options }   ──▶ parse ALL programs, name classes,
-                                                             detect collisions, PROGRAM-ID directory
+  3. initialize  { files, layout, mappings, options,     ──▶ parse ALL programs, name classes,
+                   libraries? }                             detect collisions, PROGRAM-ID directory,
+                                                             index each library's Java source
   4. translate   { files: [one program] }  × N          ──▶ per statement: facts -> rule -> handler
                                                              -> JavaParser nodes, or placeholder + decision
   5. decision rounds: batch pending -> cache -> provider.decide -> [expand_context -> ask again]
      -> gate passed? -> validate(candidate offered, fingerprint)
      -> resolve { resolutions }                         ──▶ replace placeholders; nested and slot
                                                              decisions return
-  6. finalize                                           ──▶ writes Java + runtime only if nothing pending
+  6. finalize                                           ──▶ writes Java + runtime only if nothing pending;
+                                                             reports libraries_used and equivalence
   7. shutdown; write <output>/transpile-report.json and review.md; print report on stdout
   ▼
 TranspileResult(status ok|incomplete|failed, programs, decisions, files_written)   [Python]
@@ -70,7 +72,8 @@ provider can only pick from **validated** options. Unsupported data declarations
 `OCCURS`) are decisions without candidates; they block output.
 
 Decision reasons: `missing_mapping`, `unsupported_construct`, `ambiguous_mapping`,
-`missing_target_api`, `invalid_mapping`, `callback_required`. The fingerprint is a SHA-256 over
+`missing_target_api`, `invalid_mapping`, `callback_required`, `library_call` (see
+[Library mappings](#library-mappings)). The fingerprint is a SHA-256 over
 the reason, location, text, facts, candidate ids, dialect and importance. The C++ cache keys on
 it.
 
@@ -216,6 +219,44 @@ as the reference to prove an exact one.
 
 Like every decision, these may get worker-validated candidates over time; a model choosing
 among them still never writes target code itself.
+
+## Library mappings
+
+Library mappings are the first deliberate exception to "the code behaves exactly like the
+original". With `transpile(libraries=...)`, a part of the COBOL program (a called program, an
+operation, a paragraph, a copybook) is declared to be implemented by a Java library already
+installed in the target project, and its uses may call that library instead of translating the
+COBOL. The user accepts that such a use is not equivalent by construction; the design keeps that
+exception narrow ([mapping-api.md](mapping-api.md#library-mappings) has the details):
+
+- **Opt-in only.** Without `libraries=` the output, the facts and the fingerprints are unchanged,
+  and equivalence still holds. The runtime library is never replaced.
+- **Never chosen silently.** Each use is a chain of flat `library_call` decisions (start, args,
+  next, result, fields, lifetime), each also offering `cobol:translate`, the exact translation,
+  which is generated first. Nothing is written while one is pending; the gate is the same as for
+  every other decision.
+- **Always flagged**, in the Java, the class Javadoc, `transpile-report.json`
+  (`libraries_used`, `equivalence: partial`), `review.md` (first section: "run your tests against
+  both the original program and the translation") and the CLI.
+- **Still no invented code.** The worker indexes the library's sources with JavaParser
+  (`library.JavaIndex`) and generates every candidate as JavaParser nodes; arguments and results
+  bind only through the exact `JavaTypes` pairs, so an item without an exact pair gives no
+  candidate. Jev only picks.
+- **Offline.** Installed dependencies are read from the local Maven / Gradle caches (sources jar
+  required); translation never downloads anything. The target project's `pom.xml` /
+  `gradle.lockfile` is read as data to check the dependency is declared; no build file is
+  generated.
+- **Separation holds.** Python holds the declarations; C++ passes `libraries` to `initialize` and
+  copies `libraries_used` / `equivalence` from `finalize` into the report without reading them
+  (`review.md` renders them as a table); COBOL and Java knowledge stays in the worker.
+
+`JevProvider` asks library decisions with their own task (the candidates are untested; prefer the
+library unless nothing comes close) and caps the options it sends at
+`ContextBudget.max_option_chars`. The default is Jev's input limit, less the state, the question
+and `max_chars`, with 25% left free; `JEV_INPUT_CHARS` (32 000 characters) is provisional until it
+is measured against the live API with `scripts/jev-smoke.sh`. A decision whose options do not fit
+is held as `too_many_options` and the user is asked to narrow the library with `expose` or
+`hints`; options are never dropped to fit.
 
 ## Adding a language pair
 

@@ -230,11 +230,112 @@ fit. A pair outside the table has no binding, so there is no approximate candida
 | `BigDecimal` | any numeric item, numeric literal, `ZERO`, `RETURN-CODE` | MOVE to a numeric item |
 | `boolean` | level-88 condition-name | (no receiver) |
 
-No default rule raises method candidates yet; they are the building block for mapping library
-calls.
+No default rule raises method candidates; [library mappings](#library-mappings) build their calls
+from the same `JavaTypes` table.
 
 A decision's [importance](#importance) tier does not change who answers it. It only sets the
 confidence floor when `JevProvider` runs with a `Gate`.
+
+## Library mappings
+
+A library mapping says that a part of the COBOL program is implemented by a Java library **already
+installed in the target project**. Each use of that part becomes a chain of `library_call`
+decisions whose candidates call the library, next to `cobol:translate`, the exact translation.
+This is the one deliberate exception to "the code behaves exactly like the original", so it is
+kept narrow:
+
+- **Opt-in.** Without `libraries=` nothing changes (output, facts and fingerprints included).
+- **Never silent.** Every use, and every step of building its call, is a decision;
+  `DeterministicProvider` leaves it pending and `finalize` writes nothing while it is pending.
+- **Always flagged**: a `// Library <id>, not equivalence-checked: …` comment on the call, a line in
+  the class Javadoc, `libraries_used` and `equivalence: "partial"` in `transpile-report.json`, a
+  **Library mappings** section at the top of `review.md`, a warning line in the CLI summary, and
+  `result.libraries_used` / `result.equivalence`.
+- **No invented code.** Candidates are generated as JavaParser nodes from the library's own
+  declarations; arguments and results bind only through the exact `JavaTypes` pairs above.
+- **Offline.** A Maven coordinate is looked up in `~/.m2/repository` or Gradle's
+  `~/.gradle/caches/modules-2/files-2.1` (`MAVEN_REPOSITORY`, `GRADLE_USER_HOME`, or
+  `libraries(caches=...)`); nothing is downloaded. The **sources jar** is required (the index reads
+  source and Javadoc); without it `initialize` fails with `library_unavailable` and the command
+  that fetches it (`mvn dependency:sources`, or Gradle's `idea { module { downloadSources = true } }`).
+
+```python
+from cobol_to_java import Cobol, Java, Library, libraries
+
+libs = libraries()
+libs.add(Library(
+    id="acme.dates",
+    cobol=[Cobol.path("common/dates/"),                  # every program under a directory (a file or a glob too)
+           Cobol.program("DATEFMT"),                     # a called program by PROGRAM-ID, in the project or not
+           Cobol.operation("FUNCTION INTEGER-OF-DATE"),  # an intrinsic function, MOVE / DISPLAY / ACCEPT, CALL 'routine'
+           Cobol.paragraph("CALC-DUE", program="BILLING"),
+           Cobol.copybook("DATEREC")],                   # a procedure copybook, or a data record (below)
+    java=Java.maven("com.acme:acme-dates:2.3.1"),         # or Java.path("src/main/java"), Java.path("X.java"), Java.jar("x-sources.jar")
+    expose=["com.acme.dates.*"],                         # optional: the classes offered
+    hints={"DATEFMT": ["com.acme.dates.Dates.format(int,String)"]},  # optional: the start calls for one part
+    max_chain=4,                                         # most calls one use may chain
+))
+result = transpile("src", output="out", libraries=libs, target_project="../billing-app", provider=JevProvider(...))
+```
+
+Python checks the shape (unique ids, each part claimed once, paths that exist, `group:artifact:version`);
+the worker checks the rest at `initialize` and rejects the whole set with `invalid_library`, listing
+every problem (a path matching no program, a missing paragraph or copybook, a hint naming no member).
+
+### What a library can claim
+
+| Selector | Use site | Inputs (arguments) | Output (result) |
+|---|---|---|---|
+| `Cobol.program` / `Cobol.path` | each `CALL 'X'` (rule `cobol.call.library`, fact `program_in_library`) | the `USING` items | the `RETURNING` item; else one `BY REFERENCE` item (which may also be read), `RETURN-CODE`, or nothing (a `void` call). `NOT ON EXCEPTION` runs after the call; `ON EXCEPTION` never does |
+| `Cobol.operation("CALL 'CBL_X'")` | each CALL of that system routine | as for a program | as for a program |
+| `Cobol.operation("FUNCTION X")` | each statement using the function, wherever it appears | the function's arguments | the function's value (`int`, `long`, `BigDecimal` for a numeric function, `String` otherwise); the statement around it is generated as usual, so it stays exact |
+| `Cobol.operation("MOVE" / "DISPLAY" / "ACCEPT")` | each statement of the verb (rules `cobol.{move,display,accept}.library`, fact `operation_in_library`) | MOVE: the sending item; DISPLAY: its operands; ACCEPT: none | MOVE / ACCEPT: the receiver; DISPLAY: nothing |
+| `Cobol.paragraph` (paragraph or section), `Cobol.copybook` (a paragraph whose body is one COPY of it) | each `PERFORM` of it (rule `cobol.perform.library`, fact `paragraph_in_library`) | the items it reads before writing them, in source order | the one item it writes, or the group all its writes belong to; nothing if it writes none |
+| `Cobol.copybook` (a data record) | wherever that record is an input or output above | the record converted to a library class | the class converted back into the record |
+
+A paragraph gets library candidates only when it is self-contained: this PERFORM runs it once, it
+has no GO TO, ALTER, PERFORM, STOP RUN, GOBACK or EXIT PROGRAM, it is not inside a
+`PERFORM … THRU` range, and it writes one item or the items of one group. The paragraph body is
+always translated as well (it may be fallen into or PERFORMed elsewhere), and so is a claimed
+program.
+
+A **data record** of a claimed copybook (direct elementary fields, no tables, at most six)
+converts to a library class with a public constructor taking one parameter per field and, for each
+parameter, an accessor of the same name and type (`year()` or `getYear()`). `Storage` keeps the
+record's bytes; only the library call converts: `new CalendarDate(drYear.intValue(), …)` on the way
+in, each accessor stored into its field as MOVE stores it on the way out. A record taken as an
+object can start a chain (`library:<id>:CalendarDate.of(DATE-REC)`).
+
+### Building a call
+
+Each use is asked one flat step at a time; a step is asked only when the library side has more
+than one option there (a forced step is taken without a decision), and every asked step also
+offers `cobol:translate`, which abandons the library for that use:
+
+| Step | Candidates |
+|---|---|
+| `start` | a static method, a constructor, or a record taken as an object, whose arguments bind exactly to some inputs: `library:<id>:Dates.addDays(int,int)`, `library:<id>:DateFormatter.new()` |
+| `args` | how the inputs bind to the chosen call's parameters: `args:0,1` (the input each parameter takes) |
+| `next` | an instance method on the value so far (`library:<id>:CalendarDate.plusDays(int)`), or `end` |
+| `result` | which output receives the value: `result:item:WS-DUE-DATE`, `result:return_code`, … |
+| `fields` | for a record conversion, which field each constructor parameter is: `fields:DR-YEAR,DR-MONTH,DR-DAY`; asked once per record and class in a program |
+| `lifetime` | for a chain that starts with a constructor without arguments: `lifetime:per_call` or `lifetime:per_program` (a field and accessor in the generated class) |
+
+Every required input is passed exactly once across the chain; the chain ends only when its value
+has an exact pair with an output; it is at most `max_chain` calls; and a step is offered only if a
+complete chain can still be built from it. Chains follow types the library declares (and the
+`JavaTypes` table at their ends); inherited members and JDK types outside the table are not
+followed. Each decision's facts hold `library`, `library_hash` (the content hash of the library's
+sources) and `chain` (the steps so far), so a cached answer is never reused across library
+versions or different earlier steps. The decision's `library` object carries the step, the chain
+and the claimed part's COBOL source for the provider; `JevProvider` uses a task that tells Jev the
+candidates are untested and to prefer the library unless no candidate comes close.
+
+Imports are added once per file; a library type whose simple name clashes (with another library
+type, a runtime class, a class of the file or a `java.lang` name) stays fully qualified. No build
+file is generated: with `target_project=`, the worker checks that each library the output calls is
+declared there (`pom.xml` direct dependencies with literal versions, or `gradle.lockfile`); a
+library it cannot confirm, or that is missing, is a warning, never a failure.
 
 ## Unsupported
 
@@ -312,7 +413,7 @@ m.to_dict()                                   # {"version": 1, "rules": [...]}  
 |---|---|
 | `id` | Stable, unique. Defaults use `cobol.*`. `add()` without `id` derives `user.<op>.<handler-or-strategy>[.N]`. |
 | `source` | Operation (COBOL verb): `MOVE`, `ADD`, `GOBACK`, `GO_TO`, `EXEC_SQL`, … |
-| `strategy` | `builtin` (needs `handler`), `unresolved`, or `callback` (needs `script`, `function`) |
+| `strategy` | `builtin` (needs `handler`), `unresolved`, `callback` (needs `script`, `function`), or `library` (a `library_call` decision where `transpile(libraries=...)` claims the part; the defaults `cobol.*.library` use priority 110) |
 | `when` | Conditions over [facts](#facts-usable-in-when); a list matches any of its values |
 | `priority` | Integer; higher wins |
 
@@ -332,20 +433,20 @@ Only plain JSON crosses process boundaries: no callables, AST objects or Python 
 
 | Operation | Facts |
 |---|---|
-| MOVE | `source_category` (`alphanumeric`, `numeric`, `numeric_edited`, `alphanumeric_edited`, `alphanumeric_literal`, `numeric_literal`, `figurative`, `group`, `index`, `condition`, `unsupported`, `corresponding`; a reference modification is `alphanumeric`), `target_category`, `source_figurative` (`zero`, `space`, `quote`, `high_value`, `low_value`, `all`, null). A MOVE CORRESPONDING pair has the categories of its items. |
+| MOVE | `source_category` (`alphanumeric`, `numeric`, `numeric_edited`, `alphanumeric_edited`, `alphanumeric_literal`, `numeric_literal`, `figurative`, `group`, `index`, `condition`, `unsupported`, `corresponding`; a reference modification is `alphanumeric`), `target_category`, `source_figurative` (`zero`, `space`, `quote`, `high_value`, `low_value`, `all`, null). A MOVE CORRESPONDING pair has the categories of its items. With libraries: `operation_in_library`. |
 | ADD / SUBTRACT / MULTIPLY | `form` (`to`/`from`/`by`, `giving`, `corresponding`), `rounded`, `size_error` |
 | DIVIDE | `form` (`into`, `into_giving`, `by_giving`), `rounded`, `size_error`, `remainder` |
 | COMPUTE | `rounded`, `size_error`, `receivers` |
-| DISPLAY | `upon` (device after resolving mnemonic names), `no_advancing`, `operands` |
+| DISPLAY | `upon` (device after resolving mnemonic names), `no_advancing`, `operands`; with libraries: `operation_in_library` |
 | IF | `has_else` |
-| PERFORM | `form` (`procedure`/`inline`), `loop` (`once`, `times`, `until`, `varying`), `test`, `thru` |
+| PERFORM | `form` (`procedure`/`inline`), `loop` (`once`, `times`, `until`, `varying`), `test`, `thru`; with libraries: `paragraph_in_library` |
 | STOP | `kind` (`run`, `literal`, `giving`) |
 | EXIT | `kind` (`plain`, `program`, `paragraph`, `section`, `perform`, `perform_cycle`, `invalid`) |
-| CALL | `program`, `program_kind` (`literal`/`identifier`), `program_in_project`, `using` |
+| CALL | `program`, `program_kind` (`literal`/`identifier`), `program_in_project`, `using`; with libraries: `program_in_library` (a claimed program or system routine) |
 | CANCEL | (none) |
 | SET | `form` (`true`, `false`, `to`, `on_off`, `up_by`, `down_by`) |
 | EVALUATE | `subjects`, `has_other`, `has_thru` |
-| ACCEPT | `from` (`stdin`, `device`, `environment`, `argument_number`, `argument_value`, `command_line`, `date`, `date_yyyymmdd`, `day`, `day_yyyyddd`, `day_of_week`, `time`, `microsecond_time`, `other_date`, `escape_key`, `message_count`) |
+| ACCEPT | `from` (`stdin`, `device`, `environment`, `argument_number`, `argument_value`, `command_line`, `date`, `date_yyyymmdd`, `day`, `day_yyyyddd`, `day_of_week`, `time`, `microsecond_time`, `other_date`, `escape_key`, `message_count`); with libraries: `operation_in_library` |
 | EXHIBIT | `named`, `changed` |
 | INITIALIZE | `replacing`, `to_value`, `with_filler`, `then_default` |
 | SEARCH | `all`, `varying`, `at_end` |
