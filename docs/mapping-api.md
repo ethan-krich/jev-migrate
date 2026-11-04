@@ -199,6 +199,7 @@ these stay pending. With `default_mappings()` there are these kinds:
 | READ with a lock phrase | `READ … WITH KEPT LOCK / NO LOCK / WAIT` (`unsupported_construct`): record locks matter only between processes | `builtin:read_file_unlocked`: the READ without the phrase, correct when no other process uses the file at the same time |
 | CALL of a program outside the project | `CALL 'X'` and `X` is not in the project (`missing_target_api`) | `builtin:call_external`, whose slots are separate decisions, and nothing is generated until every slot is chosen: `target` (`target:not_found`, GnuCOBOL's behaviour when the module is absent at run time: `ON EXCEPTION`, or the run unit ends with "module not found"; or `target:program:<name>`, a project program whose USING items match, under another name; never the calling program itself) and, with `USING`, `args` (`args:as_written`, or `args:by_content`, correct only if the target never changes its parameters) |
 | An unset `encoding`, `collating_sequence`, `out_of_range`, `sync_alignment` or `move_overlap` | a statement depends on the setting (`dialect:<field>`, `missing_mapping`) | the field's values (`setting:ascii`, `setting:ebcdic`, …), with every statement that depends on it as evidence; the program is translated again with the chosen value. See [Dialect](#dialect-project-settings) |
+| Runtime or JDK | with `options.jdk_alternatives` (on by default when Jev decides): a statement a builtin handler and its [JDK twin](#runtime-or-jdk) can both translate (`runtime_choice`) | `builtin:<handler>` (`uses: runtime`, exact) and `builtin:<handler>_jdk` (`uses: jdk`, approximate); only the twin when the runtime handler cannot translate the statement exactly |
 | A handler choice | only after the project changes the rules: a removed rule or `strategy="unresolved"` (`missing_mapping`), rules that tie (`ambiguous_mapping`), or a rule whose handler does not apply (`invalid_mapping`) | the verb's handlers that generate for that statement, e.g. the other MOVE handlers, or `compute` (`+ - *` only) for COMPUTE |
 
 Every default rule covers every fact value of its verb, except ACCEPT
@@ -235,6 +236,25 @@ from the same `JavaTypes` table.
 
 A decision's [importance](#importance) tier does not change who answers it. It only sets the
 confidence floor when `JevProvider` runs with a `Gate`.
+
+### Runtime or JDK
+
+`cobol_to_java.JDK_TWINS` maps a builtin handler to its JDK twin; a twin is in `BUILTIN_HANDLERS`
+and `CANDIDATE_HANDLERS` (no default rule selects it). The twin generates the same statement with
+plain JDK calls, so it is approximate; its description says how:
+
+| Handler | JDK twin | Generates | Approximate because | No JDK form (the runtime handler translates it) |
+|---|---|---|---|---|
+| `add`, `subtract`, `multiply`, `divide` | `<handler>_jdk` | `r.store(BigDecimal.valueOf(r.get().doubleValue() + …), rounded, sizeError)` | binary floating point (`0.29 * 100` is `28.999999999999996`, which a `PIC 999` receiver truncates to 28); more than 15 significant digits are lost; division by zero is a `NumberFormatException`, not SIZE ERROR | CORRESPONDING, REMAINDER |
+| `compute_gnucobol` | `compute_gnucobol_jdk` | doubles, `Math.pow` for any `**`, and `java.lang.Math` for `SQRT`, `LOG`, `LOG10`, `EXP`, `EXP10`, `SIN`, `COS`, `TAN`, `ASIN`, `ACOS`, `ATAN`, `PI`, `E`, `RANDOM`, `ABS`, `MAX`, `MIN`, `MOD`, `REM`, `INTEGER`, `INTEGER-PART`, `SUM`, `MEAN` (other functions are computed by the runtime and converted) | as above; GnuCOBOL's own floating-point functions differ in the last digits too | functions with neither form (`FACTORIAL`, `VARIANCE`, …) |
+| `display` | `display_jdk` | `System.out.println(a + b)` / `print` / `System.err` of the operands' DISPLAY text | characters outside ASCII use the JVM's charset when no runtime DISPLAY ran before | UPON PRINTER |
+| `if` | `if_jdk` | numeric relations on doubles, `String.equals` / `compareTo`, sign tests as `x > 0.0`, class tests with `Character`, `= SPACES` as `chars().allMatch(…)` | strings of different lengths are not space-padded (`"AB"` and `"AB "` differ); Unicode letters and digits pass class tests | EBCDIC ordering, ordered figurative comparisons, user CLASS tests |
+| `string` | `string_jdk` | `new StringBuilder().append(…)`, DELIMITED BY a literal as `split(Pattern.quote(d), 2)[0]` | the whole receiver is replaced (space-padded), where COBOL keeps its characters after the last one written | POINTER, OVERFLOW |
+| `unstring` | `unstring_jdk` | `src.get().split(regex, -1)`, `ALL` as `(?:…)+`, `OR` as `\|`; a receiver without a field keeps its value | a numeric receiver takes `new BigDecimal(field.trim())` | no DELIMITED BY, DELIMITER IN, COUNT IN, POINTER, TALLYING, OVERFLOW |
+| `inspect` | `inspect_jdk` | TALLYING ALL / LEADING / CHARACTERS with `split` and regular expressions, REPLACING ALL / FIRST / CHARACTERS with `replace` / `replaceFirst` / `repeat` | several phrases are applied one after another, where COBOL scans once for all of them | BEFORE / AFTER INITIAL, CONVERTING, REPLACING LEADING, numeric items |
+
+A statement nested in an IF is its own choice, asked once the IF is chosen. Fields stay runtime
+fields (`NumericField`, `AlphanumericField`) either way.
 
 ## Library mappings
 

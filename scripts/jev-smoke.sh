@@ -6,6 +6,7 @@
 # a Java library (libraries/acme-dates, installed into a scratch Maven repository under build/):
 # Jev builds each library call; the run prints its choices, then runs the library translation and
 # the plain COBOL translation side by side, since library calls are not equivalence-checked.
+# Translations go to generated/cobol-to-java-jev/ (git-ignored).
 # It calls the API, so it is never part of test.sh or docker.sh test.
 #   OPENROUTER_API_KEY=... ./scripts/jev-smoke.sh     # through OpenRouter (model jev-latest)
 #   TYPESAFE_API_KEY=... ./scripts/jev-smoke.sh       # TypeSafe's own API (model jev-preview)
@@ -17,27 +18,8 @@
 # Exit status: 0 when both runs finished (whatever Jev chose), 1 when one failed.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-# KEY=value lines of .env, read as data (never executed); quotes and a leading `export` are allowed.
-if [[ -f "$ROOT/.env" ]]; then
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line="${line#"${line%%[![:space:]]*}"}"
-    line="${line#export }"
-    [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
-    name="${BASH_REMATCH[1]}" value="${BASH_REMATCH[2]%$'\r'}"
-    if [[ "$value" =~ ^\"(.*)\"$ || "$value" =~ ^\'(.*)\'$ ]]; then value="${BASH_REMATCH[1]}"; fi
-    [[ -n "${!name+set}" ]] || export "$name=$value"
-  done < "$ROOT/.env"
-fi
-
-endpoint="${JEV_ENDPOINT:-$([[ -n "${OPENROUTER_API_KEY:-}" ]] && echo openrouter || echo typesafe)}"
-case "$endpoint" in
-  openrouter) key_env="${JEV_API_KEY_ENV:-OPENROUTER_API_KEY}" model="${JEV_MODEL:-jev-latest}"
-              base_url="https://openrouter.ai/api" ;;
-  typesafe)   key_env="${JEV_API_KEY_ENV:-TYPESAFE_API_KEY}" model="${JEV_MODEL:-jev-preview}"
-              base_url="${TYPESAFE_BASE_URL:-}" ;;
-  *) die "JEV_ENDPOINT must be openrouter or typesafe, not '$endpoint'" ;;
-esac
-[[ -n "${!key_env:-}" ]] || die "set OPENROUTER_API_KEY or TYPESAFE_API_KEY (this script calls the live API; $key_env is empty)"
+load_env
+jev_endpoint
 # Incremental: picks up any change to the core or the worker since the last run.
 "$ROOT/scripts/build.sh" >&2
 
@@ -105,7 +87,7 @@ for name, project in PROJECTS.items():
     jev = JevProvider(os.environ["JEV_MODEL"], api_key_env=os.environ["JEV_API_KEY_ENV"],
                       base_url=os.environ["JEV_BASE_URL"] or None,
                       timeout_seconds=float(os.environ.get("JEV_TIMEOUT_SECONDS", "120")))
-    out = root / "build/examples/cobol-to-java-jev" / name
+    out = root / "generated/cobol-to-java-jev" / name
     console.rule(Text(f"{name}: {project['about']}", style="bold cyan"))
     console.print("Translating and requesting a Jev decision…", style="cyan")
     verbose = os.environ.get("JEV_VERBOSE", "").lower() in ("1", "true", "yes")

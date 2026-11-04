@@ -211,8 +211,8 @@ as the reference to prove an exact one.
 | Construct | Decision today | Why it waits for Phase 2 |
 |---|---|---|
 | `COMP-1` / `COMP-2` (floating point) | `unsupported_construct` | IEEE results and GnuCOBOL's DISPLAY of floats depend on its C library; mainframe data uses hexadecimal floating point, which GnuCOBOL does not reproduce |
-| Floating-point intrinsic functions (`SQRT`, `LOG`, `EXP`, trigonometry, `RANDOM`, statistics, `PRESENT-VALUE`, `ANNUITY`) | `unsupported_construct` | Last-digit results differ between glibc / GMP and Java's `Math` |
-| `**` with a non-integer or negative exponent | `unsupported_construct` | Same: not provably bit-exact |
+| Floating-point intrinsic functions (`SQRT`, `LOG`, `EXP`, trigonometry, `RANDOM`, statistics, `PRESENT-VALUE`, `ANNUITY`) | `unsupported_construct`; with [`jdk_alternatives`](#runtime-or-jdk) a `runtime_choice` whose only candidate is the JDK twin (`java.lang.Math`, for the functions it covers) | Last-digit results differ between glibc / GMP and Java's `Math` |
+| `**` with a non-integer or negative exponent | `unsupported_construct`; with `jdk_alternatives` a JDK-only `runtime_choice` (`Math.pow`) | Same: not provably bit-exact |
 | `POINTER`, `ADDRESS OF`, `ALLOCATE` / `FREE`, `SET ADDRESS` | `unsupported_construct` (`ALLOCATE`: `unsupported_dialect`, ProLeap cannot parse it) | Byte-addressed storage can model offsets, not arbitrary addresses or memory shared with C |
 | `N` (national) pictures | `unsupported_construct` | GnuCOBOL 3.2's national support is incomplete, so there is no reliable reference |
 | EBCDIC data (`Dialect.encoding = ebcdic`) | `missing_mapping` / `unsupported_construct` | GnuCOBOL runs on ASCII data, so EBCDIC byte images cannot be checked against it (the EBCDIC *collating sequence* is supported) |
@@ -230,7 +230,7 @@ COBOL. The user accepts that such a use is not equivalent by construction; the d
 exception narrow ([mapping-api.md](mapping-api.md#library-mappings) has the details):
 
 - **Opt-in only.** Without `libraries=` the output, the facts and the fingerprints are unchanged,
-  and equivalence still holds. The runtime library is never replaced.
+  and equivalence still holds. A library never replaces the runtime library.
 - **Never chosen silently.** Each use is a chain of flat `library_call` decisions (start, args,
   next, result, fields, lifetime), each also offering `cobol:translate`, the exact translation,
   which is generated first. Nothing is written while one is pending; the gate is the same as for
@@ -257,6 +257,40 @@ and `max_chars`, with 25% left free; `JEV_INPUT_CHARS` (32 000 characters) is pr
 is measured against the live API with `scripts/jev-smoke.sh`. A decision whose options do not fit
 is held as `too_many_options` and the user is asked to narrow the library with `expose` or
 `hints`; options are never dropped to fit.
+
+## Runtime or JDK
+
+The second exception is the runtime library itself. The runtime reproduces GnuCOBOL exactly
+(decimal arithmetic truncated to each PICTURE, ROUNDED, SIZE ERROR, space-padded comparisons in
+the collating sequence, byte-exact output), which a statement often does not need: a loop counter
+or a progress message is the same in plain Java. With the worker option `jdk_alternatives`, a
+statement that a builtin handler and its **JDK twin** can both translate is a `runtime_choice`
+decision between the two, and Jev decides whether the runtime's exactness is needed
+([mapping-api.md](mapping-api.md#runtime-or-jdk) lists the twins):
+
+- **The same candidate API.** A twin is a builtin handler (`add_jdk`, `if_jdk`, …) whose generator
+  is its runtime handler's, run in the worker's JDK mode: doubles and `java.lang.Math` for numbers,
+  `String` / `StringBuilder` / regular expressions for text, `System.out` for DISPLAY. Both
+  candidates are generated as JavaParser nodes; each says what it `uses` (`runtime` or `jdk`), its
+  description says where the JDK one can differ, and its `docs` come from the runtime's sources or
+  from the JDK's own (`lib/src.zip` of the worker's JDK, or the file `TRANSPILER_JDK_SRC` names;
+  none when the JDK has no sources). Fields stay runtime fields: only the statement changes.
+- **One top-level prompt.** `JevProvider` asks `runtime_choice` decisions with their own task
+  (`RUNTIME_TASK`): exactness for money, amounts, totals, keys and anything written or compared;
+  the JDK for counters, indexes, diagnostics and values that are approximate by nature.
+- **Asked only by a provider that judges.** `transpile` adds the language pair's
+  `judged_options` (`{"jdk_alternatives": True}`) when the provider is Jev
+  (`provider.judges`), unless `options` sets it. With the deterministic or a static provider, and
+  in every test that does not ask for it, the output, the facts and the fingerprints are unchanged.
+- **Approximate, and visible.** A twin is not equivalence-checked: every applied pick is in the
+  Java (`// Decided by jev (confidence 0.90): builtin:add_jdk`), the report and `review.md`.
+- **No twin, no question.** When the twin cannot translate a statement (DIVIDE … REMAINDER,
+  STRING WITH POINTER, INSPECT … BEFORE INITIAL, …) the runtime handler translates it as without
+  the option. When only the twin can (`FUNCTION SQRT`, `**` with a fractional exponent), it is
+  offered alone, and Jev may abstain.
+
+Runtime and JDK statements share standard output: the runtime's `Display` points `System.out` /
+`System.err` at its own buffers (ISO-8859-1), so a JDK DISPLAY stays in order with the runtime's.
 
 ## Adding a language pair
 

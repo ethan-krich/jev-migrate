@@ -40,13 +40,20 @@ git clone --recurse-submodules <repo> && cd jev-migrate
 ./scripts/setup.sh     # checks tools, inits submodule, uv sync, fetches Gradle deps
 ./scripts/build.sh     # CMake (core), Gradle installDist (worker), uv sync
 ./scripts/test.sh      # GoogleTest via CTest, JUnit 5, pytest (unit, integration, equivalence)
-./scripts/run.sh legacy -o generated   # translates the COBOL under legacy/ (CLI)
+./scripts/run.sh legacy                # translates legacy/ into generated/ with live Jev (CLI)
+./scripts/cobol.sh -I legacy/copy legacy/MAIN.cbl   # compiles with cobc -x and runs the COBOL
+./scripts/java.sh --main com.acme.Main generated    # compiles with javac and runs the Java
 ```
 
 The scripts work from any directory. `./scripts/test.sh java` (or `cpp`, `python`) runs a single
 suite; arguments after `--` go to pytest.
 
-**Pinned toolchain.** `./scripts/docker.sh test` (or `build`, `run`, `shell`) runs the same
+`cobol.sh` and `java.sh` compile and run one program the way the equivalence tests do: the
+main program comes first for `cobc`, stdin and stdout pass through, and the exit status is the
+program's. `--data DIR` runs the program in a scratch copy of DIR's files instead of the current
+directory. `java.sh` needs `--main` when the output has more than one program class.
+
+**Pinned toolchain.** `./scripts/docker.sh test` (or `build`, `run`, `cobol`, `java`, `shell`) runs the same
 scripts in a slim Debian image with every tool version pinned, including GnuCOBOL 3.2. That is the
 reference environment for equivalence results.
 
@@ -140,6 +147,14 @@ says whether Jev's pick matches the setting each program was written for
 from a git-ignored `.env`, see `.env.example`). Set `JEV_VERBOSE=1` to include the worker log.
 The script builds the project before running and is not part of any test suite.
 
+With Jev, the runtime library is a choice too: each ADD, SUBTRACT, MULTIPLY, DIVIDE, COMPUTE,
+DISPLAY, IF, STRING, UNSTRING or INSPECT that also has a plain-JDK translation (doubles,
+`java.lang.Math`, `String`, `System.out`) is a `runtime_choice`, and Jev decides from the data
+whether the runtime's exact COBOL semantics are needed (money: yes; a loop counter: no). The JDK
+translations are approximate and every pick is noted in the Java and in `review.md`; pass
+`options={"jdk_alternatives": False}` to keep the runtime everywhere
+([Runtime or JDK](docs/mapping-api.md#runtime-or-jdk)).
+
 ### Mapping COBOL parts to Java libraries (opt-in, not equivalence-checked)
 
 When a team has already replaced some COBOL routines with a Java library, the translation can
@@ -174,8 +189,11 @@ in a [`Dialect`](docs/mapping-api.md#dialect-project-settings):
 an unset one gets a single `dialect:<field>` decision, which a provider can answer for the
 fields with a fixed set of values.
 
-From the shell: `./scripts/run.sh legacy -o generated --base-package com.acme`
-(`--mappings file.py` loads a `configure(mappings)` hook).
+From the shell: `./scripts/run.sh legacy --base-package com.acme`. It writes to `generated/`
+(git-ignored; `--output DIR` picks another folder) and resolves open decisions with the live Jev
+API, so it needs `OPENROUTER_API_KEY` or `TYPESAFE_API_KEY` in the environment or in `.env`.
+`--mappings file.py` loads a `configure(mappings)` hook. Without `--jev MODEL`,
+`uv run python -m transpiler` is the same command line run deterministically.
 
 ## Output layout
 

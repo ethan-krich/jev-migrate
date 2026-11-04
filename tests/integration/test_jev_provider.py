@@ -14,6 +14,9 @@ from transpiler.providers.jev import RecordedJevClient
 
 pytestmark = pytest.mark.integration
 BASICS = next(c for c in cases() if c.name == "basics")
+# Jev asks for the runtime_choice decisions by default (cobol_to_java's judged_options); the tests of
+# the other decisions keep the runtime everywhere.
+RUNTIME_ONLY = {"jdk_alternatives": False}
 REVIEW = {"score": 3.0, "confidence": 0.7, "probabilities": {"0": 0.0, "1": 0.1, "2": 0.1, "3": 0.7, "4": 0.1}}
 
 
@@ -32,7 +35,7 @@ def basics(tmp_path: Path, provider: JevProvider, out: str = "out"):
     mappings = default_mappings()
     mappings.remove("DISPLAY")
     return transpile(BASICS.src, output=tmp_path / out, mappings=mappings, provider=provider,
-                     layout=Layout(**BASICS.spec["layout"]))
+                     layout=Layout(**BASICS.spec["layout"]), options=RUNTIME_ONLY)
 
 
 def pending_display(tmp_path: Path, context: ContextBudget | None = None):
@@ -130,16 +133,16 @@ def test_need_context_beyond_the_cap_is_held(tmp_path, built):
 
 def test_external_call_slots_are_separate_jev_decisions(tmp_path, built):
     src = FIXTURES / "unresolved_call/src"
-    probe = transpile(src, output=tmp_path / "probe", provider=jev(tmp_path, {}, name="none.json"))
+    probe = transpile(src, output=tmp_path / "probe", provider=jev(tmp_path, {}, name="none.json"), options=RUNTIME_ONLY)
     [parent] = probe.pending_decisions
     assert parent.importance == "high" and [c.id for c in parent.candidates] == ["builtin:call_external"]
     recordings = {parent.fingerprint: {"pick": pick("builtin:call_external", 0.99)}}
-    opened = transpile(src, output=tmp_path / "opened", provider=jev(tmp_path, recordings, name="one.json"))
+    opened = transpile(src, output=tmp_path / "opened", provider=jev(tmp_path, recordings, name="one.json"), options=RUNTIME_ONLY)
     assert opened.status == "incomplete"
     [slot] = opened.pending_decisions
     assert slot.context["facts"]["slot"] == "target" and [c.id for c in slot.candidates] == ["target:not_found"]
     recordings[slot.fingerprint] = {"pick": pick("target:not_found", 0.98), "review_priority": REVIEW}
-    done = transpile(src, output=tmp_path / "done", provider=jev(tmp_path, recordings, name="two.json"))
+    done = transpile(src, output=tmp_path / "done", provider=jev(tmp_path, recordings, name="two.json"), options=RUNTIME_ONLY)
     assert done.status == "ok", done.summary()
     assert [r.candidate_id for r in done.resolutions.applied] == ["builtin:call_external", "target:not_found"]
     java = (done.output / "src/main/java/generated/Caller.java").read_text()
@@ -154,7 +157,7 @@ def ebcdic_unset(tmp_path: Path, provider: JevProvider, out: str):
     from cobol_to_java import Dialect
     dialect = {k: v for k, v in EBCDIC.spec["dialect"].items() if k != "collating_sequence"}
     return transpile(EBCDIC.src, output=tmp_path / out, mappings=default_mappings(), provider=provider,
-                     dialect=Dialect(**dialect), layout=Layout(**EBCDIC.spec["layout"]))
+                     dialect=Dialect(**dialect), layout=Layout(**EBCDIC.spec["layout"]), options=RUNTIME_ONLY)
 
 
 def test_a_chosen_setting_translates_the_program_again_with_it(tmp_path, built):
@@ -174,3 +177,38 @@ def test_a_chosen_setting_translates_the_program_again_with_it(tmp_path, built):
     review = (result.output / "review.md").read_text()
     assert "## Settings chosen" in review and "| collating_sequence | ebcdic | 0.92 |" in review
     assert "setting collating_sequence = 'ebcdic'" in result.summary()
+
+
+def choose_all(tmp_path: Path, uses: str, out: str):
+    """basics with every runtime_choice answered by Jev with the ``uses`` candidate (round by round:
+    a statement nested in an IF is asked once the IF is chosen)."""
+    recordings: dict = {}
+    for round_ in range(10):
+        result = transpile(BASICS.src, output=tmp_path / f"{out}{round_}", provider=jev(tmp_path, recordings, name=f"{out}.json",
+                           gate=None), layout=Layout(**BASICS.spec["layout"]))
+        if result.status == "ok":
+            return result
+        for d in result.pending_decisions:
+            assert d.reason == "runtime_choice", d
+            [chosen] = [c.id for c in d.candidates if c.uses == uses]
+            recordings[d.fingerprint] = {"pick": pick(chosen, 0.9), "review_priority": REVIEW}
+    raise AssertionError(result.summary())
+
+
+def test_jev_chooses_between_the_runtime_and_the_jdk_per_statement(tmp_path, built):
+    exact = choose_all(tmp_path, "runtime", "runtime")
+    main = next(p for p in exact.programs if p.class_name).package + ".Basics"
+    assert run_java(exact.output, main) == golden(BASICS)
+    assert {r.candidate_id.endswith("_jdk") for r in exact.resolutions.applied} == {False}
+    java = next(exact.output.rglob("Basics.java")).read_text()
+    assert "System.out" not in java and "Decided by jev (confidence 0.90): builtin:add" in java
+
+    approximate = choose_all(tmp_path, "jdk", "jdk")
+    assert {r.candidate_id.endswith("_jdk") for r in approximate.resolutions.applied} == {True}
+    java = next(approximate.output.rglob("Basics.java")).read_text()
+    assert 'System.out.println("Hello, " + wsName.display() + "!");' in java
+    assert "wsAmount.get().doubleValue() * wsRate.get().doubleValue()" in java
+    # Every other line is GnuCOBOL's: the JDK's String.equals does not pad "COBOL" to PIC X(10)
+    # with spaces as COBOL's comparison does, so only that IF goes the other way.
+    expected = [line for line in golden(BASICS).stdout.decode().splitlines() if line != "padded compare"]
+    assert run_java(approximate.output, main).stdout.decode().splitlines() == expected

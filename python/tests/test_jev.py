@@ -323,3 +323,34 @@ def test_options_over_the_budget_are_held_never_cut():
     assert fits.gate == "passed" and fits.candidate_id == "cobol:translate"
     assert ContextBudget().option_chars == int((32000 - 4000 - 4000) * 0.75)
     assert ContextBudget(**ContextBudget(max_option_chars=900).to_json()).max_option_chars == 900
+
+
+def runtime_request():
+    return DecisionRequest.from_json({
+        "id": "decision-1", "fingerprint": "sha256:cc", "reason": "runtime_choice", "operation": "ADD",
+        "message": "'add' (the runtime library) or its JDK twin 'add_jdk'", "importance": "critical", "state": "pending",
+        "source": {"file": "A.cbl", "line": 9, "column": 12, "text": "ADD 1 TO WS-COUNT"},
+        "context": {"facts": {"form": "to"}, "refs": []},
+        "candidates": [
+            {"id": "builtin:add", "handler": "add", "description": "ADD ... TO / GIVING with exact decimal arithmetic",
+             "preview": "wsCount.store(wsCount.get().add(BigDecimal.ONE), false, false);", "uses": "runtime"},
+            {"id": "builtin:add_jdk", "handler": "add_jdk", "description": "ADD in Java double arithmetic; approximate",
+             "preview": "wsCount.store(BigDecimal.valueOf(wsCount.get().doubleValue() + 1.0), false, false);", "uses": "jdk",
+             "docs": [{"signature": "BigDecimal BigDecimal.valueOf(double val)", "summary": "Translates a double into a BigDecimal."}]},
+        ],
+    })
+
+
+def test_runtime_choices_ask_jev_whether_the_runtime_exactness_is_needed():
+    r = runtime_request()
+    assert [c.uses for c in r.candidates] == ["runtime", "jdk"]
+    state = JevProvider.state(r, [], 0)
+    assert "needs the translator's runtime library or can use the plain JDK" in state["task"]
+    assert "Choose runtime when exactness matters: money" in state["task"] and "tested handler" not in state["task"]
+    assert [c["uses"] for c in state["candidates"]] == ["runtime", "jdk"]
+    assert state["candidates"][1]["docs"][0]["signature"] == "BigDecimal BigDecimal.valueOf(double val)"
+    q = JevProvider.questions(r, [])["pick"]
+    assert q["criteria"]["builtin:add_jdk"]["uses"] == "jdk" and "exact semantics" in q["instructions"]
+    assert "jdk candidate cannot give" in q["criteria"]["__abstain__"]
+    # Jev is a provider that judges: transpile asks the language pair for its choices.
+    assert JevProvider("jev-test", client=RecordedJevClient({})).judges is True

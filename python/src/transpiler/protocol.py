@@ -43,6 +43,9 @@ class Reason(StrEnum):
     CALLBACK_REQUIRED = "callback_required"
     # A part of the source that a library claims: library calls (not equivalence-checked) or the exact translation.
     LIBRARY_CALL = "library_call"
+    # A builtin handler or its JDK twin (options.jdk_alternatives): the runtime library's exact
+    # semantics, or plain JDK calls that are approximate.
+    RUNTIME_CHOICE = "runtime_choice"
 
 
 @dataclass(frozen=True)
@@ -70,6 +73,8 @@ class Candidate:
     slots: tuple[Slot, ...] = ()
     # The Java methods the preview calls: {signature, summary} (first Javadoc paragraph). Advisory.
     docs: tuple[dict[str, str], ...] = ()
+    # On a runtime_choice decision: "runtime" (exact) or "jdk" (approximate).
+    uses: str | None = None
 
 
 @dataclass(frozen=True)
@@ -114,7 +119,7 @@ class DecisionRequest:
             candidates=tuple(
                 Candidate(c["id"], c.get("description", ""), c.get("handler"), c.get("preview"),
                           tuple(Slot(s["name"], s.get("description", "")) for s in c.get("slots", [])),
-                          tuple(c.get("docs", [])))
+                          tuple(c.get("docs", [])), c.get("uses"))
                 for c in d.get("candidates", [])
             ),
             context=d.get("context", {}),

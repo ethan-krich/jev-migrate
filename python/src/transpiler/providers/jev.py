@@ -80,6 +80,24 @@ LIBRARY_TASK = (
     "for args and result, pick the binding whose parameter names and docs match what each COBOL item holds."
 )
 LIBRARY_ABSTAIN_CRITERION = "Neither a library candidate nor cobol:translate fits this step."
+RUNTIME_TASK = (
+    "You are deciding whether one COBOL statement needs the translator's runtime library or can use the plain JDK. "
+    "The candidate with uses=runtime calls the runtime library, which reproduces GnuCOBOL exactly: decimal arithmetic "
+    "(BigDecimal) truncated to each receiver's PICTURE, ROUNDED, SIZE ERROR, comparisons that pad the shorter operand "
+    "with spaces in the collating sequence, byte-exact output. The candidate with uses=jdk does the same with plain JDK "
+    "calls (double arithmetic, java.lang.Math, String methods, System.out): simpler, idiomatic Java, but approximate; its "
+    "description says where it can differ. Read both candidates' java and docs. Decide from what the data means: the "
+    "data definitions in the context (PICTURE, USAGE, VALUE), the names, the comments and how the result is used. Choose "
+    "runtime when exactness matters: money, amounts, balances, rates, prices, quantities that are totalled or "
+    "rounded, values written to files or reports, keys and codes that are compared, or anything whose digits a person "
+    "or another program relies on. Choose jdk when the approximation cannot change what the program does: loop "
+    "counters and indexes, small integers well inside double's 15 exact digits, diagnostic or progress messages, and "
+    "scientific or statistical values that are approximate by nature (for example a square root or a logarithm). When "
+    "only a jdk candidate is offered the runtime cannot translate the statement exactly: choose it if its approximation "
+    "is acceptable for what the data means, abstain otherwise."
+)
+RUNTIME_ABSTAIN_CRITERION = ("Neither fits: the statement needs exact results that the jdk candidate cannot give, and "
+                             "no runtime candidate is offered.")
 # Jev's input limit in characters, measured with scripts/jev-smoke.sh (see docs/architecture.md); the
 # options of a decision may use what is left after the rest of the state, with 25% left free.
 JEV_INPUT_CHARS = 32000
@@ -90,6 +108,7 @@ WHY_ASKED: Mapping[str, str] = {
     "missing_target_api": "The statement depends on something outside the translation project.",
     "callback_required": "The mapping rule asks for a person's decision.",
     "library_call": "The statement uses a part of the program that the user mapped to a Java library.",
+    "runtime_choice": "The statement can be translated with the runtime library (exact) or with plain JDK calls (approximate).",
 }
 ABSTAIN_CRITERION = ("No candidate fits: each one either excludes something this statement has, or is correct only "
                      "under a condition the program does not guarantee.")
@@ -263,6 +282,7 @@ class JevProvider(DecisionProvider):
     """
 
     name = "jev"
+    judges = True
 
     def __init__(
         self,
@@ -446,10 +466,12 @@ class JevProvider(DecisionProvider):
                     "file": request.source.file, "line": request.source.line}
         if request.library:
             decision["library"] = request.library
+        runtime = request.reason == "runtime_choice"
         return {
-            "task": LIBRARY_TASK if request.library else TASK,
+            "task": LIBRARY_TASK if request.library else RUNTIME_TASK if runtime else TASK,
             "decision": decision,
-            "candidates": [{"id": c.id, "description": c.description, "java": c.preview, **({"docs": list(c.docs)} if c.docs else {})}
+            "candidates": [{"id": c.id, "description": c.description, "java": c.preview, **({"uses": c.uses} if c.uses else {}),
+                            **({"docs": list(c.docs)} if c.docs else {})}
                            for c in request.candidates],
             "context": list(refs),
             "program": request.context.get("program", {}),
@@ -464,6 +486,8 @@ class JevProvider(DecisionProvider):
         criteria: dict[str, Any] = {}
         for c in request.candidates:
             option: dict[str, Any] = {"covers": c.description}
+            if c.uses:
+                option["uses"] = c.uses
             if c.preview is not None:
                 option["java"] = c.preview
             if c.docs:
@@ -471,11 +495,18 @@ class JevProvider(DecisionProvider):
             if c.slots:
                 option["then_asks"] = [f"{s.name}: {s.description}" for s in c.slots]
             criteria[c.id] = option
-        criteria[ABSTAIN] = LIBRARY_ABSTAIN_CRITERION if request.library else ABSTAIN_CRITERION
+        runtime = request.reason == "runtime_choice"
+        criteria[ABSTAIN] = (LIBRARY_ABSTAIN_CRITERION if request.library else RUNTIME_ABSTAIN_CRITERION if runtime
+                             else ABSTAIN_CRITERION)
         if truncated:
             criteria[NEED_CONTEXT] = "Deciding needs a context node that is shown truncated."
-        instructions = (f"Which candidate does, at this step, what the COBOL part does for `{request.source.text}`?"
-                        if request.library else f"Which handler's description covers `{request.source.text}` as written?")
+        if request.library:
+            instructions = f"Which candidate does, at this step, what the COBOL part does for `{request.source.text}`?"
+        elif runtime:
+            instructions = (f"Does `{request.source.text}` need the runtime library's exact semantics, or is the JDK "
+                            "candidate's approximation acceptable for what its data means?")
+        else:
+            instructions = f"Which handler's description covers `{request.source.text}` as written?"
         questions: dict[str, Any] = {"pick": {"type": "choice", "instructions": instructions, "criteria": criteria}}
         if truncated:
             questions["refs"] = {

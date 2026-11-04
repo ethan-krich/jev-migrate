@@ -58,6 +58,9 @@ class LanguagePair:
     catalog: HandlerCatalog
     default_dialect: Callable[[], Dialect] | None = None
     default_importance: Callable[[], Mapping[tuple[str, str], str]] | None = None
+    # Worker options for a provider that judges between alternatives (``provider.judges``, e.g.
+    # Jev); an explicit ``options`` entry wins.
+    judged_options: Mapping[str, Any] = field(default_factory=dict)
 
 
 def language_pairs() -> dict[str, LanguagePair]:
@@ -386,6 +389,12 @@ def transpile(
     without it the language pair's default dialect is used. A key given both by an explicit
     ``dialect`` and in ``options`` is an error; ``options`` may override the default dialect.
 
+    With a provider that judges between alternatives (``JevProvider``) the language pair's
+    ``judged_options`` are added: for COBOL to Java, ``jdk_alternatives`` offers each statement a
+    builtin handler has a JDK twin for as a ``runtime_choice`` between the runtime library (exact)
+    and plain JDK calls (approximate). Pass ``options={"jdk_alternatives": False}`` to keep the
+    runtime everywhere, or ``True`` to ask a static provider.
+
     ``importance`` maps ``(reason, operation)`` (``*`` matches anything) to a decision's tier,
     ``low``, ``normal``, ``high`` or ``critical``; without it the language pair's default table
     is used (``cobol_to_java.DEFAULT_IMPORTANCE``).
@@ -405,7 +414,10 @@ def transpile(
     layout = layout or pair.default_layout()
     provider = provider or DeterministicProvider()
 
-    worker_options = _merge_options(dialect, pair, options or {})
+    options = dict(options or {})
+    if provider.judges:
+        options = {**pair.judged_options, **options}
+    worker_options = _merge_options(dialect, pair, options)
     inputs = [source] if isinstance(source, (str, os.PathLike)) else list(source)
     output_path = Path(output).resolve()
     job = {
