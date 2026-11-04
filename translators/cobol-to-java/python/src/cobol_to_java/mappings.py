@@ -67,14 +67,44 @@ BUILTIN_HANDLERS = MappingProxyType({
     "set_index": "SET",
     "search": "SEARCH",
     "search_all": "SEARCH",
+    # JDK twins: the same statement with plain JDK calls (approximate), see JDK_TWINS.
+    "add_jdk": "ADD",
+    "subtract_jdk": "SUBTRACT",
+    "multiply_jdk": "MULTIPLY",
+    "divide_jdk": "DIVIDE",
+    "compute_gnucobol_jdk": "COMPUTE",
+    "display_jdk": "DISPLAY",
+    "if_jdk": "IF",
+    "string_jdk": "STRING",
+    "unstring_jdk": "UNSTRING",
+    "inspect_jdk": "INSPECT",
+})
+
+# Builtin handler -> its JDK twin. With options.jdk_alternatives (on by default when Jev decides)
+# a statement both can translate is a runtime_choice decision: the runtime library's exact
+# GnuCOBOL semantics, or plain JDK calls (double arithmetic, java.lang.Math, String, System.out),
+# which are approximate. Jev picks per statement whether the exactness is needed.
+JDK_TWINS = MappingProxyType({
+    "add": "add_jdk",
+    "subtract": "subtract_jdk",
+    "multiply": "multiply_jdk",
+    "divide": "divide_jdk",
+    "compute_gnucobol": "compute_gnucobol_jdk",
+    "display": "display_jdk",
+    "if": "if_jdk",
+    "string": "string_jdk",
+    "unstring": "unstring_jdk",
+    "inspect": "inspect_jdk",
 })
 
 # Handlers that no default rule selects: the worker offers them as candidates on a decision
 # (compute when a rule is missing, call_external for a CALL outside the project, the STOP literal
-# and DISPLAY UPON PRINTER / SYSPCH ones for a console or device the target system decides).
+# and DISPLAY UPON PRINTER / SYSPCH ones for a console or device the target system decides, and the
+# JDK twins of a runtime_choice).
 CANDIDATE_HANDLERS = frozenset({
     "compute", "call_external", "stop_literal_accept", "stop_literal_continue",
     "display_printer", "display_device_stdout", "display_device_stderr", "read_file_unlocked",
+    *JDK_TWINS.values(),
 })
 
 # Facts the worker computes per operation instance; usable as `when` condition keys.

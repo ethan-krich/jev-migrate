@@ -34,10 +34,11 @@ public record Dialect(
         Map<String, String> fileAssignments,
         Optional<String> whenCompiled,
         Optional<String> dynamicCalls,
-        Optional<String> moveOverlap) {
+        Optional<String> moveOverlap,
+        boolean jdkAlternatives) {
 
     /** Option keys of {@code initialize} that are not dialect settings. */
-    static final Set<String> OTHER_OPTIONS = Set.of("source_encoding");
+    static final Set<String> OTHER_OPTIONS = Set.of("source_encoding", "jdk_alternatives");
 
     static final Set<String> KEYS = Set.of("encoding", "collating_sequence", "out_of_range", "binary_truncate",
             "sync_alignment", "debugging_lines", "source_format", "file_assignments", "when_compiled",
@@ -107,7 +108,7 @@ public record Dialect(
 
     public static Dialect defaults() {
         return new Dialect(Optional.empty(), Optional.empty(), Optional.empty(), true, Optional.empty(), false, "fixed",
-                Map.of(), Optional.empty(), Optional.empty(), Optional.empty());
+                Map.of(), Optional.empty(), Optional.empty(), Optional.empty(), false);
     }
 
     /** Parses {@code initialize.params.options}; unknown keys and malformed values are INVALID_PARAMS. */
@@ -153,7 +154,8 @@ public record Dialect(
                 Map.copyOf(files),
                 whenCompiled,
                 text(options, "dynamic_calls", Set.of("project")),
-                text(options, "move_overlap", Set.of("temporary", "ibm")));
+                text(options, "move_overlap", Set.of("temporary", "ibm")),
+                bool(options, "jdk_alternatives").orElse(false));
     }
 
     private static Optional<String> text(JsonNode options, String key, Set<String> allowed) throws ProtocolException {
@@ -202,6 +204,10 @@ public record Dialect(
         n.put("when_compiled", whenCompiled.orElse(null));
         n.put("dynamic_calls", dynamicCalls.orElse(null));
         n.put("move_overlap", moveOverlap.orElse(null));
+        if (jdkAlternatives) {
+            // Only when set, so that the hash (and every fingerprint) of a run without it is unchanged.
+            n.put("jdk_alternatives", true);
+        }
         return n;
     }
 

@@ -11,8 +11,12 @@ import java.util.List;
  * @param slots named choices that applying the candidate raises as follow-up decisions
  * @param docs the Java methods the preview calls, with the first paragraph of their Javadoc
  *     (advisory, for a provider; not part of the fingerprint)
+ * @param uses on a {@code runtime_choice} decision, what the preview is built on: {@code runtime}
+ *     (the translator's runtime library, GnuCOBOL's exact semantics) or {@code jdk} (plain JDK
+ *     calls, approximate); null otherwise
  */
-public record Candidate(String id, String handler, String description, String preview, List<Slot> slots, List<Doc> docs) {
+public record Candidate(String id, String handler, String description, String preview, List<Slot> slots, List<Doc> docs,
+        String uses) {
     /** A follow-up choice of a candidate: one decision with its own validated candidates. */
     public record Slot(String name, String description) {}
 
@@ -24,6 +28,10 @@ public record Candidate(String id, String handler, String description, String pr
         docs = List.copyOf(docs);
     }
 
+    public Candidate(String id, String handler, String description, String preview, List<Slot> slots, List<Doc> docs) {
+        this(id, handler, description, preview, slots, docs, null);
+    }
+
     public Candidate(String id, String handler, String description, String preview, List<Slot> slots) {
         this(id, handler, description, preview, slots, List.of());
     }
@@ -33,6 +41,10 @@ public record Candidate(String id, String handler, String description, String pr
     }
 
     public Candidate withDocs(List<Doc> docs) {
-        return new Candidate(id, handler, description, preview, slots, docs);
+        return new Candidate(id, handler, description, preview, slots, docs, uses);
+    }
+
+    public Candidate withUses(String uses) {
+        return new Candidate(id, handler, description, preview, slots, docs, uses);
     }
 }

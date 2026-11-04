@@ -262,6 +262,9 @@ public final class Decision {
             if (c.preview() != null) {
                 cn.put("preview", c.preview());
             }
+            if (c.uses() != null) {
+                cn.put("uses", c.uses());
+            }
             if (!c.docs().isEmpty()) {
                 var docs = cn.putArray("docs");
                 for (Candidate.Doc d : c.docs()) {

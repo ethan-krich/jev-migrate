@@ -19,8 +19,17 @@ public interface TranslationContext {
 
     Operand operand(Call call) throws HandlerException;
 
-    /** A BigDecimal-valued expression for a numeric operand. */
+    /** A BigDecimal-valued expression for a numeric operand ({@code double}-valued in {@link #jdk} mode). */
     Expression numeric(Operand operand) throws HandlerException;
+
+    /**
+     * True while a JDK twin of a builtin handler generates (see {@link Builtins#jdkTwin}): numeric
+     * values are Java {@code double}s, conditions use plain JDK comparisons, and output goes to
+     * {@code System.out}. Statements nested in the one being translated are translated on their own.
+     */
+    default boolean jdk() {
+        return false;
+    }
 
     /** {@link #numeric} with GnuCOBOL 3.2's division (38 extra digits, truncated) and integer powers. */
     Expression gnuArithmetic(Operand operand) throws HandlerException;

@@ -20,7 +20,13 @@ public enum Reason {
      * The operation uses a part of the COBOL program that a library claims: the candidates call the
      * library (not equivalence-checked) or translate the COBOL exactly ({@code cobol:translate}).
      */
-    LIBRARY_CALL;
+    LIBRARY_CALL,
+    /**
+     * A builtin handler has a JDK twin and the run asks for the choice
+     * ({@code options.jdk_alternatives}): the runtime candidate reproduces GnuCOBOL exactly, the
+     * {@code jdk} one uses plain JDK calls and is approximate.
+     */
+    RUNTIME_CHOICE;
 
     public String wire() {
         return name().toLowerCase(Locale.ROOT);

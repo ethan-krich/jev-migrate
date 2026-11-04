@@ -40,7 +40,7 @@ error the worker keeps serving.
 
 | Method | Params | Result |
 |---|---|---|
-| `initialize` | `source_root`, `output_root` (absolute), `target_language`, `files: [{path, role: program\|copybook}]`, `mappings`, `layout`, `options` (the dialect keys of [`Dialect`](mapping-api.md#dialect-project-settings), plus `source_encoding`: `ISO-8859-1`; any other key is `invalid_params`), `settings` (values chosen for [setting decisions](#setting-decisions), written over `options`; only fields a setting decision offers), `copybook_paths`, `importance` (the [importance table](#importance)), `context` (`{max_depth, max_chars}`, the [context](#decision-context) budget), `libraries` (optional, [library mappings](#library-mappings)) | `programs: [{file, status, program_id, package, class, output_path, diagnostics}]`, `dialect` (the settings in effect), `libraries: [{id, java, source, hash, classes, members, skipped}]` (with `libraries`). Parse failures are per-file diagnostics, not errors. |
+| `initialize` | `source_root`, `output_root` (absolute), `target_language`, `files: [{path, role: program\|copybook}]`, `mappings`, `layout`, `options` (the dialect keys of [`Dialect`](mapping-api.md#dialect-project-settings), plus `source_encoding`: `ISO-8859-1` and `jdk_alternatives`: a boolean, default `false`, see [runtime choices](#runtime-choices); any other key is `invalid_params`), `settings` (values chosen for [setting decisions](#setting-decisions), written over `options`; only fields a setting decision offers), `copybook_paths`, `importance` (the [importance table](#importance)), `context` (`{max_depth, max_chars}`, the [context](#decision-context) budget), `libraries` (optional, [library mappings](#library-mappings)) | `programs: [{file, status, program_id, package, class, output_path, diagnostics}]`, `dialect` (the settings in effect), `libraries: [{id, java, source, hash, classes, members, skipped}]` (with `libraries`). Parse failures are per-file diagnostics, not errors. |
 | `translate` | `files` (relative paths; default all) | `files: [...]`, `decisions: [request…]`. Status `incomplete` if any file has pending decisions or failed. |
 | `resolve` | `resolutions: [{decision_id, fingerprint?, selection: {kind: "candidate", candidate_id}}]` | `applied`, `rejected: [{decision_id, code, message}]`, `new_decisions` (raised by a newly applied structural candidate), `pending` |
 | `expand_context` | `decision_id`, `refs: [ref]`, `max_chars?` | `decision_id`, `refs` (the nodes with their text, then their neighbours one level deeper as truncated nodes), `rejected: [{ref, code: unknown_ref, message}]`. An unknown `decision_id` is `invalid_params`. |
@@ -89,6 +89,15 @@ text, so a provider can ask for exactly the part it needs.
 A candidate may carry `docs: [{signature, summary}]`: each Java method its preview calls, with
 the first paragraph of its Javadoc (inline tags reduced to text). Overloads are not resolved, so
 a call lists every overload of its arity. Docs are advisory and never part of the fingerprint.
+
+### Runtime choices
+
+With `options.jdk_alternatives: true`, a statement that a builtin handler and its JDK twin can both
+translate is a `runtime_choice` decision. Each candidate carries `uses`: `runtime` (the
+translator's runtime library, exact) or `jdk` (plain JDK calls, approximate). When only the twin
+can translate the statement it is the only candidate; when the twin cannot, the statement is
+translated as without the option. The option is in the dialect hash only when it is on, so a run
+without it has the same fingerprints as before.
 
 ### Candidate slots
 

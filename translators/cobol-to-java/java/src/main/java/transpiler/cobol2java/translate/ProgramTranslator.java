@@ -336,6 +336,8 @@ public final class ProgramTranslator implements TranslationContext {
     private int currentNode = -1;
     /** Building a COMPUTE expression with GnuCOBOL's division and power rules (compute_gnucobol). */
     private boolean gnuArithmetic;
+    /** A JDK twin is generating: doubles, JDK comparisons and output (see {@link TranslationContext#jdk}). */
+    private boolean jdk;
     private int statements;
     private int translated;
     private final boolean binaryTruncate;
@@ -2923,6 +2925,10 @@ public final class ProgramTranslator implements TranslationContext {
             }
             case BUILTIN -> {
                 Handler handler = in.builtins().handler(rule.handler());
+                Handler twin = in.dialect().jdkAlternatives() ? in.builtins().jdkTwin(handler) : null;
+                if (twin != null && runtimeChoice(unit, block, facts, rule, handler, twin)) {
+                    return;
+                }
                 List<Decision> nested = new ArrayList<>();
                 try {
                     List<Statement> out = generate(handler, unit, nested);
@@ -3700,7 +3706,9 @@ public final class ProgramTranslator implements TranslationContext {
         List<Decision> saved = sink;
         int savedStatements = statements;
         int savedTranslated = translated;
+        boolean savedJdk = jdk;
         sink = nested;
+        jdk = in.builtins().isJdk(handler);
         try {
             return handler.generate(unit, this);
         } catch (HandlerException | RuntimeException e) {
@@ -3709,14 +3717,58 @@ public final class ProgramTranslator implements TranslationContext {
             throw e;
         } finally {
             sink = saved;
+            jdk = savedJdk;
         }
     }
 
     private record Generated(Candidate candidate, List<Statement> statements, List<Decision> nested) {}
 
-    /** Every builtin handler for the operation that can translate this instance (except {@code excluded}). */
+    /**
+     * Offers {@code handler} and its JDK twin as one {@code runtime_choice} decision (the run asked
+     * for it: {@code options.jdk_alternatives}). Returns false, having done nothing, when the twin
+     * cannot translate the statement or the handler waits for a dialect setting: the handler then
+     * translates it as without the option. When only the twin can, it is offered alone.
+     */
+    private boolean runtimeChoice(OpUnit unit, BlockStmt block, Map<String, Object> facts, MappingRule rule, Handler handler,
+            Handler twin) {
+        List<Generated> jdkOnes = candidates(unit, List.of(twin));
+        if (jdkOnes.isEmpty()) {
+            return false;
+        }
+        int hits = dialectHits;
+        List<Generated> runtimeOnes = candidates(unit, List.of(handler));
+        if (dialectHits > hits) {
+            return false;
+        }
+        String message;
+        if (runtimeOnes.isEmpty()) {
+            String problem;
+            try {
+                generate(handler, unit, new ArrayList<>());
+                problem = "it does not apply";
+            } catch (HandlerException e) {
+                problem = e.getMessage();
+            }
+            message = "the runtime handler '" + handler.id() + "' cannot translate this statement exactly (" + problem
+                    + "); its JDK twin '" + twin.id() + "' can, approximately";
+        } else {
+            message = "'" + handler.id() + "' (the runtime library, GnuCOBOL's exact semantics) or its JDK twin '" + twin.id()
+                    + "' (plain JDK calls, approximate)";
+        }
+        List<Generated> offered = new ArrayList<>();
+        runtimeOnes.forEach(g -> offered.add(new Generated(g.candidate().withUses("runtime"), g.statements(), g.nested())));
+        jdkOnes.forEach(g -> offered.add(new Generated(g.candidate().withUses("jdk"), g.statements(), g.nested())));
+        unresolved(unit, block, facts, Reason.RUNTIME_CHOICE, rule, message, offered);
+        return true;
+    }
+
+    /**
+     * Every builtin handler for the operation that can translate this instance (except {@code excluded});
+     * JDK twins only when the run asks for them.
+     */
     private List<Generated> candidatesFor(OpUnit unit, Handler excluded) {
-        List<Handler> hs = in.builtins().handlersFor(unit.operation()).stream().filter(h -> h != excluded).toList();
+        List<Handler> hs = in.builtins().handlersFor(unit.operation()).stream()
+                .filter(h -> h != excluded && (in.dialect().jdkAlternatives() || !in.builtins().isJdk(h))).toList();
         return candidates(unit, hs);
     }
 
@@ -3729,8 +3781,12 @@ public final class ProgramTranslator implements TranslationContext {
             try {
                 List<Statement> stmts = generate(h, unit, nested);
                 String preview = String.join("\n", stmts.stream().map(Statement::toString).toList());
-                Candidate candidate = new Candidate("builtin:" + h.id(), h.id(), h.description(), preview)
-                        .withDocs(JavaDocs.runtime().calledBy(stmts));
+                List<Candidate.Doc> docs = new ArrayList<>(JavaDocs.runtime().calledBy(stmts));
+                if (in.builtins().isJdk(h)) {
+                    // A JDK twin's docs come from the JDK's own sources (lib/src.zip).
+                    docs.addAll(JavaDocs.jdk().calledByAnyScope(stmts));
+                }
+                Candidate candidate = new Candidate("builtin:" + h.id(), h.id(), h.description(), preview).withDocs(docs);
                 out.add(new Generated(candidate, stmts, nested));
             } catch (HandlerException e) {
                 // Not a viable candidate for this instance.
@@ -4243,7 +4299,7 @@ public final class ProgramTranslator implements TranslationContext {
             return library;
         }
         String fn = f.functionName().getText().toUpperCase(Locale.ROOT);
-        if (FLOAT_FUNCTIONS.contains(fn)) {
+        if (FLOAT_FUNCTIONS.contains(fn) && !jdk) {
             throw HandlerException.unsupported("FUNCTION " + fn + " is computed in floating point; its result is not bit-exact");
         }
         List<Operand> args = new ArrayList<>();
@@ -4270,6 +4326,18 @@ public final class ProgramTranslator implements TranslationContext {
                 continue;
             }
             args.add(argument(a));
+        }
+        if (jdk) {
+            if (JDK_FUNCTIONS.contains(fn) && f.referenceModifier() == null) {
+                return jdkFunction(fn, args);
+            }
+            // Without a JDK form a function is computed as the runtime computes it (from BigDecimal arguments).
+            jdk = false;
+            try {
+                return functionOperand(f);
+            } finally {
+                jdk = true;
+            }
         }
         Operand result = switch (fn) {
             case "UPPER-CASE", "LOWER-CASE", "REVERSE" -> {
@@ -4396,6 +4464,81 @@ public final class ProgramTranslator implements TranslationContext {
                     false, "text");
         }
         return result;
+    }
+
+    /** The intrinsic functions a JDK twin computes with java.lang.Math, in doubles. */
+    private static final Set<String> JDK_FUNCTIONS = Set.of("SQRT", "LOG", "LOG10", "EXP", "EXP10", "SIN", "COS", "TAN", "ASIN",
+            "ACOS", "ATAN", "PI", "E", "RANDOM", "ABS", "MAX", "MIN", "MOD", "REM", "INTEGER", "INTEGER-PART", "SUM", "MEAN");
+
+    /** A {@link #JDK_FUNCTIONS} function in JDK mode: a double-valued result (display {@code double}). */
+    private Operand jdkFunction(String fn, List<Operand> args) throws HandlerException {
+        List<Expression> xs = new ArrayList<>();
+        for (Operand a : args) {
+            if (!a.isNumericValued()) {
+                throw HandlerException.unsupported("FUNCTION " + fn + " of " + a.category() + " has no JDK form");
+            }
+            xs.add(numeric(a));
+        }
+        Expression e = switch (fn) {
+            case "SQRT", "LOG", "LOG10", "EXP", "SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN" -> {
+                arity(fn, args, 1);
+                yield staticCall("Math", fn.toLowerCase(Locale.ROOT), xs.getFirst());
+            }
+            case "EXP10" -> {
+                arity(fn, args, 1);
+                yield staticCall("Math", "pow", Ast.doubleLiteral(BigDecimal.TEN), xs.getFirst());
+            }
+            case "PI", "E" -> {
+                arity(fn, args, 0);
+                yield new com.github.javaparser.ast.expr.FieldAccessExpr(name("Math"), fn);
+            }
+            case "RANDOM" -> {
+                // A seed (RANDOM(n)) starts GnuCOBOL's own generator, which has no JDK counterpart.
+                arity(fn, args, 0);
+                yield staticCall("Math", "random");
+            }
+            case "ABS", "INTEGER" -> {
+                arity(fn, args, 1);
+                yield staticCall("Math", fn.equals("ABS") ? "abs" : "floor", xs.getFirst());
+            }
+            case "INTEGER-PART" -> {
+                arity(fn, args, 1);
+                yield new com.github.javaparser.ast.expr.CastExpr(com.github.javaparser.ast.type.PrimitiveType.longType(),
+                        new EnclosedExpr(xs.getFirst()));
+            }
+            case "MAX", "MIN" -> {
+                if (xs.isEmpty()) {
+                    throw HandlerException.unsupported("FUNCTION " + fn + " needs arguments");
+                }
+                Expression r = xs.getFirst();
+                for (int i = 1; i < xs.size(); i++) {
+                    r = staticCall("Math", fn.equals("MAX") ? "max" : "min", r, xs.get(i));
+                }
+                yield r;
+            }
+            case "SUM", "MEAN" -> {
+                if (xs.isEmpty()) {
+                    throw HandlerException.unsupported("FUNCTION " + fn + " needs arguments");
+                }
+                Expression r = xs.getFirst();
+                for (int i = 1; i < xs.size(); i++) {
+                    r = Ast.binary(r, BinaryExpr.Operator.PLUS, xs.get(i));
+                }
+                yield fn.equals("SUM") ? r : Ast.binary(r, BinaryExpr.Operator.DIVIDE, Ast.doubleLiteral(BigDecimal.valueOf(xs.size())));
+            }
+            case "MOD" -> {
+                // a - b * floor(a / b): the sign of the divisor, as FUNCTION MOD.
+                arity(fn, args, 2);
+                yield Ast.binary(xs.get(0), BinaryExpr.Operator.MINUS, Ast.binary(xs.get(1), BinaryExpr.Operator.MULTIPLY,
+                        staticCall("Math", "floor", Ast.binary(xs.get(0).clone(), BinaryExpr.Operator.DIVIDE, xs.get(1).clone()))));
+            }
+            case "REM" -> {
+                arity(fn, args, 2);
+                yield Ast.binary(xs.get(0), BinaryExpr.Operator.REMAINDER, xs.get(1));
+            }
+            default -> throw new IllegalStateException(fn);
+        };
+        return new Operand.Computed(e, true, "double");
     }
 
     /** A plain (unsubscripted) name of a table item as a function argument, or null. */
@@ -4805,6 +4948,9 @@ public final class ProgramTranslator implements TranslationContext {
 
     @Override
     public Expression numeric(Operand o) throws HandlerException {
+        if (jdk) {
+            return numericJdk(o);
+        }
         return switch (o) {
             case Operand.Field f when f.numeric() -> call(field(f), "get");
             case Operand.ReturnCode r -> call(name("returnCode"), "get");
@@ -4818,7 +4964,31 @@ public final class ProgramTranslator implements TranslationContext {
         };
     }
 
+    /** {@link #numeric} in JDK mode: a {@code double}-valued expression. */
+    private Expression numericJdk(Operand o) throws HandlerException {
+        return switch (o) {
+            case Operand.Field f when f.numeric() -> call(call(field(f), "get"), "doubleValue");
+            case Operand.ReturnCode r -> call(call(name("returnCode"), "get"), "doubleValue");
+            case Operand.Index i -> name(i.index().javaName());
+            case Operand.Register r -> name(r.javaName());
+            case Operand.Computed c when c.numeric() && "double".equals(c.display()) -> c.value().clone();
+            case Operand.Computed c when c.numeric() -> call(c.value().clone(), "doubleValue");
+            case Operand.NumericLiteral n -> Ast.doubleLiteral(n.value());
+            case Operand.Figurative f when f.isZero() -> Ast.doubleLiteral(BigDecimal.ZERO);
+            case Operand.Arithmetic a -> arithmetic(a.stmt());
+            default -> throw HandlerException.unsupported(o.category() + " used where a numeric value is required");
+        };
+    }
+
     private Expression arithmetic(ArithmeticValueStmt a) throws HandlerException {
+        if (jdk) {
+            Expression e = multDivs(a.getMultDivs());
+            for (PlusMinus pm : a.getPlusMinus()) {
+                boolean plus = pm.getPlusMinusType() == PlusMinus.PlusMinusType.PLUS;
+                e = Ast.binary(e, plus ? BinaryExpr.Operator.PLUS : BinaryExpr.Operator.MINUS, multDivs(pm.getMultDivs()));
+            }
+            return e;
+        }
         Expression e = multDivs(a.getMultDivs());
         for (PlusMinus pm : a.getPlusMinus()) {
             boolean plus = pm.getPlusMinusType() == PlusMinus.PlusMinusType.PLUS;
@@ -4830,6 +5000,13 @@ public final class ProgramTranslator implements TranslationContext {
 
     private Expression multDivs(MultDivs md) throws HandlerException {
         Expression e = powers(md.getPowers());
+        if (jdk) {
+            for (MultDiv m : md.getMultDivs()) {
+                e = Ast.binary(e, m.getMultDivType() == MultDiv.MultDivType.DIV ? BinaryExpr.Operator.DIVIDE : BinaryExpr.Operator.MULTIPLY,
+                        powers(m.getPowers()));
+            }
+            return e;
+        }
         for (MultDiv m : md.getMultDivs()) {
             if (m.getMultDivType() == MultDiv.MultDivType.DIV) {
                 if (!gnuArithmetic) {
@@ -4851,6 +5028,23 @@ public final class ProgramTranslator implements TranslationContext {
      * negative exponent changes the result of later evaluations of the same expression.
      */
     private Expression powers(Powers p) throws HandlerException {
+        if (jdk) {
+            // Any exponent: Math.pow, right to left (a ** b ** c is a ** (b ** c)).
+            Expression e = basis(p.getBasis());
+            if (p.getPowersType() == Powers.PowersType.MINUS) {
+                e = Ast.negate(e);
+            }
+            List<Expression> operands = new ArrayList<>();
+            operands.add(e);
+            for (var power : p.getPowers()) {
+                operands.add(basis(power.getBasis()));
+            }
+            Expression result = operands.getLast();
+            for (int i = operands.size() - 2; i >= 0; i--) {
+                result = staticCall("Math", "pow", operands.get(i), result);
+            }
+            return result;
+        }
         if (!p.getPowers().isEmpty() && !gnuArithmetic) {
             throw HandlerException.unsupported("exponentiation (**) is not supported");
         }
@@ -5001,6 +5195,20 @@ public final class ProgramTranslator implements TranslationContext {
                         + " is invalid COBOL");
             }
             test = call(field(o), "isNumeric");
+        } else if (jdk) {
+            // Every character passes Character's test (a space counts as a letter for ALPHABETIC).
+            Expression value = call(call(field(o), "get"), "chars");
+            Expression ch = name("ch");
+            Expression space = Ast.binary(name("ch"), BinaryExpr.Operator.EQUALS, Ast.chr(' '));
+            Expression predicate = switch (cc.getClassConditionType()) {
+                case NUMERIC -> new com.github.javaparser.ast.expr.MethodReferenceExpr(new com.github.javaparser.ast.expr.TypeExpr(
+                        Ast.type("Character")), null, "isDigit");
+                case ALPHABETIC -> lambda("ch", Ast.binary(staticCall("Character", "isLetter", ch), BinaryExpr.Operator.OR, space));
+                case ALPHABETIC_UPPER -> lambda("ch", Ast.binary(staticCall("Character", "isUpperCase", ch), BinaryExpr.Operator.OR, space));
+                case ALPHABETIC_LOWER -> lambda("ch", Ast.binary(staticCall("Character", "isLowerCase", ch), BinaryExpr.Operator.OR, space));
+                default -> throw HandlerException.unsupported("class condition " + cc.getClassConditionType() + " has no JDK form");
+            };
+            test = call(value, "allMatch", predicate);
         } else {
             Expression value = call(field(o), "get");
             test = switch (cc.getClassConditionType()) {
@@ -5050,7 +5258,8 @@ public final class ProgramTranslator implements TranslationContext {
                     case NEGATIVE -> BinaryExpr.Operator.LESS;
                     case ZERO -> BinaryExpr.Operator.EQUALS;
                 };
-                Expression e = Ast.compareToZero(call(numeric(o), "signum"), op);
+                Expression e = jdk ? Ast.binary(numeric(o), op, Ast.doubleLiteral(BigDecimal.ZERO))
+                        : Ast.compareToZero(call(numeric(o), "signum"), op);
                 yield Facts.hasDirectToken(s.getCtx(), "NOT") ? new UnaryExpr(new EnclosedExpr(e), UnaryExpr.Operator.LOGICAL_COMPLEMENT) : e;
             }
             case COMBINED -> {
@@ -5091,8 +5300,47 @@ public final class ProgramTranslator implements TranslationContext {
         return comparison(left, right, op, where);
     }
 
+    private static Expression lambda(String parameter, Expression body) {
+        return new com.github.javaparser.ast.expr.LambdaExpr(new com.github.javaparser.ast.body.Parameter(
+                new com.github.javaparser.ast.type.UnknownType(), parameter), body);
+    }
+
+    /** {@link #comparison} in JDK mode: doubles with Java's operators, strings with equals / compareTo. */
+    private Expression comparisonJdk(Operand left, Operand right, RelationalOperatorType op, ParserRuleContext where)
+            throws HandlerException {
+        if (left.isNumericValued() && right.isNumericValued()) {
+            return Ast.binary(numeric(left), javaOperator(op), numeric(right));
+        }
+        Expression l = alphanumericSide(left, right);
+        Expression rr = alphanumericSide(right, left);
+        boolean equality = op == RelationalOperatorType.EQUAL || op == RelationalOperatorType.NOT_EQUAL;
+        if (l != null && rr != null) {
+            // String.compareTo orders by char code: the ASCII collating sequence.
+            if (requireCollatingSequence(op, where).equals("ebcdic")) {
+                throw HandlerException.unsupported("an EBCDIC-ordered comparison has no JDK form");
+            }
+            if (equality) {
+                Expression eq = call(l, "equals", rr);
+                return op == RelationalOperatorType.EQUAL ? eq : new UnaryExpr(eq, UnaryExpr.Operator.LOGICAL_COMPLEMENT);
+            }
+            return Ast.compareToZero(call(l, "compareTo", rr), javaOperator(op));
+        }
+        Operand.Figurative f = right instanceof Operand.Figurative rf ? rf : left instanceof Operand.Figurative lf ? lf : null;
+        Expression side = l != null ? l : rr;
+        if (side != null && f != null && f.isSingle() && equality) {
+            // Equal to a figurative constant: every character is its character.
+            Expression all = call(call(side, "chars"), "allMatch", lambda("ch",
+                    Ast.binary(name("ch"), BinaryExpr.Operator.EQUALS, Ast.chr(f.fill()))));
+            return op == RelationalOperatorType.EQUAL ? all : new UnaryExpr(all, UnaryExpr.Operator.LOGICAL_COMPLEMENT);
+        }
+        throw HandlerException.unsupported("comparison of " + left.category() + " with " + right.category() + " has no JDK form");
+    }
+
     private Expression comparison(Operand left, Operand right, RelationalOperatorType op, ParserRuleContext where)
             throws HandlerException {
+        if (jdk) {
+            return comparisonJdk(left, right, op, where);
+        }
         if (left.isNumericValued() && right.isNumericValued()) {
             return Ast.compareToZero(staticCall("Compare", "numeric", numeric(left), numeric(right)), javaOperator(op));
         }
@@ -5177,8 +5425,20 @@ public final class ProgramTranslator implements TranslationContext {
     @Override
     public BlockStmt nested(Scope scope) {
         BlockStmt block = new BlockStmt();
-        translateInto(scope, block);
+        // A nested statement is translated on its own (with its own runtime / JDK choice).
+        boolean savedJdk = jdk;
+        jdk = false;
+        try {
+            translateInto(scope, block);
+        } finally {
+            jdk = savedJdk;
+        }
         return block;
+    }
+
+    @Override
+    public boolean jdk() {
+        return jdk;
     }
 
     @Override

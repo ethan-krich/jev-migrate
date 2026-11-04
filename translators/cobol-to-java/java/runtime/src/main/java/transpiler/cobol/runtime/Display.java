@@ -13,10 +13,20 @@ import java.nio.charset.StandardCharsets;
  * (GnuCOBOL's print file or standard output). Output is
  * written byte-for-byte (one byte per character, ISO-8859-1) with a single LF terminator,
  * independent of the platform line separator.
+ *
+ * <p>{@code System.out} and {@code System.err} write into the same buffers once this class is
+ * loaded (ISO-8859-1; a println flushes them, as the JDK's own streams do), so a statement
+ * translated with plain JDK calls ({@code System.out.println}) stays in order with the DISPLAYs
+ * around it.
  */
 public final class Display {
     private static final OutputStream OUT = new BufferedOutputStream(new FileOutputStream(FileDescriptor.out), 8192);
     private static final OutputStream ERR = new BufferedOutputStream(new FileOutputStream(FileDescriptor.err), 8192);
+
+    static {
+        System.setOut(new java.io.PrintStream(OUT, true, StandardCharsets.ISO_8859_1));
+        System.setErr(new java.io.PrintStream(ERR, true, StandardCharsets.ISO_8859_1));
+    }
 
     private Display() {}
 

@@ -33,6 +33,8 @@ def language_pair() -> LanguagePair:
         catalog=CATALOG,
         default_dialect=default_dialect,
         default_importance=default_importance,
+        # Jev decides, per statement, whether the runtime library's exactness is needed or the JDK will do.
+        judged_options={"jdk_alternatives": True},
     )
 
 
