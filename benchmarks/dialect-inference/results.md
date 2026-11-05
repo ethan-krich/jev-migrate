@@ -1,4 +1,4 @@
-# Jev benchmarks
+# Jev dialect inference benchmark
 
 Live runs of `./scripts/jev-smoke.sh`: Jev infers `Dialect.collating_sequence` for the two demo
 projects in `examples/cobol-to-java-jev` (see `projects.py`). Each configuration ran 3 times.

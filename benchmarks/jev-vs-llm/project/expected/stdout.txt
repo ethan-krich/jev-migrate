@@ -1,0 +1,7 @@
+Payroll run started
+E001 ALICE      gross  1,000.00 tax    100.00 net    900.00 
+E002 BOB        gross    690.00 tax     38.00 net    652.00 
+E003 CAROL      gross  1,417.32 tax    183.46 net  1,233.86 
+E004 MARY JO    gross    189.00 tax      0.00 net    189.00 
+Employees paid: 04
+Totals gross 003296.32 tax 000321.46 net 002974.86
