@@ -71,6 +71,18 @@ public final class ContextGraph {
             CobolParser.UnstringIntoContext.class, CobolParser.UnstringDelimiterInContext.class, CobolParser.UnstringCountInContext.class,
             CobolParser.UnstringWithPointerPhraseContext.class, CobolParser.UnstringTallyingPhraseContext.class,
             CobolParser.InspectForContext.class);
+    /**
+     * The receiving rules whose identifier is also read, because the statement combines it with its
+     * incoming value: ADD .. TO x, SUBTRACT .. FROM x, MULTIPLY .. BY x, DIVIDE .. INTO x, a POINTER or
+     * TALLYING counter, INSPECT .. TALLYING counter, SEARCH .. VARYING index (and SET .. UP / DOWN BY,
+     * see {@link #readsItsValue}).
+     */
+    private static final Set<Class<?>> READ_MODIFY_WRITE = Set.of(CobolParser.AddToContext.class,
+            CobolParser.SubtractMinuendContext.class, CobolParser.SubtractMinuendCorrespondingContext.class,
+            CobolParser.MultiplyRegularOperandContext.class, CobolParser.DivideIntoContext.class,
+            CobolParser.StringWithPointerPhraseContext.class, CobolParser.UnstringWithPointerPhraseContext.class,
+            CobolParser.UnstringTallyingPhraseContext.class, CobolParser.InspectForContext.class,
+            CobolParser.SearchVaryingContext.class);
     /** Rules whose identifiers (directly below the rule) receive values. */
     private static final Set<Class<?>> RECEIVING_STATEMENTS = Set.of(CobolParser.MoveToStatementContext.class,
             CobolParser.MoveCorrespondingToStatementContext.class, CobolParser.InitializeStatementContext.class,
@@ -340,15 +352,34 @@ public final class ContextGraph {
             List<DataDescriptionEntry> written = new ArrayList<>();
             for (Ref ref : e.getValue()) {
                 DataDescriptionEntry entry = ref.entry();
-                if (receives(ref.ctx(), e.getKey())) {
+                boolean receiving = receives(ref.ctx(), e.getKey());
+                if (receiving) {
                     written.add(entry);
-                } else if (!writes.contains(entry) && !reads.contains(entry)) {
+                }
+                // A receiver the statement combines with its incoming value (ADD 1 TO TOTAL) is read too.
+                if ((!receiving || readsItsValue(ref.ctx(), e.getKey())) && !writes.contains(entry) && !reads.contains(entry)) {
                     reads.add(entry);
                 }
             }
             written.stream().filter(w -> !writes.contains(w)).forEach(writes::add);
         }
         return new Usage(reads, writes);
+    }
+
+    /**
+     * Whether the receiving identifier at {@code ctx} also supplies its incoming value to the
+     * statement (a read-modify-write operand), from the grammar rule it sits in.
+     */
+    private static boolean readsItsValue(ParserRuleContext ctx, ParserRuleContext statement) {
+        for (ParserRuleContext p = ctx; p != null && p != statement; p = p.getParent()) {
+            if (READ_MODIFY_WRITE.contains(p.getClass())) {
+                return true;
+            }
+            if (p instanceof CobolParser.SetToContext && p.getParent() instanceof CobolParser.SetUpDownByStatementContext) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Whether the identifier at {@code ctx} receives a value in the statement (from the grammar rule it sits in). */

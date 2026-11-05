@@ -300,7 +300,11 @@ result = transpile("src", output="out", libraries=libs, target_project="../billi
 
 Python checks the shape (unique ids, each part claimed once, paths that exist, `group:artifact:version`);
 the worker checks the rest at `initialize` and rejects the whole set with `invalid_library`, listing
-every problem (a path matching no program, a missing paragraph or copybook, a hint naming no member).
+every problem (a path matching no program, a missing paragraph or copybook, a hint naming no member, and
+a part claimed by two libraries even through different selectors: `Cobol.path` and `Cobol.program` reaching the same
+PROGRAM-ID, a paragraph claimed for every program and again for one). Method ids name parameter types by their simple
+names (`Dates.format(int,String)`); overloads whose ids would otherwise collide (`convert(a.Record)`,
+`convert(b.Record)`) are named with the qualified types in candidate ids and in `hints`.
 
 ### What a library can claim
 

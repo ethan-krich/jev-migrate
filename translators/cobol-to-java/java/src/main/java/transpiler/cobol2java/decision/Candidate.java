@@ -40,6 +40,11 @@ public record Candidate(String id, String handler, String description, String pr
         this(id, handler, description, preview, List.of());
     }
 
+    /** Whether applying this candidate translates with plain JDK calls (a {@code <handler>_jdk} twin): approximate. */
+    public boolean approximate() {
+        return "jdk".equals(uses) || handler.endsWith("_jdk");
+    }
+
     public Candidate withDocs(List<Doc> docs) {
         return new Candidate(id, handler, description, preview, slots, docs, uses);
     }

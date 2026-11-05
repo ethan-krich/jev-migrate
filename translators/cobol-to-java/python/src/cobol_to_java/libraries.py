@@ -185,11 +185,14 @@ class Library:
 
     @property
     def selectors(self) -> tuple[CobolSelector, ...]:
-        return (self.cobol,) if isinstance(self.cobol, CobolSelector) else tuple(self.cobol)
+        if isinstance(self.cobol, (list, tuple)):
+            return tuple(self.cobol)
+        return (self.cobol,)  # one selector, or something problems() reports
 
     def claims(self) -> Iterable[Hashable]:
         for s in self.selectors:
-            yield from s.claims()
+            if isinstance(s, CobolSelector):  # anything else is reported by problems()
+                yield from s.claims()
 
     def problems(self) -> list[str]:
         problems: list[str] = []

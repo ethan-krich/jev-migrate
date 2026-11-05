@@ -44,7 +44,7 @@ error the worker keeps serving.
 | `translate` | `files` (relative paths; default all) | `files: [...]`, `decisions: [request…]`. Status `incomplete` if any file has pending decisions or failed. |
 | `resolve` | `resolutions: [{decision_id, fingerprint?, selection: {kind: "candidate", candidate_id}}]` | `applied`, `rejected: [{decision_id, code, message}]`, `new_decisions` (raised by a newly applied structural candidate), `pending` |
 | `expand_context` | `decision_id`, `refs: [ref]`, `max_chars?` | `decision_id`, `refs` (the nodes with their text, then their neighbours one level deeper as truncated nodes), `rejected: [{ref, code: unknown_ref, message}]`. An unknown `decision_id` is `invalid_params`. |
-| `finalize` | — | Writes all files **only** if every program is translated with no pending decision; else `incomplete` with `blocking` and `pending`, nothing written. Result: `files_written`, `programs`; with libraries also `libraries_used` and `equivalence` (both written or not). |
+| `finalize` | — | Writes all files **only** if every program is translated with no pending decision; else `incomplete` with `blocking` and `pending`, nothing written. Result: `files_written`, `programs`; with libraries also `libraries_used`, and `equivalence` with libraries or when a JDK twin was applied (both written or not). |
 | `shutdown` | — (no session) | `ok`, then the process exits 0 |
 
 Resolution rejection codes: `unknown_decision`, `already_resolved`, `fingerprint_mismatch`,
@@ -120,7 +120,8 @@ Resolving a step returns the next step in `new_decisions`; the statement is tran
 last step is resolved. `finalize` reports `libraries_used: [{id, java, declared_in_target?,
 target_note?, uses: [{program, file, line, selector, part, outcome, chain, reason?, decided_by?,
 java?}]}]` (`outcome`: `library`, `translated` or `pending`) and `equivalence` (`partial` when
-any use calls a library, else `exact`). The orchestrator copies both into the report unread.
+any use calls a library or a decision applied a JDK twin (`<handler>_jdk`), else `exact`; absent without libraries unless
+a twin was applied). The orchestrator copies both into the report unread.
 
 ### Setting decisions
 

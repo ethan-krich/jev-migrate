@@ -294,8 +294,9 @@ class TranspileResult:
 
     @property
     def equivalence(self) -> str:
-        """``partial`` when any part calls a library instead of its translation (not checked against
-        the original), else ``exact``."""
+        """``partial`` when any part calls a library instead of its translation, or any statement was
+        translated with a JDK twin (``builtin:<handler>_jdk``): neither is checked against the original.
+        Else ``exact``."""
         return self.report.get("equivalence", "exact")
 
     @property

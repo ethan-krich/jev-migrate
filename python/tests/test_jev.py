@@ -10,7 +10,7 @@ import types
 import pytest
 from transpiler import ContextBudget, DecisionRequest, DecisionResponse, Gate, JevProvider, TranspileResult
 from transpiler.protocol import ExtraContext, ReviewPriority
-from transpiler.providers.jev import OPENROUTER_BASE_URL, RecordedJevClient, _Choice, merge_refs
+from transpiler.providers.jev import ABSTAIN, NEED_CONTEXT, OPENROUTER_BASE_URL, RecordedJevClient, _Choice, merge_refs
 from transpiler.providers.serve import handle
 
 
@@ -354,3 +354,16 @@ def test_runtime_choices_ask_jev_whether_the_runtime_exactness_is_needed():
     assert "jdk candidate cannot give" in q["criteria"]["__abstain__"]
     # Jev is a provider that judges: transpile asks the language pair for its choices.
     assert JevProvider("jev-test", client=RecordedJevClient({})).judges is True
+
+
+def test_options_are_counted_in_both_copies_sent_to_jev():
+    """Each option is sent in the question and again in the state, so a budget that only the question's
+    copy fits must hold the decision."""
+    r = library_request(n_options=4)
+    questions = JevProvider.questions(r, [])
+    question_only = sum(len(json.dumps(v)) for k, v in questions["pick"]["criteria"].items()
+                        if k not in (ABSTAIN, NEED_CONTEXT))
+    client = RecordedJevClient({"sha256:ab": {"pick": pick("cobol:translate", 0.9)}})
+    jev = JevProvider("jev-test", client=client, context=ContextBudget(max_option_chars=question_only + 50))
+    [answer] = jev.decide([r])
+    assert answer.held_reason == "too_many_options" and client.calls == []

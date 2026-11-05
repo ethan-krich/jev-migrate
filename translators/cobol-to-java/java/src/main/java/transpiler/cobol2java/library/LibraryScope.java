@@ -133,6 +133,28 @@ public final class LibraryScope {
         return uses;
     }
 
+    /** A position in the use records, for {@link #takeSince}. */
+    public int mark() {
+        return uses.size();
+    }
+
+    /**
+     * Removes and returns the uses recorded since {@code mark}. A candidate's preview is generated
+     * before it is chosen; its uses are staged with it and {@link #restore}d only when it is selected,
+     * so a discarded alternative leaves no use behind.
+     */
+    public List<Use> takeSince(int mark) {
+        List<Use> tail = uses.subList(mark, uses.size());
+        List<Use> taken = new ArrayList<>(tail);
+        tail.clear();
+        return taken;
+    }
+
+    /** Records the uses of a candidate that was selected. */
+    public void restore(List<Use> staged) {
+        uses.addAll(staged);
+    }
+
     /**
      * {@code libraries_used}: each library with at least one use site, with its uses. For a library
      * the output calls, {@code declared_in_target} says whether the target project declares it

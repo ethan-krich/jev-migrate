@@ -384,10 +384,10 @@ class JevProvider(DecisionProvider):
         truncated = [r for r in refs if r.get("truncated")]
         can_expand = bool(truncated) and left > 0
         questions = self.questions(request, truncated if can_expand else [])
-        held = self.too_many_options(request, questions)
+        state = self.state(request, refs, expansions)
+        held = self.too_many_options(request, questions, state)
         if held is not None:
             return held
-        state = self.state(request, refs, expansions)
         response = self.client.system_one(state, questions, model=self.model)
         pick = response.choices["pick"]
         review = self.review_priority(response.scores.get("review_priority"))
@@ -406,11 +406,19 @@ class JevProvider(DecisionProvider):
         candidate = None if gate == "abstained" else pick.choice
         return DecisionResponse(candidate, gate=gate, **common)
 
-    def too_many_options(self, request: DecisionRequest, questions: Mapping[str, Any]) -> DecisionResponse | None:
+    def too_many_options(self, request: DecisionRequest, questions: Mapping[str, Any],
+                         state: Mapping[str, Any]) -> DecisionResponse | None:
         """A held answer when the options do not fit :attr:`ContextBudget.option_chars`. Options are
-        never dropped to fit (a cut could hide the right one): the user narrows the library instead."""
+        never dropped to fit (a cut could hide the right one): the user narrows the library instead.
+        Each option is sent twice, in the question's criteria and in ``state["candidates"]``; both
+        copies (and the ids) count."""
         criteria = questions["pick"]["criteria"]
-        size = sum(len(json.dumps(v)) for k, v in criteria.items() if k not in (ABSTAIN, NEED_CONTEXT))
+        in_state = {c["id"]: len(json.dumps(c)) for c in state.get("candidates", ())}
+
+        def cost(option_id: str) -> int:
+            return len(json.dumps({option_id: criteria.get(option_id, "")})) + in_state.get(option_id, 0)
+
+        size = sum(cost(k) for k in criteria if k not in (ABSTAIN, NEED_CONTEXT))
         if size <= self.context.option_chars:
             return None
         rationale = (f"too_many_options: {len(request.candidates)} options use {size} characters, over the "
@@ -420,7 +428,7 @@ class JevProvider(DecisionProvider):
             for c in request.candidates:
                 if c.handler == "library" and c.id.startswith("library:"):
                     owner = c.id.split(":", 2)[2].split("(")[0].rsplit(".", 1)[0]
-                    owners[owner] = owners.get(owner, 0) + len(json.dumps(criteria.get(c.id, "")))
+                    owners[owner] = owners.get(owner, 0) + cost(c.id)
             top = sorted(owners.items(), key=lambda kv: -kv[1])[:5]
             part = request.library.get("part", {}).get("name", "")
             rationale += (f"; narrow library {request.library.get('id')!r} for {part} with expose= or hints=; "

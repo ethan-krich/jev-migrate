@@ -115,3 +115,54 @@ def test_pending_library_decisions_write_nothing(tmp_path):
     assert [u.outcome for u in result.libraries_used[0].uses] == ["pending"] * 3
     assert result.equivalence == "exact"
     assert "## Library mappings" in (out / "review.md").read_text()
+
+
+IF_CALL = """       IDENTIFICATION DIVISION.
+       PROGRAM-ID. BILLING.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 WS-INVOICE-DATE PIC 9(8) VALUE 20261115.
+       01 WS-TERMS-DAYS   PIC S9(4) VALUE 30.
+       01 WS-DUE-DATE     PIC 9(8).
+       PROCEDURE DIVISION.
+           IF WS-TERMS-DAYS > 10
+               CALL "DATEADD" USING WS-INVOICE-DATE WS-TERMS-DAYS
+                                    WS-DUE-DATE
+           END-IF.
+           STOP RUN.
+"""
+
+
+DATEADD = """       IDENTIFICATION DIVISION.
+       PROGRAM-ID. DATEADD.
+       DATA DIVISION.
+       LINKAGE SECTION.
+       01 LK-DATE   PIC 9(8).
+       01 LK-DAYS   PIC S9(4).
+       01 LK-RESULT PIC 9(8).
+       PROCEDURE DIVISION USING LK-DATE LK-DAYS LK-RESULT.
+           MOVE LK-DATE TO LK-RESULT.
+           GOBACK.
+"""
+
+
+@pytest.mark.parametrize("pick, equivalence", [("builtin:if", "exact"), ("builtin:if_jdk", "partial")])
+def test_only_the_selected_alternatives_library_use_is_recorded(tmp_path, pick, equivalence):
+    """An IF with a claimed CALL inside has a runtime and a JDK alternative, each previewed with its own
+    use of the library; the discarded one must leave no (pending) use behind."""
+    src = tmp_path / "src"
+    (src / "common/dates").mkdir(parents=True)
+    (src / "common/dates/DATEADD.cbl").write_text(DATEADD)
+    (src / "BILLING.cbl").write_text(IF_CALL)
+    m2 = tmp_path / "m2"
+    install(m2)
+    libs = libraries(caches={"maven": m2, "gradle": tmp_path / "gradle"})
+    libs.add(Library(id="acme.dates", cobol=Cobol.path("common/dates/"), java=Java.maven("com.acme:acme-dates:2.3.1")))
+    provider = StaticProvider([DecisionResponse(pick, decision_id="decision-1"),
+                               DecisionResponse("cobol:translate", decision_id="decision-2")])
+    result = transpile(src, output=tmp_path / "out", libraries=libs, provider=provider, options={"jdk_alternatives": True},
+                       layout=Layout(base_package="fixtures.libs"), dialect=DIALECT)
+    assert result.ok, result.summary()
+    [lib] = result.libraries_used
+    assert [(u.outcome, u.reason is None) for u in lib.uses] == [("translated", False)]
+    assert result.equivalence == equivalence

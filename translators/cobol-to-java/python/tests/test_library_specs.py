@@ -59,6 +59,12 @@ def test_shape_problems_are_reported_together(tmp_path):
         libraries().add(Library(id="x", cobol=Cobol.program("A"), java=Java.jar(tmp_path)))
 
 
+def test_invalid_selector_entries_are_reported_not_raised():
+    for bad in ([None], [Cobol.program("A"), "B"], None, "DATEFMT"):
+        with pytest.raises(LibraryError, match="cobol= takes Cobol.program"):
+            libraries().add(Library(id="bad", cobol=bad, java=Java.maven("g:a:1")))
+
+
 def test_ids_and_claims_are_unique(tmp_path):
     libs = libraries()
     libs.add(Library(id="a", cobol=Cobol.program("DATEFMT"), java=Java.maven("g:a:1")))

@@ -57,11 +57,17 @@ public final class JavaIndex {
     private final int classes;
 
     private JavaIndex(List<JavaMember> members, String hash, List<String> skipped, int classes) {
-        this.members = List.copyOf(members);
-        this.byOwner = members.stream().collect(Collectors.groupingBy(JavaMember::owner, LinkedHashMap::new, Collectors.toList()));
+        this.members = disambiguated(members);
+        this.byOwner = this.members.stream().collect(Collectors.groupingBy(JavaMember::owner, LinkedHashMap::new, Collectors.toList()));
         this.hash = hash;
         this.skipped = List.copyOf(skipped);
         this.classes = classes;
+    }
+
+    /** Members whose ids collide (same owner and name, parameter types equal but for their packages) get qualified ids. */
+    private static List<JavaMember> disambiguated(List<JavaMember> all) {
+        Map<String, Long> counts = all.stream().collect(Collectors.groupingBy(JavaMember::id, Collectors.counting()));
+        return all.stream().map(m -> counts.get(m.id()) > 1 ? m.withQualifiedTypes() : m).toList();
     }
 
     /** Every member, in source order (files sorted by path). */

@@ -3721,7 +3721,20 @@ public final class ProgramTranslator implements TranslationContext {
         }
     }
 
-    private record Generated(Candidate candidate, List<Statement> statements, List<Decision> nested) {}
+    /**
+     * A candidate's generated statements, the decisions they raise, and the library uses recorded
+     * while generating them (staged: recorded only if the candidate is selected).
+     */
+    private record Generated(Candidate candidate, List<Statement> statements, List<Decision> nested,
+            List<transpiler.cobol2java.library.LibraryScope.Use> uses) {
+        Generated(Candidate candidate, List<Statement> statements, List<Decision> nested) {
+            this(candidate, statements, nested, List.of());
+        }
+
+        Generated withCandidate(Candidate c) {
+            return new Generated(c, statements, nested, uses);
+        }
+    }
 
     /**
      * Offers {@code handler} and its JDK twin as one {@code runtime_choice} decision (the run asked
@@ -3743,11 +3756,14 @@ public final class ProgramTranslator implements TranslationContext {
         String message;
         if (runtimeOnes.isEmpty()) {
             String problem;
+            int mark = in.libraries().mark();
             try {
                 generate(handler, unit, new ArrayList<>());
                 problem = "it does not apply";
             } catch (HandlerException e) {
                 problem = e.getMessage();
+            } finally {
+                in.libraries().takeSince(mark);  // only probing why the handler fails: record no use
             }
             message = "the runtime handler '" + handler.id() + "' cannot translate this statement exactly (" + problem
                     + "); its JDK twin '" + twin.id() + "' can, approximately";
@@ -3756,8 +3772,8 @@ public final class ProgramTranslator implements TranslationContext {
                     + "' (plain JDK calls, approximate)";
         }
         List<Generated> offered = new ArrayList<>();
-        runtimeOnes.forEach(g -> offered.add(new Generated(g.candidate().withUses("runtime"), g.statements(), g.nested())));
-        jdkOnes.forEach(g -> offered.add(new Generated(g.candidate().withUses("jdk"), g.statements(), g.nested())));
+        runtimeOnes.forEach(g -> offered.add(g.withCandidate(g.candidate().withUses("runtime"))));
+        jdkOnes.forEach(g -> offered.add(g.withCandidate(g.candidate().withUses("jdk"))));
         unresolved(unit, block, facts, Reason.RUNTIME_CHOICE, rule, message, offered);
         return true;
     }
@@ -3778,8 +3794,10 @@ public final class ProgramTranslator implements TranslationContext {
             List<Decision> nested = new ArrayList<>();
             int savedStatements = statements;
             int savedTranslated = translated;
+            int mark = in.libraries().mark();
             try {
                 List<Statement> stmts = generate(h, unit, nested);
+                var staged = in.libraries().takeSince(mark);
                 String preview = String.join("\n", stmts.stream().map(Statement::toString).toList());
                 List<Candidate.Doc> docs = new ArrayList<>(JavaDocs.runtime().calledBy(stmts));
                 if (in.builtins().isJdk(h)) {
@@ -3787,10 +3805,11 @@ public final class ProgramTranslator implements TranslationContext {
                     docs.addAll(JavaDocs.jdk().calledByAnyScope(stmts));
                 }
                 Candidate candidate = new Candidate("builtin:" + h.id(), h.id(), h.description(), preview).withDocs(docs);
-                out.add(new Generated(candidate, stmts, nested));
+                out.add(new Generated(candidate, stmts, nested, staged));
             } catch (HandlerException e) {
                 // Not a viable candidate for this instance.
             } finally {
+                in.libraries().takeSince(mark);  // uses of a candidate that failed to generate
                 // Candidate exploration must not change the program's statement counts.
                 statements = savedStatements;
                 translated = savedTranslated;
@@ -3829,6 +3848,7 @@ public final class ProgramTranslator implements TranslationContext {
             block.getStatements().remove(index);
             block.getStatements().addAll(index, g.statements());
             annotate(g.statements(), note);
+            in.libraries().restore(g.uses());  // only the selected candidate's library uses are recorded
             return g.nested();
         };
         return new Decision(reason, unit.operation(), message, unit.location(), in.programId(), facts,

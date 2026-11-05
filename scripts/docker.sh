@@ -17,8 +17,9 @@ fi
 docker run --rm -v transpiler-dev-home:/home/dev "$IMAGE" chown -R "$(id -u):$(id -g)" /home/dev
 
 cmd="${1:-test}"; shift || true
-tty=(); [[ -t 0 && -t 1 ]] && tty=(-it)
-run=(docker run --rm ${tty[@]+"${tty[@]}"} --user "$(id -u):$(id -g)"
+# stdin stays open (-i) so piped or redirected input reaches ACCEPT; a TTY (-t) only when both ends are terminals
+tty=(-i); [[ -t 0 && -t 1 ]] && tty=(-it)
+run=(docker run --rm "${tty[@]}" --user "$(id -u):$(id -g)"
      -v "$ROOT:/work" -v transpiler-dev-home:/home/dev -w /work
      -e TRANSPILER_CORE=/work/build/docker/core/transpiler-core "$IMAGE")
 case "$cmd" in

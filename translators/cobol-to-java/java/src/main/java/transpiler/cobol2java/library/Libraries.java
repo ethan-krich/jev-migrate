@@ -8,12 +8,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import transpiler.cobol2java.protocol.ErrorCode;
 import transpiler.cobol2java.protocol.Json;
 import transpiler.cobol2java.protocol.ProtocolException;
@@ -182,7 +184,10 @@ public final class Libraries {
     /**
      * Checks the COBOL side against the parsed project: a path selector matches a program, a
      * paragraph or copybook exists, an operation is one a library can claim, and every hint names
-     * a claimed part. Throws {@code invalid_library} listing every problem.
+     * a claimed part. Selectors are resolved to the concrete source parts they claim (a path to the
+     * PROGRAM-IDs of the programs it matches, a paragraph claim without a program to every program
+     * that has it), and a part two libraries claim, however they name it, is a problem. Throws
+     * {@code invalid_library} listing every problem.
      *
      * @param programs relative path of each parsed program to its PROGRAM-ID as written
      * @param copybooks the project's copybook names (upper case, no extension)
@@ -190,18 +195,32 @@ public final class Libraries {
      */
     public void check(Map<String, String> programs, Set<String> copybooks, Map<String, Set<String>> paragraphs) throws ProtocolException {
         List<String> problems = new ArrayList<>();
+        Map<String, String> owners = new HashMap<>();
         for (Library lib : libraries) {
             String where = "library '" + lib.id() + "'";
+            BiConsumer<String, String> claim = (key, label) -> {
+                String owner = owners.putIfAbsent(key, lib.id());
+                if (owner != null && !owner.equals(lib.id())) {
+                    problems.add(where + ": " + label + " is already claimed by library '" + owner + "'");
+                }
+            };
             List<String> parts = new ArrayList<>();
             for (Selector s : lib.selectors()) {
                 switch (s.kind()) {
-                    case "program" -> parts.addAll(s.names());
+                    case "program" -> {
+                        parts.addAll(s.names());
+                        s.names().forEach(n -> claim.accept("program:" + n.toUpperCase(Locale.ROOT), "program " + n));
+                    }
                     case "path" -> {
                         List<String> matched = programs.keySet().stream().filter(f -> pathMatches(s.pattern(), f)).toList();
                         if (matched.isEmpty()) {
                             problems.add(where + ": Cobol.path('" + s.pattern() + "') matches no program of the project");
                         }
-                        matched.forEach(f -> parts.add(programs.get(f)));
+                        matched.forEach(f -> {
+                            parts.add(programs.get(f));
+                            claim.accept("program:" + programs.get(f).toUpperCase(Locale.ROOT),
+                                    "program " + programs.get(f) + " (" + f + ", selected by Cobol.path('" + s.pattern() + "'))");
+                        });
                     }
                     case "operation" -> {
                         for (String n : s.names()) {
@@ -210,6 +229,7 @@ public final class Libraries {
                                         + new java.util.TreeSet<>(VERBS));
                             }
                             parts.add(n);
+                            claim.accept("operation:" + n, n);
                         }
                     }
                     case "copybook" -> {
@@ -218,6 +238,7 @@ public final class Libraries {
                                 problems.add(where + ": copybook " + n + " is not part of the project");
                             }
                             parts.add(n);
+                            claim.accept("copybook:" + n.toUpperCase(Locale.ROOT), "copybook " + n);
                         }
                     }
                     case "paragraph" -> {
@@ -230,6 +251,15 @@ public final class Libraries {
                                         + " does not exist");
                             }
                             parts.add(n);
+                            // A paragraph claim without a program claims it in every program that has it.
+                            if (s.program() != null) {
+                                claim.accept("paragraph:" + n + "@" + s.program().toUpperCase(Locale.ROOT),
+                                        "paragraph " + n + " of program " + s.program());
+                            } else {
+                                paragraphs.entrySet().stream().filter(e -> e.getValue().contains(n)).map(Map.Entry::getKey).sorted()
+                                        .forEach(pid -> claim.accept("paragraph:" + n + "@" + pid.toUpperCase(Locale.ROOT),
+                                                "paragraph " + n + " of program " + pid));
+                            }
                         }
                     }
                     default -> problems.add(where + ": unknown selector kind '" + s.kind() + "'");

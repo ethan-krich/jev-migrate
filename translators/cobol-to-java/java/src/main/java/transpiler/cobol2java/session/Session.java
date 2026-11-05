@@ -832,7 +832,13 @@ public final class Session {
             Path target = libraries.targetProject();
             result.set("libraries_used", libraryScope.report(lib -> target == null ? null
                     : transpiler.cobol2java.library.TargetProject.check(target, lib.coordinates())));
-            result.put("equivalence", libraryScope.equivalence());
+        }
+        // Libraries and JDK twins are not equivalence-checked: either one makes the result partial. The
+        // field is absent when neither is in play (the output and report stay as without the options).
+        boolean jdkApplied = decisions.stream().anyMatch(d -> d.state() == Decision.State.RESOLVED
+                && d.candidates().stream().anyMatch(c -> c.id().equals(d.selectedCandidate()) && c.approximate()));
+        if (!libraries.isEmpty() || jdkApplied) {
+            result.put("equivalence", jdkApplied ? "partial" : libraryScope.equivalence());
         }
         if (!problems.isEmpty()) {
             result.put("message", "no files were written: " + problems.size() + " file(s) are not fully translated");

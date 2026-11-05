@@ -144,6 +144,22 @@ class JavaIndexTest {
     }
 
     @Test
+    void overloadsWhoseParameterTypesShareASimpleNameGetQualifiedIds() {
+        JavaIndex index = JavaIndex.of(Map.of(
+                "a/Record.java", "package a; public class Record {}",
+                "b/Record.java", "package b; public class Record {}",
+                "p/Ops.java", "package p; public class Ops { public static int convert(a.Record r) { return 1; }"
+                        + " public static int convert(b.Record r) { return 2; } public static int plain(int i) { return i; } }"),
+                List.of("p.*"));
+        List<JavaMember> ops = index.of("p.Ops");
+        List<String> ids = ops.stream().map(JavaMember::id).toList();
+        assertEquals(List.of("Ops.new()", "Ops.convert(a.Record)", "Ops.convert(b.Record)", "Ops.plain(int)"), ids);
+        assertTrue(ops.get(2).matches("Ops.convert(b.Record)") && ops.get(2).matches("p.Ops.convert(b.Record)"));
+        assertFalse(ops.get(2).matches("Ops.convert(a.Record)") || ops.get(2).matches("Ops.convert(Record)"));
+        assertEquals(ids.size(), ids.stream().distinct().count());
+    }
+
+    @Test
     void readsDirectoriesFilesAndSourcesJarsWithTheSameHash(@TempDir Path tmp) throws Exception {
         Path dir = tmp.resolve("src");
         Files.createDirectories(dir.resolve("p"));

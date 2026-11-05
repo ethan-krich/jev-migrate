@@ -200,11 +200,13 @@ def test_jev_chooses_between_the_runtime_and_the_jdk_per_statement(tmp_path, bui
     main = next(p for p in exact.programs if p.class_name).package + ".Basics"
     assert run_java(exact.output, main) == golden(BASICS)
     assert {r.candidate_id.endswith("_jdk") for r in exact.resolutions.applied} == {False}
+    assert exact.equivalence == "exact"
     java = next(exact.output.rglob("Basics.java")).read_text()
     assert "System.out" not in java and "Decided by jev (confidence 0.90): builtin:add" in java
 
     approximate = choose_all(tmp_path, "jdk", "jdk")
     assert {r.candidate_id.endswith("_jdk") for r in approximate.resolutions.applied} == {True}
+    assert approximate.equivalence == "partial"  # JDK twins are approximate, with or without libraries
     java = next(approximate.output.rglob("Basics.java")).read_text()
     assert 'System.out.println("Hello, " + wsName.display() + "!");' in java
     assert "wsAmount.get().doubleValue() * wsRate.get().doubleValue()" in java
