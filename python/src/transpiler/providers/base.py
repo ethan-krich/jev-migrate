@@ -19,6 +19,9 @@ from ..protocol import DecisionRequest, DecisionResponse, ExtraContext
 
 class DecisionProvider(ABC):
     name: str
+    # Whether the provider judges between alternatives (Jev): a language pair then asks for the
+    # choices only such a provider can make (LanguagePair.judged_options).
+    judges: bool = False
 
     @abstractmethod
     def to_config(self) -> dict[str, Any]:

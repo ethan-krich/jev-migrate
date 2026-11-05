@@ -19,7 +19,7 @@
       "properties": {
         "id": {"type": "string", "minLength": 1, "description": "Stable identifier; unique within the registry"},
         "source": {"type": "string", "minLength": 1, "description": "Source operation, e.g. a COBOL verb (MOVE, ADD, GOBACK, GO_TO)"},
-        "strategy": {"enum": ["builtin", "unresolved", "callback"]},
+        "strategy": {"enum": ["builtin", "unresolved", "callback", "library"], "description": "library: a library_call decision when the operation uses a part a library claims (initialize.libraries)"},
         "handler": {"type": "string", "minLength": 1, "description": "Builtin handler id (builtin strategy only)"},
         "when": {
           "type": "object",
@@ -40,7 +40,7 @@
       "allOf": [
         {"if": {"properties": {"strategy": {"const": "builtin"}}}, "then": {"required": ["handler"], "not": {"required": ["callback"]}}},
         {"if": {"properties": {"strategy": {"const": "callback"}}}, "then": {"required": ["callback"], "not": {"required": ["handler"]}}},
-        {"if": {"properties": {"strategy": {"const": "unresolved"}}}, "then": {"not": {"anyOf": [{"required": ["handler"]}, {"required": ["callback"]}]}}}
+        {"if": {"properties": {"strategy": {"enum": ["unresolved", "library"]}}}, "then": {"not": {"anyOf": [{"required": ["handler"]}, {"required": ["callback"]}]}}}
       ]
     }
   }

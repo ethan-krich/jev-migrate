@@ -1,6 +1,7 @@
 """COBOL-to-Java language pair for the transpiler.
 
     from cobol_to_java import default_mappings, Dialect, Layout
+    from cobol_to_java import Cobol, Java, Library, libraries
 """
 
 from transpiler import LanguagePair
@@ -16,6 +17,7 @@ from .defaults import (
 )
 from .dialect import Dialect, default_dialect
 from .layout import Layout
+from .libraries import Cobol, CobolSelector, Java, JavaSource, Library, libraries
 from .mappings import BUILTIN_HANDLERS, DEFAULT_IMPORTANCE, FACTS
 
 
@@ -31,22 +33,30 @@ def language_pair() -> LanguagePair:
         catalog=CATALOG,
         default_dialect=default_dialect,
         default_importance=default_importance,
+        # Jev decides, per statement, whether the runtime library's exactness is needed or the JDK will do.
+        judged_options={"jdk_alternatives": True},
     )
 
 
 __all__ = [
     "BUILTIN_HANDLERS",
     "CATALOG",
+    "Cobol",
+    "CobolSelector",
     "DEFAULT_IMPORTANCE",
     "Dialect",
     "FACTS",
+    "Java",
+    "JavaSource",
     "LANGUAGE_PAIR",
     "Layout",
+    "Library",
     "default_dialect",
     "default_importance",
     "default_layout",
     "default_mappings",
     "empty_mappings",
     "language_pair",
+    "libraries",
     "translator_dir",
 ]

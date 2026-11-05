@@ -185,10 +185,73 @@ public final class Builtins implements MappingRegistry.Catalog {
         register(Handler.of("search_all", "SEARCH",
                 "SEARCH ALL ... WHEN key = value [AT END] as GnuCOBOL's binary search, whatever order the keys are in",
                 Builtins::searchAll));
+
+        // JDK twins: the same statement with plain JDK calls instead of the runtime library. A
+        // twin is offered next to the handler it shadows, as a runtime_choice decision, only
+        // when the run asks for it (options.jdk_alternatives); no default rule selects one.
+        String doubles = "approximate: binary floating point can be off in the last digits "
+                + "(0.1 + 0.2 is 0.30000000000000004, which a PIC 9V99 receiver truncates to 0.30, and 0.29 * 100 is "
+                + "28.999999999999996, which a PIC 999 receiver truncates to 28), and more than 15 significant digits are lost";
+        twin("add", "ADD ... TO / GIVING in Java double arithmetic; the receiver's PICTURE still truncates the result, "
+                + "or ROUNDED rounds it, and SIZE ERROR is still detected; " + doubles);
+        twin("subtract", "SUBTRACT ... FROM / GIVING in Java double arithmetic; the receiver's PICTURE still truncates the "
+                + "result, or ROUNDED rounds it, and SIZE ERROR is still detected; " + doubles);
+        twin("multiply", "MULTIPLY ... BY / GIVING in Java double arithmetic; the receiver's PICTURE still truncates the "
+                + "result, or ROUNDED rounds it, and SIZE ERROR is still detected; " + doubles);
+        twin("divide", "DIVIDE ... INTO / BY / GIVING (not REMAINDER) in Java double arithmetic; the receiver's PICTURE "
+                + "still truncates the quotient, or ROUNDED rounds it; " + doubles + "; division by zero gives Infinity, "
+                + "which stops the program with a NumberFormatException instead of raising SIZE ERROR");
+        twin("compute_gnucobol", "COMPUTE in Java double arithmetic: + - * /, ** of any exponent (Math.pow), and "
+                + "FUNCTION SQRT, LOG, LOG10, EXP, EXP10, SIN, COS, TAN, ASIN, ACOS, ATAN, PI, E, RANDOM, ABS, MAX, MIN, "
+                + "MOD, REM, INTEGER, INTEGER-PART, SUM, MEAN with java.lang.Math; the receiver's PICTURE still truncates the "
+                + "result, or ROUNDED rounds it; " + doubles + "; GnuCOBOL's own floating-point functions differ in the "
+                + "last digits too; division by zero stops the program with a NumberFormatException instead of SIZE ERROR");
+        twin("display", "DISPLAY with System.out / System.err print / println of the operands' DISPLAY text; "
+                + "approximate only for characters outside ASCII when no runtime DISPLAY ran before it (the JVM's default "
+                + "charset is used instead of one byte per character)");
+        twin("if", "IF / ELSE with plain JDK comparisons: numeric operands as Java doubles (<, ==, Math.signum), "
+                + "alphanumeric ones with String.equals / compareTo, class tests with Character methods; approximate: "
+                + "strings of different lengths are compared without padding the shorter one with spaces (\"AB\" < \"AB \" "
+                + "in Java, equal in COBOL), the class tests accept any Unicode letter or digit, and numeric values with more "
+                + "than 15 significant digits lose precision");
+        twin("string", "STRING ... DELIMITED BY SIZE / literal ... INTO with a StringBuilder (no POINTER, no OVERFLOW); "
+                + "approximate: the result replaces the whole receiver (space-padded or cut) where COBOL leaves the "
+                + "receiver's characters after the last one written unchanged");
+        twin("unstring", "UNSTRING ... DELIMITED BY [ALL] literal [OR ...] INTO items with String.split (no DELIMITER IN, "
+                + "COUNT IN, POINTER, TALLYING or OVERFLOW); approximate: a numeric receiver takes "
+                + "new BigDecimal of the trimmed field, which fails with NumberFormatException where COBOL moves the "
+                + "characters as digits");
+        twin("inspect", "INSPECT TALLYING / REPLACING ALL, LEADING, FIRST or CHARACTERS (no BEFORE / AFTER INITIAL, no "
+                + "CONVERTING) with String.replace / regionMatches and regular expressions; approximate: several "
+                + "TALLYING or REPLACING phrases are applied one after the other where COBOL scans the item once for all "
+                + "of them at each position");
     }
 
     private void register(Handler h) {
         handlers.put(h.id(), h);
+    }
+
+    /** Runtime handler id to its JDK twin. */
+    private final Map<String, Handler> twins = new LinkedHashMap<>();
+    private final Set<Handler> jdkHandlers = new java.util.HashSet<>();
+
+    /** Registers {@code <base>_jdk}: {@code base}'s generator, run in {@link TranslationContext#jdk} mode. */
+    private void twin(String base, String description) {
+        Handler b = handlers.get(base);
+        Handler t = Handler.of(base + "_jdk", b.operation(), description, b::generate);
+        register(t);
+        twins.put(base, t);
+        jdkHandlers.add(t);
+    }
+
+    /** The JDK twin of a runtime handler, or null when it has none. */
+    public Handler jdkTwin(Handler runtime) {
+        return runtime == null ? null : twins.get(runtime.id());
+    }
+
+    /** Whether {@code h} is a JDK twin (it generates in {@link TranslationContext#jdk} mode). */
+    public boolean isJdk(Handler h) {
+        return jdkHandlers.contains(h);
     }
 
     public Handler handler(String id) {
@@ -501,6 +564,11 @@ public final class Builtins implements MappingRegistry.Catalog {
     private static List<Statement> storeAll(List<Receiver> receivers, Function<Receiver, Expression> value,
             OnSizeErrorPhrase on, NotOnSizeErrorPhrase notOn, TranslationContext c) {
         List<Statement> out = new ArrayList<>();
+        if (c.jdk()) {
+            // A double result is stored through its decimal value (BigDecimal.valueOf: Double.toString's digits).
+            Function<Receiver, Expression> computed = value;
+            value = r -> staticCall("BigDecimal", "valueOf", computed.apply(r));
+        }
         boolean phrase = on != null || notOn != null;
         if (!phrase) {
             for (Receiver r : receivers) {
@@ -526,13 +594,44 @@ public final class Builtins implements MappingRegistry.Catalog {
             return e;
         }
         String var = c.fresh(base);
-        out.add(declare(type("BigDecimal"), var, e));
+        out.add(declare(c.jdk() ? com.github.javaparser.ast.type.PrimitiveType.doubleType() : type("BigDecimal"), var, e));
         return name(var);
     }
 
-    private static Expression sum(List<Expression> operands) {
+    private static Expression sum(List<Expression> operands, TranslationContext c) {
+        if (c.jdk()) {
+            Expression e = operands.getFirst();
+            for (int i = 1; i < operands.size(); i++) {
+                e = Ast.binary(e, BinaryExpr.Operator.PLUS, operands.get(i));
+            }
+            return e;
+        }
         return operands.size() == 1 ? operands.getFirst()
                 : staticCall("Arithmetic", "sum", operands.toArray(Expression[]::new));
+    }
+
+    /** A receiver's current value: its BigDecimal, or its double in JDK mode. */
+    private static Expression current(Receiver r, TranslationContext c) {
+        return c.jdk() ? call(call(r.field(), "get"), "doubleValue") : call(r.field(), "get");
+    }
+
+    /** {@code a.add(b)} / {@code subtract} / {@code multiply}, or {@code a + b} / {@code -} / {@code *} in JDK mode. */
+    private static Expression arith(Expression a, String op, Expression b, TranslationContext c) {
+        if (!c.jdk()) {
+            return call(a, op, b);
+        }
+        return Ast.binary(a, switch (op) {
+            case "add" -> BinaryExpr.Operator.PLUS;
+            case "subtract" -> BinaryExpr.Operator.MINUS;
+            case "multiply" -> BinaryExpr.Operator.MULTIPLY;
+            default -> throw new IllegalArgumentException(op);
+        }, b);
+    }
+
+    /** DIVIDE's quotient at the receiver's scale ({@code Arithmetic.divide}), or {@code a / b} in JDK mode. */
+    private static Expression quotient(Expression dividend, Expression divisor, Receiver r, TranslationContext c) {
+        return c.jdk() ? Ast.binary(dividend, BinaryExpr.Operator.DIVIDE, divisor)
+                : staticCall("Arithmetic", "divide", dividend, divisor, integer(r.scale()), bool(r.rounded()));
     }
 
     private static List<Statement> add(OpUnit u, TranslationContext c) throws HandlerException {
@@ -548,8 +647,8 @@ public final class Builtins implements MappingRegistry.Catalog {
                 for (var to : add.getAddToStatement().getTos()) {
                     rs.add(receiver(to.getToCall(), to, c));
                 }
-                Expression addend = once(sum(ops), rs.size(), out, c, "addend");
-                out.addAll(storeAll(rs, r -> call(call(r.field(), "get"), "add", addend.clone()),
+                Expression addend = once(sum(ops, c), rs.size(), out, c, "addend");
+                out.addAll(storeAll(rs, r -> arith(current(r, c), "add", addend.clone(), c),
                         add.getOnSizeErrorPhrase(), add.getNotOnSizeErrorPhrase(), c));
             }
             case TO_GIVING -> {
@@ -564,7 +663,7 @@ public final class Builtins implements MappingRegistry.Catalog {
                 for (var g : add.getAddToGivingStatement().getGivings()) {
                     rs.add(receiver(g.getGivingCall(), g, c));
                 }
-                Expression total = once(sum(ops), rs.size(), out, c, "sum");
+                Expression total = once(sum(ops, c), rs.size(), out, c, "sum");
                 out.addAll(storeAll(rs, r -> total.clone(), add.getOnSizeErrorPhrase(), add.getNotOnSizeErrorPhrase(), c));
             }
             case CORRESPONDING -> out.add(corresponding(u, c, "add"));
@@ -585,8 +684,8 @@ public final class Builtins implements MappingRegistry.Catalog {
                 for (var m : sub.getSubtractFromStatement().getMinuends()) {
                     rs.add(receiver(m.getMinuendCall(), m, c));
                 }
-                Expression subtrahend = once(sum(ops), rs.size(), out, c, "subtrahend");
-                out.addAll(storeAll(rs, r -> call(call(r.field(), "get"), "subtract", subtrahend.clone()),
+                Expression subtrahend = once(sum(ops, c), rs.size(), out, c, "subtrahend");
+                out.addAll(storeAll(rs, r -> arith(current(r, c), "subtract", subtrahend.clone(), c),
                         sub.getOnSizeErrorPhrase(), sub.getNotOnSizeErrorPhrase(), c));
             }
             case FROM_GIVING -> {
@@ -600,7 +699,7 @@ public final class Builtins implements MappingRegistry.Catalog {
                 for (var g : giving.getGivings()) {
                     rs.add(receiver(g.getGivingCall(), g, c));
                 }
-                Expression difference = once(call(minuend, "subtract", sum(ops)), rs.size(), out, c, "difference");
+                Expression difference = once(arith(minuend, "subtract", sum(ops, c), c), rs.size(), out, c, "difference");
                 out.addAll(storeAll(rs, r -> difference.clone(), sub.getOnSizeErrorPhrase(), sub.getNotOnSizeErrorPhrase(), c));
             }
             case CORRESPONDING -> out.add(corresponding(u, c, "subtract"));
@@ -610,6 +709,9 @@ public final class Builtins implements MappingRegistry.Catalog {
 
     /** One pair of ADD / SUBTRACT CORRESPONDING: target = target op source. */
     private static Statement corresponding(OpUnit u, TranslationContext c, String op) throws HandlerException {
+        if (c.jdk()) {
+            throw HandlerException.unsupported("CORRESPONDING has no JDK form");
+        }
         var pair = u.corresponding();
         if (pair == null || pair.problem() != null) {
             throw HandlerException.unsupported(pair == null ? "CORRESPONDING operands must be group items" : pair.problem());
@@ -628,7 +730,7 @@ public final class Builtins implements MappingRegistry.Catalog {
                 rs.add(receiver(by.getOperandCall(), by, c));
             }
             Expression factor = once(numericOperand(mul.getOperandValueStmt(), c), rs.size(), out, c, "factor");
-            out.addAll(storeAll(rs, r -> call(factor.clone(), "multiply", call(r.field(), "get")),
+            out.addAll(storeAll(rs, r -> arith(factor.clone(), "multiply", current(r, c), c),
                     mul.getOnSizeErrorPhrase(), mul.getNotOnSizeErrorPhrase(), c));
         } else {
             var giving = mul.getGivingPhrase();
@@ -637,7 +739,7 @@ public final class Builtins implements MappingRegistry.Catalog {
             for (var res : giving.getGivingResults()) {
                 rs.add(receiver(res.getResultCall(), res, c));
             }
-            Expression product = once(call(left, "multiply", right), rs.size(), out, c, "product");
+            Expression product = once(arith(left, "multiply", right, c), rs.size(), out, c, "product");
             out.addAll(storeAll(rs, r -> product.clone(), mul.getOnSizeErrorPhrase(), mul.getNotOnSizeErrorPhrase(), c));
         }
         return out;
@@ -657,8 +759,8 @@ public final class Builtins implements MappingRegistry.Catalog {
                     rs.add(receiver(into.getGivingCall(), into, c));
                 }
                 Expression divisor = once(operand, rs.size(), out, c, "divisor");
-                out.addAll(storeAll(rs, r -> staticCall("Arithmetic", "divide", call(r.field(), "get"), divisor.clone(),
-                        integer(r.scale()), bool(r.rounded())), div.getOnSizeErrorPhrase(), div.getNotOnSizeErrorPhrase(), c));
+                out.addAll(storeAll(rs, r -> quotient(current(r, c), divisor.clone(), r, c),
+                        div.getOnSizeErrorPhrase(), div.getNotOnSizeErrorPhrase(), c));
             }
             case INTO_GIVING, BY_GIVING -> {
                 boolean into = div.getDivideType() == DivideStatement.DivideType.INTO_GIVING;
@@ -670,8 +772,8 @@ public final class Builtins implements MappingRegistry.Catalog {
                 }
                 Expression dividend = once(into ? other : operand, rs.size(), out, c, "dividend");
                 Expression divisor = once(into ? operand : other, rs.size(), out, c, "divisor");
-                out.addAll(storeAll(rs, r -> staticCall("Arithmetic", "divide", dividend.clone(), divisor.clone(),
-                        integer(r.scale()), bool(r.rounded())), div.getOnSizeErrorPhrase(), div.getNotOnSizeErrorPhrase(), c));
+                out.addAll(storeAll(rs, r -> quotient(dividend.clone(), divisor.clone(), r, c),
+                        div.getOnSizeErrorPhrase(), div.getNotOnSizeErrorPhrase(), c));
             }
         }
         return out;
@@ -686,6 +788,9 @@ public final class Builtins implements MappingRegistry.Catalog {
     private static List<Statement> divideRemainder(DivideStatement div, TranslationContext c) throws HandlerException {
         if (div.getDivideType() == DivideStatement.DivideType.INTO) {
             throw HandlerException.unsupported("REMAINDER requires GIVING");
+        }
+        if (c.jdk()) {
+            throw HandlerException.unsupported("DIVIDE ... REMAINDER has no JDK form");
         }
         boolean into = div.getDivideType() == DivideStatement.DivideType.INTO_GIVING;
         var phrase = into ? div.getDivideIntoGivingStatement().getGivingPhrase() : div.getDivideByGivingStatement().getGivingPhrase();
@@ -767,6 +872,20 @@ public final class Builtins implements MappingRegistry.Catalog {
             args.add(displayValue(c.operand(operand.getOperandValueStmt()), c));
         }
         boolean noAdvancing = d.getWith() != null;
+        if (c.jdk()) {
+            if (output == Output.PRINTER) {
+                throw HandlerException.unsupported("DISPLAY UPON PRINTER has no JDK form");
+            }
+            if (args.isEmpty()) {
+                throw HandlerException.unsupported("DISPLAY without operands has no JDK form");
+            }
+            Expression text = args.get(0);
+            for (int i = 1; i < args.size(); i++) {
+                text = Ast.binary(text, BinaryExpr.Operator.PLUS, args.get(i));
+            }
+            var stream = new com.github.javaparser.ast.expr.FieldAccessExpr(name("System"), output == Output.STDERR ? "err" : "out");
+            return List.of(stmt(call(stream, noAdvancing ? "print" : "println", text)));
+        }
         if (output == Output.PRINTER) {
             args.addFirst(bool(!noAdvancing));
             return List.of(stmt(new com.github.javaparser.ast.expr.MethodCallExpr(name("Display"), "printer", args)));
@@ -839,6 +958,7 @@ public final class Builtins implements MappingRegistry.Catalog {
             case Operand.Figurative f when !f.name().equals("ALL") -> str(f.pattern());
             case Operand.Computed v when v.shown() != null -> v.shown();
             case Operand.Computed v when "text".equals(v.display()) -> v.value();
+            case Operand.Computed v when "double".equals(v.display()) -> staticCall("String", "valueOf", v.value());
             case Operand.Computed v when "decimal".equals(v.display()) ->
                     staticCall("Functions", "decimalDisplay", v.value(), chr(c.decimalPointComma() ? ',' : '.'));
             case Operand.Computed v when "integer".equals(v.display()) -> staticCall("Functions", "integerDisplay", v.value());
@@ -2130,6 +2250,9 @@ public final class Builtins implements MappingRegistry.Catalog {
 
     private static List<Statement> stringStatement(OpUnit u, TranslationContext c) throws HandlerException {
         var s = (io.proleap.cobol.asg.metamodel.procedure.string.StringStatement) u.statement();
+        if (c.jdk()) {
+            return stringJdk(s, c);
+        }
         Expression target = alphanumericTarget(s.getIntoPhrase().getIntoCall(), c);
         Expression pointer = s.getWithPointerPhrase() == null ? new com.github.javaparser.ast.expr.NullLiteralExpr()
                 : integerItem(s.getWithPointerPhrase().getPointerCall(), c);
@@ -2151,6 +2274,9 @@ public final class Builtins implements MappingRegistry.Catalog {
 
     private static List<Statement> unstring(OpUnit u, TranslationContext c) throws HandlerException {
         var s = (io.proleap.cobol.asg.metamodel.procedure.unstring.UnstringStatement) u.statement();
+        if (c.jdk()) {
+            return unstringJdk(s, c);
+        }
         var sending = s.getSending();
         Operand source = c.operand(sending.getSendingCall());
         if (!(source instanceof Operand.Field sf) || !sf.alphanumeric()) {
@@ -2262,6 +2388,9 @@ public final class Builtins implements MappingRegistry.Catalog {
 
     private static List<Statement> inspect(OpUnit u, TranslationContext c) throws HandlerException {
         var s = (io.proleap.cobol.asg.metamodel.procedure.inspect.InspectStatement) u.statement();
+        if (c.jdk()) {
+            return inspectJdk(s, c);
+        }
         Operand item = c.operand(s.getDataItemCall());
         boolean changes = s.getInspectType() != io.proleap.cobol.asg.metamodel.procedure.inspect.InspectStatement.InspectType.TALLYING;
         Expression value;
@@ -2376,6 +2505,200 @@ public final class Builtins implements MappingRegistry.Catalog {
             }
         }
         return call(chain, "replace");
+    }
+
+    // ------------------------------------------------- STRING / UNSTRING / INSPECT with the JDK
+
+    /** {@code Pattern.quote(e)}: a regular expression matching the text of {@code e}. */
+    private static Expression quote(Expression e) {
+        return staticCall("java.util.regex.Pattern", "quote", e);
+    }
+
+    private static List<Statement> stringJdk(io.proleap.cobol.asg.metamodel.procedure.string.StringStatement s, TranslationContext c)
+            throws HandlerException {
+        if (s.getWithPointerPhrase() != null || s.getOnOverflowPhrase() != null || s.getNotOnOverflowPhrase() != null) {
+            throw HandlerException.unsupported("STRING with POINTER or OVERFLOW has no JDK form");
+        }
+        Expression target = alphanumericTarget(s.getIntoPhrase().getIntoCall(), c);
+        Expression chain = create("StringBuilder");
+        for (var sendings : s.getSendings()) {
+            if (sendings.getSendingsType() != io.proleap.cobol.asg.metamodel.procedure.string.Sendings.SendingsType.DELIMITED_BY) {
+                throw HandlerException.unsupported("STRING ... FOR is not supported");
+            }
+            var by = sendings.getDelimitedByPhrase();
+            boolean size = by.getDelimitedByType() == io.proleap.cobol.asg.metamodel.procedure.string.DelimitedByPhrase.DelimitedByType.SIZE;
+            Expression delimiter = size ? null : text(c.operand(by.getCharactersValueStmt()), c);
+            for (ValueStmt v : sendings.getSendingValueStmts()) {
+                Expression part = text(c.operand(v), c);
+                // Up to the first delimiter: the first piece of a split in two.
+                chain = call(chain, "append", size ? part : new com.github.javaparser.ast.expr.ArrayAccessExpr(
+                        call(part, "split", quote(delimiter.clone()), integer(2)), integer(0)));
+            }
+        }
+        return List.of(stmt(call(target, "set", call(chain, "toString"))));
+    }
+
+    private static List<Statement> unstringJdk(io.proleap.cobol.asg.metamodel.procedure.unstring.UnstringStatement s, TranslationContext c)
+            throws HandlerException {
+        var sending = s.getSending();
+        if (sending.getDelimitedByPhrase() == null || s.getWithPointerPhrase() != null || s.getTallyingPhrase() != null
+                || s.getOnOverflowPhrase() != null || s.getNotOnOverflowPhrase() != null) {
+            throw HandlerException.unsupported("UNSTRING without DELIMITED BY, or with POINTER, TALLYING or OVERFLOW, has no JDK form");
+        }
+        Operand source = c.operand(sending.getSendingCall());
+        if (!(source instanceof Operand.Field sf) || !sf.alphanumeric()) {
+            throw HandlerException.unsupported("UNSTRING of " + source.category() + " is not supported");
+        }
+        // The delimiters as one regular expression: Pattern.quote(d) each, (?:...)+ for ALL, joined by |.
+        Expression regex = null;
+        var by = sending.getDelimitedByPhrase();
+        List<Map.Entry<ValueStmt, Boolean>> delimiters = new ArrayList<>();
+        delimiters.add(Map.entry(by.getDelimitedByValueStmt(),
+                ((io.proleap.cobol.CobolParser.UnstringDelimitedByPhraseContext) by.getCtx()).ALL() != null));
+        for (var or : sending.getOrAlls()) {
+            delimiters.add(Map.entry(or.getOrAllValueStmt(), ((io.proleap.cobol.CobolParser.UnstringOrAllPhraseContext) or.getCtx()).ALL() != null));
+        }
+        for (var d : delimiters) {
+            Expression one = quote(text(c.operand(d.getKey()), c));
+            if (d.getValue()) {
+                one = Ast.binary(Ast.binary(str("(?:"), BinaryExpr.Operator.PLUS, one), BinaryExpr.Operator.PLUS, str(")+"));
+            }
+            regex = regex == null ? one : Ast.binary(Ast.binary(regex, BinaryExpr.Operator.PLUS, str("|")), BinaryExpr.Operator.PLUS, one);
+        }
+        String parts = c.fresh("parts");
+        List<Statement> out = new ArrayList<>();
+        out.add(declare(new com.github.javaparser.ast.type.ArrayType(type("String")), parts,
+                call(call(c.field(source), "get"), "split", regex, integer(-1))));
+        int i = 0;
+        for (var into : s.getIntoPhrase().getIntos()) {
+            if (into.getDelimiterIn() != null || into.getCountIn() != null) {
+                throw HandlerException.unsupported("UNSTRING with DELIMITER IN or COUNT IN has no JDK form");
+            }
+            Operand r = c.operand(into.getIntoCall());
+            boolean numeric = r instanceof Operand.Field nf && nf.numeric() && !nf.edited();
+            if (!(r instanceof Operand.Field rf) || !numeric && (!rf.alphanumeric() || rf.edited())) {
+                throw HandlerException.unsupported("UNSTRING INTO " + r.category() + " is not supported (alphanumeric and numeric receivers)");
+            }
+            Expression part = new com.github.javaparser.ast.expr.ArrayAccessExpr(name(parts), integer(i));
+            Statement store = numeric ? stmt(call(c.field(r), "move", create("BigDecimal", call(part, "trim"))))
+                    : stmt(call(c.field(r), "set", part));
+            // A receiver without a field of its own keeps its value, as in COBOL.
+            out.add(new IfStmt(Ast.binary(new com.github.javaparser.ast.expr.FieldAccessExpr(name(parts), "length"),
+                    BinaryExpr.Operator.GREATER, integer(i)), new BlockStmt(NodeList.nodeList(store)), null));
+            i++;
+        }
+        return out;
+    }
+
+    private static List<Statement> inspectJdk(io.proleap.cobol.asg.metamodel.procedure.inspect.InspectStatement s, TranslationContext c)
+            throws HandlerException {
+        Operand item = c.operand(s.getDataItemCall());
+        if (!(item instanceof Operand.Field f && f.alphanumeric() && !f.edited())) {
+            throw HandlerException.unsupported("INSPECT of " + item.category() + " has no JDK form");
+        }
+        List<Statement> out = new ArrayList<>();
+        switch (s.getInspectType()) {
+            case TALLYING -> tallyingJdk(s.getTallying().getFors(), item, out, c);
+            case REPLACING -> out.add(stmt(call(c.field(item), "set", replacingJdk(List.of(s.getReplacing()), item, c))));
+            case TALLYING_REPLACING -> {
+                tallyingJdk(s.getTallyingReplacing().getFors(), item, out, c);
+                out.add(stmt(call(c.field(item), "set", replacingJdk(s.getTallyingReplacing().getReplacings(), item, c))));
+            }
+            case CONVERTING -> throw HandlerException.unsupported("INSPECT CONVERTING has no JDK form");
+        }
+        return out;
+    }
+
+    private static void noRegion(List<io.proleap.cobol.asg.metamodel.procedure.inspect.BeforeAfterPhrase> phrases) throws HandlerException {
+        if (phrases != null && !phrases.isEmpty()) {
+            throw HandlerException.unsupported("INSPECT ... BEFORE / AFTER INITIAL has no JDK form");
+        }
+    }
+
+    private static void tallyingJdk(List<io.proleap.cobol.asg.metamodel.procedure.inspect.For> fors, Operand item, List<Statement> out,
+            TranslationContext c) throws HandlerException {
+        for (var f : fors) {
+            Expression counter = integerItem(f.getTallyCountDataItemCall(), c);
+            List<Ordered> comparands = new ArrayList<>();
+            for (var ch : f.getCharacters()) {
+                comparands.add(new Ordered(ch.getCtx().getStart().getTokenIndex(), ch, "CHARACTERS"));
+            }
+            for (var phrase : f.getAllLeadingPhrase()) {
+                for (var al : phrase.getAllLeadings()) {
+                    comparands.add(new Ordered(al.getCtx().getStart().getTokenIndex(), al, phrase.getAllLeadingsType().name()));
+                }
+            }
+            comparands.sort(java.util.Comparator.comparingInt(Ordered::token));
+            for (Ordered o : comparands) {
+                Expression value = call(c.field(item), "get");
+                Expression count;
+                if (o.element() instanceof io.proleap.cobol.asg.metamodel.procedure.inspect.Characters ch) {
+                    noRegion(ch.getBeforeAfterPhrases());
+                    count = call(value, "length");
+                } else {
+                    var al = (io.proleap.cobol.asg.metamodel.procedure.inspect.AllLeading) o.element();
+                    noRegion(al.getBeforeAfterPhrases());
+                    Expression pattern = text(c.operand(al.getPatternDataItemValueStmt()), c);
+                    if (o.kind().equals("ALL")) {
+                        // Non-overlapping occurrences, left to right: the pieces of a split, less one.
+                        count = Ast.binary(new com.github.javaparser.ast.expr.FieldAccessExpr(call(value, "split", quote(pattern), integer(-1)),
+                                "length"), BinaryExpr.Operator.MINUS, integer(1));
+                    } else {
+                        // The characters a leading run of the pattern takes, over the pattern's length.
+                        Expression rest = call(value.clone(), "replaceFirst",
+                                Ast.binary(Ast.binary(str("^(?:"), BinaryExpr.Operator.PLUS, quote(pattern)), BinaryExpr.Operator.PLUS, str(")+")),
+                                str(""));
+                        count = Ast.binary(new EnclosedExpr(Ast.binary(call(value, "length"), BinaryExpr.Operator.MINUS, call(rest, "length"))),
+                                BinaryExpr.Operator.DIVIDE, call(pattern.clone(), "length"));
+                    }
+                }
+                out.add(stmt(call(counter.clone(), "store", call(call(counter.clone(), "get"), "add", staticCall("BigDecimal", "valueOf", count)),
+                        bool(false), bool(false))));
+            }
+        }
+    }
+
+    private static Expression replacingJdk(List<io.proleap.cobol.asg.metamodel.procedure.inspect.Replacing> replacings, Operand item,
+            TranslationContext c) throws HandlerException {
+        List<Ordered> comparands = new ArrayList<>();
+        for (var rep : replacings) {
+            for (var ch : rep.getCharacters()) {
+                comparands.add(new Ordered(ch.getCtx().getStart().getTokenIndex(), ch, "CHARACTERS"));
+            }
+            for (var phrase : rep.getAllLeadings()) {
+                for (var al : phrase.getAllLeadings()) {
+                    comparands.add(new Ordered(al.getCtx().getStart().getTokenIndex(), al, phrase.getReplacingAllLeadingsType().name()));
+                }
+            }
+        }
+        comparands.sort(java.util.Comparator.comparingInt(Ordered::token));
+        Expression chain = call(c.field(item), "get");
+        for (Ordered o : comparands) {
+            if (o.element() instanceof io.proleap.cobol.asg.metamodel.procedure.inspect.ReplacingCharacters ch) {
+                noRegion(ch.getBeforeAfterPhrases());
+                if (literalLength(ch.getBy().getByValueStmt(), c) != 1 && !(c.operand(ch.getBy().getByValueStmt()) instanceof Operand.Figurative)) {
+                    throw HandlerException.unsupported("REPLACING CHARACTERS BY needs a single character");
+                }
+                // Every character is replaced: the replacement repeated over the item's length.
+                chain = call(replacement(ch.getBy().getByValueStmt(), null, 1, c), "repeat", call(c.field(item), "length"));
+            } else {
+                var al = (io.proleap.cobol.asg.metamodel.procedure.inspect.ReplacingAllLeading) o.element();
+                noRegion(al.getBeforeAfterPhrases());
+                int length = literalLength(al.getPatternDataItemValueStmt(), c);
+                int byLength = literalLength(al.getBy().getByValueStmt(), c);
+                if (length < 0 || (byLength >= 0 && byLength != length && !(c.operand(al.getBy().getByValueStmt()) instanceof Operand.Figurative))) {
+                    throw HandlerException.unsupported("INSPECT REPLACING needs a pattern and replacement of the same, known length");
+                }
+                Expression pattern = text(c.operand(al.getPatternDataItemValueStmt()), c);
+                Expression by = replacement(al.getBy().getByValueStmt(), null, length, c);
+                chain = switch (o.kind()) {
+                    case "ALL" -> call(chain, "replace", pattern, by);
+                    case "FIRST" -> call(chain, "replaceFirst", quote(pattern), staticCall("java.util.regex.Matcher", "quoteReplacement", by));
+                    default -> throw HandlerException.unsupported("INSPECT REPLACING LEADING has no JDK form");
+                };
+            }
+        }
+        return chain;
     }
 
     // ------------------------------------------------------- GO TO / ALTER

@@ -53,6 +53,8 @@ struct DecisionResponse {
   json probabilities;    // null when absent
   json review_priority;  // null when absent; advisory, never interpreted here
   std::vector<std::string> need_context;  // refs to expand (gate need_context)
+  // Why a provider holds the decision without asking (e.g. too_many_options); reported as held_reason.
+  std::string held_reason;
 
   bool passed() const { return gate.empty() || gate == kGatePassed; }
   json to_resolution() const;  // the `resolve` request element

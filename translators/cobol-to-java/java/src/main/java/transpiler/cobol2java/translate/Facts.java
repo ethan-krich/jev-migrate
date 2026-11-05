@@ -38,23 +38,23 @@ import org.antlr.v4.runtime.tree.TerminalNode;
  */
 public final class Facts {
     public static final Map<String, Set<String>> KEYS = Map.ofEntries(
-            Map.entry("MOVE", Set.of("source_category", "target_category", "source_figurative")),
+            Map.entry("MOVE", Set.of("source_category", "target_category", "source_figurative", "operation_in_library")),
             Map.entry("ADD", Set.of("form", "rounded", "size_error")),
             Map.entry("SUBTRACT", Set.of("form", "rounded", "size_error")),
             Map.entry("MULTIPLY", Set.of("form", "rounded", "size_error")),
             Map.entry("DIVIDE", Set.of("form", "rounded", "size_error", "remainder")),
             Map.entry("COMPUTE", Set.of("rounded", "size_error", "receivers")),
-            Map.entry("DISPLAY", Set.of("upon", "no_advancing", "operands")),
+            Map.entry("DISPLAY", Set.of("upon", "no_advancing", "operands", "operation_in_library")),
             Map.entry("IF", Set.of("has_else")),
-            Map.entry("PERFORM", Set.of("form", "loop", "test", "thru")),
+            Map.entry("PERFORM", Set.of("form", "loop", "test", "thru", "paragraph_in_library")),
             Map.entry("STOP", Set.of("kind")),
             Map.entry("EXIT", Set.of("kind")),
-            Map.entry("CALL", Set.of("program", "program_kind", "program_in_project", "using")),
+            Map.entry("CALL", Set.of("program", "program_kind", "program_in_project", "program_in_library", "using")),
             Map.entry("CANCEL", Set.of()),
             Map.entry("ENTRY", Set.of()),
             Map.entry("SET", Set.of("form")),
             Map.entry("EVALUATE", Set.of("subjects", "has_other", "has_thru")),
-            Map.entry("ACCEPT", Set.of("from")),
+            Map.entry("ACCEPT", Set.of("from", "operation_in_library")),
             Map.entry("EXHIBIT", Set.of("named", "changed")),
             Map.entry("INITIALIZE", Set.of("replacing", "to_value", "with_filler", "then_default")),
             Map.entry("SEARCH", Set.of("all", "varying", "at_end")),
@@ -94,6 +94,10 @@ public final class Facts {
     public static Map<String, Object> extract(OpUnit unit, TranslationContext ctx) {
         Map<String, Object> f = new LinkedHashMap<>();
         var s = unit.statement();
+        // Only with initialize.libraries: other runs keep their facts, and so their fingerprints.
+        if (ctx.declaresLibraries() && Set.of("MOVE", "DISPLAY", "ACCEPT").contains(unit.operation())) {
+            f.put("operation_in_library", ctx.operationLibrary(unit.operation()).isPresent());
+        }
         switch (unit.operation()) {
             case "MOVE" -> {
                 MoveStatement move = (MoveStatement) s;
@@ -180,6 +184,10 @@ public final class Facts {
                 };
                 f.put("test", test != null && test.getTestClauseType() == TestClause.TestClauseType.AFTER ? "after" : "before");
                 f.put("thru", !inline && p.getPerformProcedureStatement().getCalls().size() > 1);
+                if (ctx.declaresLibraries()) {
+                    f.put("paragraph_in_library", !inline && p.getPerformProcedureStatement().getCalls().size() == 1
+                            && ctx.paragraphLibrary(p.getPerformProcedureStatement().getCalls().getFirst().getName()).isPresent());
+                }
             }
             case "STOP" -> f.put("kind", switch (((StopStatement) s).getStopType()) {
                 case STOP_RUN -> "run";
@@ -327,6 +335,9 @@ public final class Facts {
                 f.put("program", name);
                 f.put("program_kind", name != null ? "literal" : "identifier");
                 f.put("program_in_project", name != null && ctx.programClass(name).isPresent());
+                if (ctx.declaresLibraries()) {
+                    f.put("program_in_library", name != null && ctx.programLibrary(name).isPresent());
+                }
                 f.put("using", call.getUsingPhrase() != null);
             }
             default -> {

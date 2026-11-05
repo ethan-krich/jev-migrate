@@ -101,4 +101,56 @@ public final class Ast {
     public static Expression compareToZero(Expression comparison, BinaryExpr.Operator op) {
         return new BinaryExpr(comparison, integer(0), op);
     }
+
+    /**
+     * {@code left op right} with the parentheses Java precedence needs (JavaParser prints a tree
+     * as is): an operand that binds looser than {@code op} is enclosed, and so is a right operand
+     * that binds the same ({@code a - (b - c)}).
+     */
+    public static Expression binary(Expression left, BinaryExpr.Operator op, Expression right) {
+        int p = precedence(op);
+        Expression l = needsParens(left, p, false) ? new com.github.javaparser.ast.expr.EnclosedExpr(left) : left;
+        Expression r = needsParens(right, p, true) ? new com.github.javaparser.ast.expr.EnclosedExpr(right) : right;
+        return new BinaryExpr(l, r, op);
+    }
+
+    /** {@code -e}, enclosing an operand that is itself an operation. */
+    public static Expression negate(Expression e) {
+        boolean wrap = e instanceof BinaryExpr || e instanceof com.github.javaparser.ast.expr.ConditionalExpr
+                || e instanceof com.github.javaparser.ast.expr.UnaryExpr;
+        return new com.github.javaparser.ast.expr.UnaryExpr(wrap ? new com.github.javaparser.ast.expr.EnclosedExpr(e) : e,
+                com.github.javaparser.ast.expr.UnaryExpr.Operator.MINUS);
+    }
+
+    private static boolean needsParens(Expression e, int outer, boolean right) {
+        if (e instanceof BinaryExpr b) {
+            int inner = precedence(b.getOperator());
+            return inner < outer || right && inner == outer;
+        }
+        return e instanceof com.github.javaparser.ast.expr.ConditionalExpr || e instanceof com.github.javaparser.ast.expr.AssignExpr
+                || e instanceof com.github.javaparser.ast.expr.LambdaExpr;
+    }
+
+    private static int precedence(BinaryExpr.Operator op) {
+        return switch (op) {
+            case OR -> 1;
+            case AND -> 2;
+            case BINARY_OR -> 3;
+            case XOR -> 4;
+            case BINARY_AND -> 5;
+            case EQUALS, NOT_EQUALS -> 6;
+            case LESS, GREATER, LESS_EQUALS, GREATER_EQUALS -> 7;
+            case LEFT_SHIFT, SIGNED_RIGHT_SHIFT, UNSIGNED_RIGHT_SHIFT -> 8;
+            case PLUS, MINUS -> 9;
+            case MULTIPLY, DIVIDE, REMAINDER -> 10;
+        };
+    }
+
+    /** A Java {@code double} literal for a decimal value ({@code 5.0}, {@code 0.25}). */
+    public static Expression doubleLiteral(java.math.BigDecimal value) {
+        String text = value.stripTrailingZeros().toPlainString();
+        Expression lit = new com.github.javaparser.ast.expr.DoubleLiteralExpr(
+                (text.startsWith("-") ? text.substring(1) : text) + (text.contains(".") ? "" : ".0"));
+        return value.signum() < 0 ? negate(lit) : lit;
+    }
 }

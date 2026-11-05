@@ -129,7 +129,7 @@ public final class MappingRegistry {
             }
             Strategy strategy = Strategy.parse(text(r, "strategy")).orElse(null);
             if (strategy == null) {
-                problems.add(where + ": 'strategy' must be one of builtin, unresolved, callback");
+                problems.add(where + ": 'strategy' must be one of builtin, unresolved, callback, library");
             }
             String handler = text(r, "handler");
             MappingRule.CallbackRef callback = null;

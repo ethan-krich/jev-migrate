@@ -41,6 +41,11 @@ class Reason(StrEnum):
     MISSING_TARGET_API = "missing_target_api"
     INVALID_MAPPING = "invalid_mapping"
     CALLBACK_REQUIRED = "callback_required"
+    # A part of the source that a library claims: library calls (not equivalence-checked) or the exact translation.
+    LIBRARY_CALL = "library_call"
+    # A builtin handler or its JDK twin (options.jdk_alternatives): the runtime library's exact
+    # semantics, or plain JDK calls that are approximate.
+    RUNTIME_CHOICE = "runtime_choice"
 
 
 @dataclass(frozen=True)
@@ -68,6 +73,8 @@ class Candidate:
     slots: tuple[Slot, ...] = ()
     # The Java methods the preview calls: {signature, summary} (first Javadoc paragraph). Advisory.
     docs: tuple[dict[str, str], ...] = ()
+    # On a runtime_choice decision: "runtime" (exact) or "jdk" (approximate).
+    uses: str | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +93,8 @@ class DecisionRequest:
     # A setting decision ({field, values: {candidate_id: value}}): choosing a candidate means
     # translating again with that setting, which the orchestrator does.
     setting: dict[str, Any] | None = None
+    # A library_call decision: {id, java, step, part: {kind, name, file?, comments?, text?}}.
+    library: dict[str, Any] | None = None
 
     @property
     def refs(self) -> list[dict[str, Any]]:
@@ -110,13 +119,14 @@ class DecisionRequest:
             candidates=tuple(
                 Candidate(c["id"], c.get("description", ""), c.get("handler"), c.get("preview"),
                           tuple(Slot(s["name"], s.get("description", "")) for s in c.get("slots", [])),
-                          tuple(c.get("docs", [])))
+                          tuple(c.get("docs", [])), c.get("uses"))
                 for c in d.get("candidates", [])
             ),
             context=d.get("context", {}),
             callback=d.get("callback"),
             importance=d.get("importance", "critical"),
             setting=d.get("setting"),
+            library=d.get("library"),
         )
 
 
@@ -161,6 +171,8 @@ class DecisionResponse:
     probabilities: Mapping[str, float] | None = None
     need_context: tuple[str, ...] = ()
     review_priority: ReviewPriority | None = None
+    # Why the provider holds the decision without choosing (gate not passed), e.g. "too_many_options".
+    held_reason: str | None = None
 
     def __post_init__(self) -> None:
         if not self.decision_id and not self.fingerprint:
@@ -201,6 +213,8 @@ class DecisionResponse:
             d["need_context"] = list(self.need_context)
         if self.review_priority is not None:
             d["review_priority"] = self.review_priority.to_json()
+        if self.held_reason:
+            d["held_reason"] = self.held_reason
         return d
 
     @classmethod
@@ -215,6 +229,7 @@ class DecisionResponse:
             confidence=d.get("confidence"),
             probabilities=d.get("probabilities"),
             need_context=tuple(d.get("need_context", ())),
+            held_reason=d.get("held_reason"),
             review_priority=ReviewPriority.from_json(rp) if rp else None,
         )
 

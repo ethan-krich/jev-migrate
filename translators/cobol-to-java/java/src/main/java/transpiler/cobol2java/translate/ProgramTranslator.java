@@ -131,12 +131,21 @@ public final class ProgramTranslator implements TranslationContext {
             Function<String, Optional<List<Integer>>> programParameters,
             Map<String, String> programs,
             Map<String, Integer> entries,
-            List<Map.Entry<ProgramUnit, String>> containers) {
+            List<Map.Entry<ProgramUnit, String>> containers,
+            transpiler.cobol2java.library.LibraryScope libraries) {
         public Input(ProgramUnit unit, SourceMap sourceMap, String sourceFile, String programId, String packageName, String className,
                 String runtimePackage, MappingRegistry registry, Builtins builtins, Function<String, Optional<String>> programDirectory,
                 Dialect dialect) {
             this(unit, sourceMap, sourceFile, programId, packageName, className, runtimePackage, registry, builtins, programDirectory,
-                    dialect, id -> Optional.empty(), Map.of(), Map.of(), List.of());
+                    dialect, id -> Optional.empty(), Map.of(), Map.of(), List.of(), transpiler.cobol2java.library.LibraryScope.NONE);
+        }
+
+        public Input(ProgramUnit unit, SourceMap sourceMap, String sourceFile, String programId, String packageName, String className,
+                String runtimePackage, MappingRegistry registry, Builtins builtins, Function<String, Optional<String>> programDirectory,
+                Dialect dialect, Function<String, Optional<List<Integer>>> programParameters, Map<String, String> programs,
+                Map<String, Integer> entries, List<Map.Entry<ProgramUnit, String>> containers) {
+            this(unit, sourceMap, sourceFile, programId, packageName, className, runtimePackage, registry, builtins, programDirectory,
+                    dialect, programParameters, programs, entries, containers, transpiler.cobol2java.library.LibraryScope.NONE);
         }
     }
 
@@ -277,6 +286,10 @@ public final class ProgramTranslator implements TranslationContext {
     private final Map<DataItem, String> storageNames = new IdentityHashMap<>();
     /** The statement being translated, for decisions raised while resolving its operands. */
     private ParserRuleContext currentCtx;
+    /** The generated class (per-program library objects are added to it when a decision chooses them). */
+    private ClassOrInterfaceDeclaration programClass;
+    /** Per-program library objects already declared: owner type to accessor method. */
+    private final Map<String, String> libraryInstances = new LinkedHashMap<>();
     /** Level-01 / level-77 items (and constants) in source order. */
     private final List<DataItem> roots = new ArrayList<>();
     private final Set<String> fieldNames = new HashSet<>();
@@ -323,6 +336,8 @@ public final class ProgramTranslator implements TranslationContext {
     private int currentNode = -1;
     /** Building a COMPUTE expression with GnuCOBOL's division and power rules (compute_gnucobol). */
     private boolean gnuArithmetic;
+    /** A JDK twin is generating: doubles, JDK comparisons and output (see {@link TranslationContext#jdk}). */
+    private boolean jdk;
     private int statements;
     private int translated;
     private final boolean binaryTruncate;
@@ -359,6 +374,7 @@ public final class ProgramTranslator implements TranslationContext {
         cu.addImport(BigDecimal.class);
 
         ClassOrInterfaceDeclaration cls = cu.addClass(in.className(), Modifier.Keyword.PUBLIC, Modifier.Keyword.FINAL);
+        programClass = cls;
         cls.addImplementedType("CobolProgram");
         cls.setJavadocComment("Translated from " + in.sourceFile() + " (PROGRAM-ID " + in.programId() + ") by cobol-to-java.");
 
@@ -2868,6 +2884,16 @@ public final class ProgramTranslator implements TranslationContext {
             block.addStatement(placeholder(unit, "needs Dialect"));
             return;
         }
+        CobolParser.FunctionCallContext claimed = claimedFunction(unit);
+        if (claimed != null) {
+            functionUse(unit, block, facts, claimed);
+            return;
+        }
+        dispatch(unit, block, facts);
+    }
+
+    /** Selects the unit's rule for {@code facts} and applies its strategy (a handler, a decision, a library use). */
+    private void dispatch(OpUnit unit, BlockStmt block, Map<String, Object> facts) {
         MappingRegistry.Selection selection = in.registry().select(unit.operation(), facts);
         if (!selection.matched()) {
             unresolved(unit, block, facts, Reason.MISSING_MAPPING, null,
@@ -2890,6 +2916,7 @@ public final class ProgramTranslator implements TranslationContext {
         switch (rule.strategy()) {
             case UNRESOLVED -> unresolved(unit, block, facts, Reason.MISSING_MAPPING, rule,
                     "mapping rule '" + rule.id() + "' leaves " + unit.operation() + " unresolved", candidatesFor(unit, null));
+            case LIBRARY -> libraryUse(unit, block, facts, rule);
             case CALLBACK -> {
                 Decision d = newDecision(unit, facts, Reason.CALLBACK_REQUIRED, rule,
                         "mapping rule '" + rule.id() + "' delegates to callback " + rule.callback().function(),
@@ -2898,6 +2925,10 @@ public final class ProgramTranslator implements TranslationContext {
             }
             case BUILTIN -> {
                 Handler handler = in.builtins().handler(rule.handler());
+                Handler twin = in.dialect().jdkAlternatives() ? in.builtins().jdkTwin(handler) : null;
+                if (twin != null && runtimeChoice(unit, block, facts, rule, handler, twin)) {
+                    return;
+                }
                 List<Decision> nested = new ArrayList<>();
                 try {
                     List<Statement> out = generate(handler, unit, nested);
@@ -2927,12 +2958,757 @@ public final class ProgramTranslator implements TranslationContext {
         }
     }
 
+    /**
+     * A use of a part a library claims (a rule with strategy {@code library}): a CALL of a claimed
+     * program or system routine, or a claimed verb (MOVE, DISPLAY, ACCEPT). Without a claim (a
+     * user rule selecting the strategy elsewhere) the unit is translated as without libraries.
+     */
+    private void libraryUse(OpUnit unit, BlockStmt block, Map<String, Object> facts, MappingRule rule) {
+        var scope = in.libraries();
+        Map<String, Object> plain = new LinkedHashMap<>(facts);
+        try {
+            switch (unit.operation()) {
+                case "CALL" -> {
+                    String name = (String) facts.get("program");
+                    var lib = Boolean.TRUE.equals(facts.get("program_in_library")) ? scope.program(name).orElse(null) : null;
+                    if (lib != null) {
+                        plain.put("program_in_library", false);
+                        callUse(unit, block, facts, plain, rule.id(), lib, name);
+                        return;
+                    }
+                }
+                case "PERFORM" -> {
+                    var p = (io.proleap.cobol.asg.metamodel.procedure.perform.PerformStatement) unit.statement();
+                    String name = Boolean.TRUE.equals(facts.get("paragraph_in_library"))
+                            ? p.getPerformProcedureStatement().getCalls().getFirst().getName() : null;
+                    var lib = name == null ? null : paragraphLibrary(name).orElse(null);
+                    if (lib != null) {
+                        plain.put("paragraph_in_library", false);
+                        paragraphUse(unit, block, facts, plain, rule.id(), lib, name.toUpperCase(Locale.ROOT));
+                        return;
+                    }
+                }
+                case "MOVE", "DISPLAY", "ACCEPT" -> {
+                    var lib = Boolean.TRUE.equals(facts.get("operation_in_library"))
+                            ? scope.libraries().operation(unit.operation()).orElse(null) : null;
+                    if (lib != null) {
+                        plain.put("operation_in_library", false);
+                        verbUse(unit, block, facts, plain, rule.id(), lib);
+                        return;
+                    }
+                }
+                default -> {
+                    // No library claim on other operations.
+                }
+            }
+        } catch (HandlerException e) {
+            throw new IllegalStateException(e);
+        }
+        dispatch(unit, block, plain);
+    }
+
+    /**
+     * Generates the exact translation in place after an anchor (the rule the unit selects with
+     * {@code plain} facts), keeping the decisions it raises aside and the statement counts as before.
+     */
+    private LibrarySite.Alternative alternative(OpUnit unit, BlockStmt block, Map<String, Object> plain, String library) {
+        EmptyStmt anchor = new EmptyStmt();
+        anchor.setComment(new LineComment(" LIBRARY " + library + ": " + unit.location().text().replace('\n', ' ')));
+        block.addStatement(anchor);
+        int before = block.getStatements().size();
+        List<Decision> nested = new ArrayList<>();
+        List<Decision> saved = sink;
+        int savedStatements = statements;
+        int savedTranslated = translated;
+        sink = nested;
+        try {
+            dispatch(unit, block, plain);
+        } finally {
+            sink = saved;
+        }
+        boolean altTranslated = translated > savedTranslated;
+        statements = savedStatements;
+        translated = savedTranslated;
+        List<Statement> alt = new ArrayList<>(block.getStatements().subList(before, block.getStatements().size()));
+        return new LibrarySite.Alternative(anchor, alt, nested, altTranslated,
+                String.join("\n", alt.stream().map(Statement::toString).toList()));
+    }
+
+    /**
+     * Starts the decisions of a use site, or, when no library call binds exactly, leaves the exact
+     * translation (recording why the library was not offered).
+     */
+    private void startUse(OpUnit unit, BlockStmt block, Map<String, Object> facts, String ruleId, LibraryChain chain,
+            LibrarySite.Alternative alt,
+            transpiler.cobol2java.library.LibraryScope.Use use, com.fasterxml.jackson.databind.node.ObjectNode part, String label,
+            LibrarySite.Finisher finisher, String notOffered) {
+        List<LibraryChain.Option> starts = notOffered == null ? chain.starts() : List.of();
+        if (starts.isEmpty()) {
+            block.getStatements().remove(alt.anchor());
+            sink.addAll(alt.nested());
+            if (alt.translated()) {
+                translated++;
+            }
+            use.outcome = "translated";
+            use.reason = "library not offered: " + (notOffered != null ? notOffered : !chain.searchable()
+                    ? "it passes more than " + LibraryChain.MAX_INPUTS + " items"
+                    : "no public member of the library binds exactly to " + chain.ins().stream().map(LibraryChain.In::label).toList()
+                            + " and stores into " + chain.outs().stream().map(LibraryChain.Out::label).toList());
+            return;
+        }
+        LibrarySite site = new LibrarySite(this, unit, block, facts, ruleId, chain, use, part, label, alt, finisher,
+                context(unit.statement().getCtx()));
+        sink.add(site.start(starts));
+    }
+
+    private com.fasterxml.jackson.databind.node.ObjectNode part(String kind, String name) {
+        var part = transpiler.cobol2java.protocol.Json.object();
+        part.put("kind", kind);
+        part.put("name", name);
+        return part;
+    }
+
+    /** A CALL of a program (or system routine) a library claims. */
+    private void callUse(OpUnit unit, BlockStmt block, Map<String, Object> facts, Map<String, Object> plain, String ruleId,
+            transpiler.cobol2java.library.Libraries.Library lib, String name) {
+        var scope = in.libraries();
+        LibrarySite.Alternative alt = alternative(unit, block, plain, lib.id());
+        String selector = scope.programSelector(name);
+        var use = scope.record(lib.id(), in.programId(), in.sourceFile(), unit.location().line(), selector,
+                selector.equals("operation") ? "CALL '" + name + "'" : name);
+        var call = (io.proleap.cobol.asg.metamodel.procedure.call.CallStatement) unit.statement();
+        var part = part(selector.equals("operation") ? "operation" : "program", selector.equals("operation") ? "CALL '" + name + "'" : name);
+        scope.programFile(name).ifPresent(file -> {
+            part.put("file", file);
+            scope.source(file).ifPresent(text -> part.put("text", text));
+        });
+        String label = "CALL '" + name + "'" + (call.getOnExceptionClause() != null || call.getOnOverflowPhrase() != null
+                ? " (with a library its ON EXCEPTION never runs)" : "");
+        LibraryChain chain;
+        try {
+            chain = programChain(call, lib, name);
+        } catch (HandlerException e) {
+            startUse(unit, block, facts, ruleId, new LibraryChain(lib, List.of(), List.of(), List.of(), this, call.getCtx()), alt, use, part,
+                    label, null, e.getMessage());
+            return;
+        }
+        // The library is always present: NOT ON EXCEPTION runs after the call, ON EXCEPTION never does.
+        List<Statement> tail = new ArrayList<>();
+        List<Decision> tailNested = new ArrayList<>();
+        if (call.getNotOnExceptionClause() != null) {
+            List<Decision> saved = sink;
+            sink = tailNested;
+            int s0 = statements;
+            int t0 = translated;
+            try {
+                BlockStmt notOnException = nested(call.getNotOnExceptionClause());
+                if (!notOnException.isEmpty()) {
+                    tail.add(notOnException);
+                }
+            } finally {
+                sink = saved;
+                statements = s0;
+                translated = t0;
+            }
+        }
+        LibraryChain c = chain;
+        startUse(unit, block, facts, ruleId, chain, alt, use, part, label, (steps, out, instance, keep) -> {
+            List<Statement> stmts = new ArrayList<>(List.of(c.statement(steps, out, instance)));
+            stmts.addAll(keep ? tail : tail.stream().map(Statement::clone).toList());
+            return new LibrarySite.Generated(stmts, tailNested);
+        }, null);
+    }
+
+    /**
+     * A claimed verb: MOVE (the sending item to the receiver), DISPLAY (its operands, to a
+     * {@code void} call) or ACCEPT (into its receiver, from a call without arguments).
+     */
+    private void verbUse(OpUnit unit, BlockStmt block, Map<String, Object> facts, Map<String, Object> plain, String ruleId,
+            transpiler.cobol2java.library.Libraries.Library lib) throws HandlerException {
+        var scope = in.libraries();
+        LibrarySite.Alternative alt = alternative(unit, block, plain, lib.id());
+        String verb = unit.operation();
+        var use = scope.record(lib.id(), in.programId(), in.sourceFile(), unit.location().line(), "operation", verb);
+        List<LibraryChain.In> ins = new ArrayList<>();
+        List<LibraryChain.Out> outs = new ArrayList<>();
+        String problem = null;
+        try {
+            switch (verb) {
+                case "MOVE" -> {
+                    var move = (io.proleap.cobol.asg.metamodel.procedure.move.MoveStatement) unit.statement();
+                    if (move.getMoveType() != io.proleap.cobol.asg.metamodel.procedure.move.MoveStatement.MoveType.MOVE_TO) {
+                        problem = "MOVE CORRESPONDING moves several items";
+                    } else {
+                        Operand src = operand(move.getMoveToStatement().getSendingArea().getSendingAreaValueStmt());
+                        ins.add(new LibraryChain.In(src, label(src)));
+                        Operand dst = operand(unit.receiver());
+                        outs.add(new LibraryChain.Out("item:" + label(dst), dst, label(dst), -1));
+                    }
+                }
+                case "DISPLAY" -> {
+                    var d = (io.proleap.cobol.asg.metamodel.procedure.display.DisplayStatement) unit.statement();
+                    for (var operand : d.getOperands()) {
+                        Operand o = operand(operand.getOperandValueStmt());
+                        ins.add(new LibraryChain.In(o, label(o)));
+                    }
+                    outs.add(new LibraryChain.Out("none", null, "nothing", -1));
+                }
+                default -> {
+                    var a = (io.proleap.cobol.asg.metamodel.procedure.accept.AcceptStatement) unit.statement();
+                    Operand dst = operand(a.getAcceptCall());
+                    outs.add(new LibraryChain.Out("item:" + label(dst), dst, label(dst), -1));
+                }
+            }
+        } catch (HandlerException e) {
+            problem = e.getMessage();
+        }
+        LibraryChain chain = withRecords(new LibraryChain(lib, ins, outs, lib.hintsFor(verb), this, unit.statement().getCtx()));
+        startUse(unit, block, facts, ruleId, chain, alt, use, part("operation", verb), verb + " (" + unit.location().text().replace('\n', ' ') + ")",
+                (steps, out, instance, keep) -> new LibrarySite.Generated(List.of(chain.statement(steps, out, instance)), List.of()),
+                problem);
+    }
+
+    /**
+     * The library claiming a paragraph or section of this program: by name ({@code Cobol.paragraph}),
+     * or because its body is one COPY of a claimed copybook ({@code Cobol.copybook}).
+     */
+    @Override
+    public Optional<transpiler.cobol2java.library.Libraries.Library> paragraphLibrary(String name) {
+        var libs = in.libraries().libraries();
+        if (libs.isEmpty()) {
+            return Optional.empty();
+        }
+        var direct = libs.paragraph(name, in.programId());
+        if (direct.isPresent()) {
+            return direct;
+        }
+        String copybook = procedureCopybook(name);
+        return copybook == null ? Optional.empty() : libs.copybook(copybook);
+    }
+
+    /** The copybook a paragraph's whole body is copied from (one COPY in the PROCEDURE DIVISION), or null. */
+    private String procedureCopybook(String name) {
+        ParserRuleContext body = procedureBody(name);
+        if (body == null || !in.sourceMap().exact()) {
+            return null;
+        }
+        var statements = findAll(body, CobolParser.StatementContext.class);
+        if (statements.isEmpty()) {
+            return null;
+        }
+        java.util.OptionalInt line = in.sourceMap().copyLine(statements.getFirst().getStart().getLine());
+        if (line.isEmpty() || statements.stream().anyMatch(st -> !in.sourceMap().copyLine(st.getStart().getLine()).equals(line))) {
+            return null;
+        }
+        String[] lines = in.libraries().text(in.sourceFile()).orElse("").split("\n", -1);
+        if (line.getAsInt() < 1 || line.getAsInt() > lines.length) {
+            return null;
+        }
+        var m = java.util.regex.Pattern.compile("(?i)\\bCOPY\\s+\"?([A-Za-z0-9][A-Za-z0-9-]*)").matcher(lines[line.getAsInt() - 1]);
+        return m.find() ? m.group(1).toUpperCase(Locale.ROOT) : null;
+    }
+
+    /** The parse tree of a paragraph or section of this program, by name; null when none (or several) has it. */
+    private ParserRuleContext procedureBody(String name) {
+        var pd = in.unit().getProcedureDivision();
+        if (pd == null) {
+            return null;
+        }
+        List<ParserRuleContext> found = new ArrayList<>();
+        for (Paragraph p : pd.getParagraphs()) {
+            if (p.getName().equalsIgnoreCase(name)) {
+                found.add(p.getCtx());
+            }
+        }
+        for (Section sec : pd.getSections()) {
+            if (sec.getName().equalsIgnoreCase(name)) {
+                found.add(sec.getCtx());
+            }
+            for (Paragraph p : sec.getParagraphs()) {
+                if (p.getName().equalsIgnoreCase(name)) {
+                    found.add(p.getCtx());
+                }
+            }
+        }
+        return found.size() == 1 ? found.getFirst() : null;
+    }
+
+    /**
+     * A PERFORM of a claimed paragraph or section. Its signature comes from the data it uses: the
+     * items it reads before writing them are the inputs, and the item it writes (or the group all
+     * the items it writes belong to) is the output. It is offered only when the paragraph is
+     * self-contained: run once by this PERFORM, no GO TO, ALTER, PERFORM, STOP RUN, GOBACK or EXIT
+     * PROGRAM in it, and not inside a PERFORM ... THRU range. Its body is still translated either way.
+     */
+    private void paragraphUse(OpUnit unit, BlockStmt block, Map<String, Object> facts, Map<String, Object> plain, String ruleId,
+            transpiler.cobol2java.library.Libraries.Library lib, String name) {
+        LibrarySite.Alternative alt = alternative(unit, block, plain, lib.id());
+        String copybook = in.libraries().libraries().paragraph(name, in.programId()).isPresent() ? null : procedureCopybook(name);
+        String selector = copybook == null ? "paragraph" : "copybook";
+        var use = in.libraries().record(lib.id(), in.programId(), in.sourceFile(), unit.location().line(), selector,
+                copybook == null ? name : copybook);
+        ParserRuleContext body = procedureBody(name);
+        var part = part(selector, copybook == null ? name : copybook);
+        part.put("file", in.sourceFile());
+        String problem = body == null ? "the paragraph is not found in this program" : selfContained(body, name);
+        if (body != null) {
+            String text = words(body);
+            part.put("text", text.length() > transpiler.cobol2java.library.LibraryScope.MAX_PART_CHARS
+                    ? text.substring(0, transpiler.cobol2java.library.LibraryScope.MAX_PART_CHARS) + " ..." : text);
+        }
+        if (problem == null && !"once".equals(facts.get("loop"))) {
+            problem = "this PERFORM runs the paragraph " + facts.get("loop") + " (a library call replaces a PERFORM that runs it once)";
+        }
+        List<LibraryChain.In> ins = new ArrayList<>();
+        List<LibraryChain.Out> outs = new ArrayList<>();
+        if (problem == null) {
+            var usage = transpiler.cobol2java.context.ContextGraph.usage(body, in.unit().getProgram());
+            for (DataDescriptionEntry e : usage.reads()) {
+                DataItem item = items.get(e);
+                if (item == null || !item.dimensions().isEmpty()) {
+                    problem = "it reads " + e.getName() + ", which is " + (item == null ? "not supported" : "a table element");
+                    break;
+                }
+                Operand o = new Operand.Field(item, List.of(), null);
+                ins.add(new LibraryChain.In(o, label(o)));
+            }
+            List<DataItem> written = usage.writes().stream().map(items::get).toList();
+            if (problem == null && written.contains(null)) {
+                problem = "it writes an item that is not supported";
+            }
+            if (problem == null) {
+                if (written.isEmpty()) {
+                    outs.add(new LibraryChain.Out("none", null, "nothing", -1));
+                } else {
+                    DataItem target = written.size() == 1 ? written.getFirst() : commonGroup(written);
+                    if (target == null || !target.dimensions().isEmpty()) {
+                        problem = "it writes several unrelated items " + written.stream().map(DataItem::cobolName).toList()
+                                + " (a library call gives one result)";
+                    } else {
+                        Operand o = new Operand.Field(target, List.of(), null);
+                        outs.add(new LibraryChain.Out("item:" + label(o), o, label(o), -1));
+                    }
+                }
+            }
+        }
+        LibraryChain chain = withRecords(new LibraryChain(lib, ins, outs, lib.hintsFor(copybook == null ? name : copybook), this,
+                unit.statement().getCtx()));
+        startUse(unit, block, facts, ruleId, chain, alt, use, part, "PERFORM " + name,
+                (steps, out, instance, keep) -> new LibrarySite.Generated(List.of(chain.statement(steps, out, instance)), List.of()),
+                problem);
+    }
+
+    /** Why a paragraph is not self-contained, or null when it is. */
+    private String selfContained(ParserRuleContext body, String name) {
+        for (var st : findAll(body, ParserRuleContext.class)) {
+            if (st instanceof CobolParser.GoToStatementContext) {
+                return "it contains GO TO";
+            }
+            if (st instanceof CobolParser.AlterStatementContext) {
+                return "it contains ALTER";
+            }
+            if (st instanceof CobolParser.PerformStatementContext ps && ps.performProcedureStatement() != null) {
+                return "it PERFORMs other paragraphs";
+            }
+            if (st instanceof CobolParser.StopStatementContext || st instanceof CobolParser.GobackStatementContext
+                    || st instanceof CobolParser.ExitStatementContext ex && ex.PROGRAM() != null) {
+                return "it ends the program (STOP RUN, GOBACK or EXIT PROGRAM)";
+            }
+        }
+        // Inside a PERFORM ... THRU range anywhere in the program: the range runs it as part of a sequence.
+        List<String> order = new ArrayList<>();
+        var pd = in.unit().getProcedureDivision();
+        pd.getParagraphs().forEach(p -> order.add(p.getName().toUpperCase(Locale.ROOT)));
+        for (Section sec : pd.getSections()) {
+            order.add(sec.getName().toUpperCase(Locale.ROOT));
+            sec.getParagraphs().forEach(p -> order.add(p.getName().toUpperCase(Locale.ROOT)));
+        }
+        for (var ps : findAll(pd.getCtx(), CobolParser.PerformProcedureStatementContext.class)) {
+            if (ps.procedureName().size() > 1) {
+                int from = order.indexOf(ps.procedureName(0).getText().toUpperCase(Locale.ROOT));
+                int thru = order.indexOf(ps.procedureName(ps.procedureName().size() - 1).getText().toUpperCase(Locale.ROOT));
+                int at = order.indexOf(name);
+                if (from >= 0 && thru >= 0 && at >= Math.min(from, thru) && at <= Math.max(from, thru)) {
+                    return "it is part of a PERFORM " + ps.procedureName(0).getText() + " THRU "
+                            + ps.procedureName(ps.procedureName().size() - 1).getText() + " range";
+                }
+            }
+        }
+        return null;
+    }
+
+    /** The innermost group all {@code items} belong to, or null. */
+    private static DataItem commonGroup(List<DataItem> items) {
+        for (DataItem g = items.getFirst().parent(); g != null; g = g.parent()) {
+            DataItem group = g;
+            if (items.stream().allMatch(i -> {
+                for (DataItem p = i.parent(); p != null; p = p.parent()) {
+                    if (p == group) {
+                        return true;
+                    }
+                }
+                return false;
+            })) {
+                return group;
+            }
+        }
+        return null;
+    }
+
+    /** Field pairings of record conversions decided in this program (record and class to pairing). */
+    private final Map<String, int[]> recordPairings = new LinkedHashMap<>();
+
+    /** {@code chain} with the record conversions its operands allow, and the pairings decided so far. */
+    private LibraryChain withRecords(LibraryChain chain) {
+        List<Operand> operands = new ArrayList<>();
+        chain.ins().forEach(i -> operands.add(i.operand()));
+        chain.outs().stream().filter(o -> o.receiver() != null).forEach(o -> operands.add(o.receiver()));
+        List<LibraryChain.RecordMapping> mappings = new ArrayList<>();
+        for (Operand o : operands) {
+            if (o instanceof Operand.Field f && f.item().isGroup() && f.subscripts().isEmpty() && f.refmod() == null
+                    && mappings.stream().noneMatch(m -> m.record() == f.item())) {
+                mappings.addAll(recordMappings(chain.library(), f.item()));
+            }
+        }
+        return chain.withRecords(mappings, recordPairings);
+    }
+
+    /**
+     * The library classes a record of a claimed data copybook converts to: a public constructor
+     * taking as many parameters as the record has elementary fields, each parameter with an
+     * accessor of the same name ({@code year()} or {@code getYear()}) and type, and the pairings of
+     * fields to parameters that bind exactly both ways. A record with a nested group, a table or
+     * more than {@link LibraryChain#MAX_INPUTS} fields converts to nothing.
+     */
+    private List<LibraryChain.RecordMapping> recordMappings(transpiler.cobol2java.library.Libraries.Library lib, DataItem record) {
+        String copybook = copybookOf(record);
+        if (copybook == null || !in.libraries().libraries().copybook(copybook).map(l -> l == lib).orElse(false)) {
+            return List.of();
+        }
+        List<Operand.Field> fields = new ArrayList<>();
+        for (DataItem child : record.children()) {
+            if (child.isCondition() || child.isFiller()) {
+                continue;
+            }
+            if (child.isGroup() || !child.dimensions().isEmpty() || child.kind() == DataItem.Kind.UNSUPPORTED) {
+                return List.of();
+            }
+            fields.add(new Operand.Field(child));
+        }
+        if (fields.isEmpty() || fields.size() > LibraryChain.MAX_INPUTS) {
+            return List.of();
+        }
+        List<LibraryChain.RecordMapping> out = new ArrayList<>();
+        for (var ctor : lib.index().members()) {
+            if (ctor.kind() != transpiler.cobol2java.library.JavaMember.Kind.CONSTRUCTOR || !ctor.usable()
+                    || ctor.params().size() != fields.size()) {
+                continue;
+            }
+            List<transpiler.cobol2java.library.JavaMember> accessors = new ArrayList<>();
+            for (var p : ctor.params()) {
+                String cap = Character.toUpperCase(p.name().charAt(0)) + p.name().substring(1);
+                lib.index().of(ctor.owner()).stream()
+                        .filter(m -> m.kind() == transpiler.cobol2java.library.JavaMember.Kind.INSTANCE && m.params().isEmpty()
+                                && (m.name().equals(p.name()) || m.name().equals("get" + cap)) && m.returnType().equals(p.type()))
+                        .findFirst().ifPresent(accessors::add);
+            }
+            if (accessors.size() != fields.size()) {
+                continue;
+            }
+            List<int[]> pairings = new ArrayList<>();
+            pair(fields, ctor, accessors, new int[fields.size()], new boolean[fields.size()], 0, pairings);
+            if (!pairings.isEmpty()) {
+                out.add(new LibraryChain.RecordMapping(record, List.copyOf(fields), copybook, ctor, List.copyOf(accessors), pairings));
+            }
+        }
+        return out;
+    }
+
+    /** Every assignment of fields to constructor parameters that binds exactly as an argument and back as a result. */
+    private void pair(List<Operand.Field> fields, transpiler.cobol2java.library.JavaMember ctor,
+            List<transpiler.cobol2java.library.JavaMember> accessors, int[] at, boolean[] used, int k, List<int[]> out) {
+        if (k == at.length) {
+            out.add(at.clone());
+            return;
+        }
+        for (int i = 0; i < fields.size(); i++) {
+            if (used[i]) {
+                continue;
+            }
+            try {
+                boolean in = JavaTypes.argument(fields.get(i), ctor.params().get(k).type(), this, currentCtx).isPresent();
+                boolean back = JavaTypes.result(new com.github.javaparser.ast.expr.NameExpr("v"), accessors.get(k).returnType(),
+                        fields.get(i), this).isPresent();
+                if (in && back) {
+                    used[i] = true;
+                    at[k] = i;
+                    pair(fields, ctor, accessors, at, used, k + 1, out);
+                    used[i] = false;
+                }
+            } catch (HandlerException e) {
+                // Not an exact pair.
+            }
+        }
+    }
+
+    /** The copybook a data item was copied from (its COPY statement in the original source), or null. */
+    private String copybookOf(DataItem item) {
+        if (!in.sourceMap().exact()) {
+            return null;
+        }
+        var line = in.sourceMap().copyLine(item.line());
+        if (line.isEmpty()) {
+            return null;
+        }
+        String[] lines = in.libraries().text(in.sourceFile()).orElse("").split("\n", -1);
+        if (line.getAsInt() < 1 || line.getAsInt() > lines.length) {
+            return null;
+        }
+        var m = java.util.regex.Pattern.compile("(?i)\\bCOPY\\s+\"?([A-Za-z0-9][A-Za-z0-9-]*)").matcher(lines[line.getAsInt() - 1]);
+        return m.find() ? m.group(1).toUpperCase(Locale.ROOT) : null;
+    }
+
+    /** Library overrides of intrinsic functions: the expression standing for a claimed FUNCTION while a statement is generated. */
+    private final Map<ParserRuleContext, Operand> functionOverrides = new java.util.IdentityHashMap<>();
+
+    /** The first claimed intrinsic function of a statement (not of the statements nested in it), or null. */
+    private CobolParser.FunctionCallContext claimedFunction(OpUnit unit) {
+        var libs = in.libraries().libraries();
+        if (libs.isEmpty() || unit.statement() == null) {
+            return null;
+        }
+        ParserRuleContext own = unit.statement().getCtx();
+        for (var f : findAll(own, CobolParser.FunctionCallContext.class)) {
+            ParserRuleContext at = f.getParent();
+            while (at != null && !(at instanceof CobolParser.StatementContext) && at != own) {
+                at = at.getParent();
+            }
+            boolean mine = at == own || at instanceof CobolParser.StatementContext st && st.getChild(0) == own;
+            if (mine && libs.operation("FUNCTION " + f.functionName().getText().toUpperCase(Locale.ROOT)).isPresent()) {
+                return f;
+            }
+        }
+        return null;
+    }
+
+    private static <T extends ParserRuleContext> List<T> findAll(ParserRuleContext ctx, Class<T> type) {
+        List<T> out = new ArrayList<>();
+        java.util.ArrayDeque<org.antlr.v4.runtime.tree.ParseTree> todo = new java.util.ArrayDeque<>(List.of(ctx));
+        while (!todo.isEmpty()) {
+            var n = todo.pop();
+            if (type.isInstance(n)) {
+                out.add(type.cast(n));
+            }
+            for (int i = n.getChildCount() - 1; i >= 0; i--) {
+                todo.push(n.getChild(i));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * A statement using a claimed intrinsic function: the library chain's value (a {@code BigDecimal}
+     * or {@code String}) stands for the function, and the statement around it is generated as usual,
+     * so it stays exact. The function's arguments are the inputs.
+     */
+    private void functionUse(OpUnit unit, BlockStmt block, Map<String, Object> facts, CobolParser.FunctionCallContext f) {
+        String fn = f.functionName().getText().toUpperCase(Locale.ROOT);
+        var lib = in.libraries().libraries().operation("FUNCTION " + fn).orElseThrow();
+        LibrarySite.Alternative alt = alternative(unit, block, facts, lib.id());
+        var use = in.libraries().record(lib.id(), in.programId(), in.sourceFile(), unit.location().line(), "operation", "FUNCTION " + fn);
+        List<LibraryChain.In> ins = new ArrayList<>();
+        String problem = null;
+        boolean numeric;
+        try {
+            for (var a : f.argument()) {
+                Operand o = argument(a);
+                ins.add(new LibraryChain.In(o, label(o)));
+            }
+        } catch (HandlerException e) {
+            problem = "its arguments cannot be passed: " + e.getMessage();
+        }
+        try {
+            numeric = functionOperand(f).isNumericValued();
+        } catch (HandlerException e) {
+            numeric = !TEXT_FUNCTIONS.contains(fn);
+        }
+        boolean isNumeric = numeric;
+        LibraryChain.Out value = new LibraryChain.Out("value", null, "the value of FUNCTION " + fn, -1, numeric ? "numeric" : "text");
+        LibraryChain chain = new LibraryChain(lib, ins, List.of(value), lib.hintsFor("FUNCTION " + fn), this, f);
+        LibrarySite.Finisher finisher = (steps, out, instance, keep) -> regenerate(unit, facts, f,
+                new Operand.Computed(chain.value(steps, instance), isNumeric, isNumeric ? null : "text"));
+        if (problem == null) {
+            try {
+                // The statement must take a value of the function's category in place of the function.
+                regenerate(unit, facts, f, new Operand.Computed(new com.github.javaparser.ast.expr.NameExpr("libraryValue"), isNumeric,
+                        isNumeric ? null : "text"));
+            } catch (HandlerException e) {
+                problem = "the statement cannot use a library value in place of FUNCTION " + fn + ": " + e.getMessage();
+            }
+        }
+        startUse(unit, block, facts, null, chain, alt, use, part("operation", "FUNCTION " + fn), "FUNCTION " + fn + " in "
+                + unit.location().text().replace('\n', ' '), finisher, problem);
+    }
+
+    /** Alphanumeric intrinsic functions (the others are numeric). */
+    private static final Set<String> TEXT_FUNCTIONS = Set.of("UPPER-CASE", "LOWER-CASE", "REVERSE", "TRIM", "CONCATENATE", "CHAR",
+            "CURRENT-DATE", "WHEN-COMPILED", "SUBSTITUTE", "SUBSTITUTE-CASE", "NATIONAL-OF", "DISPLAY-OF", "HEX-OF", "FORMATTED-DATE",
+            "FORMATTED-TIME", "FORMATTED-DATETIME", "LOCALE-DATE", "LOCALE-TIME", "EXCEPTION-STATUS", "EXCEPTION-FILE",
+            "EXCEPTION-LOCATION", "EXCEPTION-STATEMENT", "MODULE-NAME", "MODULE-ID", "CONTENT-OF");
+
+    /** The statement generated as usual, with {@code value} standing for the function {@code f}; fails if it raises a decision of its own. */
+    private LibrarySite.Generated regenerate(OpUnit unit, Map<String, Object> facts, CobolParser.FunctionCallContext f, Operand value)
+            throws HandlerException {
+        BlockStmt tmp = new BlockStmt();
+        List<Decision> nested = new ArrayList<>();
+        List<Decision> saved = sink;
+        int s0 = statements;
+        int t0 = translated;
+        ParserRuleContext savedCtx = currentCtx;
+        sink = nested;
+        functionOverrides.put(f, value);
+        currentCtx = unit.statement().getCtx();
+        try {
+            dispatch(unit, tmp, facts);
+            if (translated == t0) {
+                throw HandlerException.unsupported(nested.isEmpty() ? "it is not translated" : nested.getFirst().message());
+            }
+        } finally {
+            functionOverrides.remove(f);
+            sink = saved;
+            statements = s0;
+            translated = t0;
+            currentCtx = savedCtx;
+        }
+        return new LibrarySite.Generated(new ArrayList<>(tmp.getStatements()), nested);
+    }
+
+    /**
+     * The inputs and outputs of a CALL of a claimed program: the USING items are the inputs; the
+     * output is the RETURNING item, or else one BY REFERENCE item (which may also be read),
+     * RETURN-CODE, or nothing (a {@code void} call).
+     */
+    private LibraryChain programChain(io.proleap.cobol.asg.metamodel.procedure.call.CallStatement call,
+            transpiler.cobol2java.library.Libraries.Library lib, String name) throws HandlerException {
+        List<LibraryChain.In> ins = new ArrayList<>();
+        List<Integer> byReference = new ArrayList<>();
+        var using = call.getUsingPhrase();
+        for (var parameter : using == null ? List.<io.proleap.cobol.asg.metamodel.procedure.call.UsingParameter>of() : using.getUsingParameters()) {
+            switch (parameter.getParameterType()) {
+                case REFERENCE -> {
+                    for (var ref : parameter.getByReferencePhrase().getByReferences()) {
+                        if (ref.getByReferenceType() != null) {
+                            throw HandlerException.unsupported("CALL USING BY REFERENCE " + ref.getByReferenceType());
+                        }
+                        Operand o = operand(ref.getValueStmt());
+                        if (o instanceof Operand.Field) {
+                            byReference.add(ins.size());
+                        }
+                        ins.add(new LibraryChain.In(o, label(o)));
+                    }
+                }
+                case CONTENT -> {
+                    for (var content : parameter.getByContentPhrase().getByContents()) {
+                        if (content.getByContentType() != null) {
+                            throw HandlerException.unsupported("CALL USING BY CONTENT " + content.getByContentType());
+                        }
+                        Operand o = operand(content.getValueStmt());
+                        ins.add(new LibraryChain.In(o, label(o)));
+                    }
+                }
+                case VALUE -> {
+                    for (var value : parameter.getByValuePhrase().getByValues()) {
+                        Operand o = operand(value.getValueStmt());
+                        ins.add(new LibraryChain.In(o, label(o)));
+                    }
+                }
+            }
+        }
+        List<LibraryChain.Out> outs = new ArrayList<>();
+        if (call.getGivingPhrase() != null) {
+            Operand r = operand(call.getGivingPhrase().getGivingCall());
+            outs.add(new LibraryChain.Out("returning", r, label(r), -1));
+        } else {
+            for (int i : byReference) {
+                outs.add(new LibraryChain.Out("item:" + ins.get(i).label(), ins.get(i).operand(), ins.get(i).label(), i));
+            }
+            outs.add(new LibraryChain.Out("return_code", new Operand.ReturnCode(), "RETURN-CODE", -1));
+            outs.add(new LibraryChain.Out("none", null, "nothing", -1));
+        }
+        return withRecords(new LibraryChain(lib, ins, outs, lib.hintsFor(name), this, call.getCtx()));
+    }
+
+    /** How a decision names an operand: the item's name, or the literal as written. */
+    static String label(Operand o) {
+        return switch (o) {
+            case Operand.Field f -> f.item().cobolName() + (f.refmod() != null ? " (reference-modified)" : "");
+            case Operand.AlphanumericLiteral a -> "\"" + a.value() + "\"";
+            case Operand.NumericLiteral n -> n.text();
+            case Operand.Figurative f -> f.name();
+            case Operand.ReturnCode r -> "RETURN-CODE";
+            default -> o.category();
+        };
+    }
+
+    String programIdForLibrary() {
+        return in.programId();
+    }
+
+    /**
+     * The per-program object a chain starts with (a constructor without arguments): an accessor
+     * that creates it on first use. {@code declare} adds the field and the accessor to the class.
+     */
+    Expression libraryInstance(String libraryId, transpiler.cobol2java.library.JavaMember constructor, boolean declare) {
+        String accessor = libraryInstances.get(constructor.owner());
+        if (accessor == null) {
+            StringBuilder base = new StringBuilder();
+            for (String w : (libraryId + " " + constructor.ownerName()).split("[^A-Za-z0-9]+")) {
+                if (!w.isEmpty()) {
+                    base.append(base.isEmpty() ? Character.toLowerCase(w.charAt(0)) : Character.toUpperCase(w.charAt(0))).append(w.substring(1));
+                }
+            }
+            accessor = base.toString();
+            for (int n = 2; programClass.getFieldByName(accessor).isPresent() || !programClass.getMethodsByName(accessor).isEmpty(); n++) {
+                accessor = base.toString() + n;
+            }
+            if (!declare) {
+                return new com.github.javaparser.ast.expr.MethodCallExpr(accessor);
+            }
+            libraryInstances.put(constructor.owner(), accessor);
+            programClass.addMember(com.github.javaparser.StaticJavaParser.parseBodyDeclaration(
+                    "private " + constructor.owner() + " " + accessor + ";"));
+            programClass.addMember(com.github.javaparser.StaticJavaParser.parseBodyDeclaration(
+                    "/** The library " + libraryId + "'s " + constructor.ownerName() + ", created on first use (one per program). */\n"
+                            + "private " + constructor.owner() + " " + accessor + "() {\n"
+                            + "    if (this." + accessor + " == null) {\n        this." + accessor + " = new " + constructor.owner() + "();\n    }\n"
+                            + "    return this." + accessor + ";\n}"));
+        }
+        return new com.github.javaparser.ast.expr.MethodCallExpr(accessor);
+    }
+
+    @Override
+    public Optional<transpiler.cobol2java.library.Libraries.Library> programLibrary(String name) {
+        return in.libraries().program(name);
+    }
+
+    @Override
+    public boolean declaresLibraries() {
+        return !in.libraries().libraries().isEmpty();
+    }
+
+    @Override
+    public Optional<transpiler.cobol2java.library.Libraries.Library> operationLibrary(String verb) {
+        return in.libraries().libraries().operation(verb);
+    }
+
     /** Generates with a handler, collecting decisions raised by nested statements into {@code nested}. */
     private List<Statement> generate(Handler handler, OpUnit unit, List<Decision> nested) throws HandlerException {
         List<Decision> saved = sink;
         int savedStatements = statements;
         int savedTranslated = translated;
+        boolean savedJdk = jdk;
         sink = nested;
+        jdk = in.builtins().isJdk(handler);
         try {
             return handler.generate(unit, this);
         } catch (HandlerException | RuntimeException e) {
@@ -2941,14 +3717,74 @@ public final class ProgramTranslator implements TranslationContext {
             throw e;
         } finally {
             sink = saved;
+            jdk = savedJdk;
         }
     }
 
-    private record Generated(Candidate candidate, List<Statement> statements, List<Decision> nested) {}
+    /**
+     * A candidate's generated statements, the decisions they raise, and the library uses recorded
+     * while generating them (staged: recorded only if the candidate is selected).
+     */
+    private record Generated(Candidate candidate, List<Statement> statements, List<Decision> nested,
+            List<transpiler.cobol2java.library.LibraryScope.Use> uses) {
+        Generated(Candidate candidate, List<Statement> statements, List<Decision> nested) {
+            this(candidate, statements, nested, List.of());
+        }
 
-    /** Every builtin handler for the operation that can translate this instance (except {@code excluded}). */
+        Generated withCandidate(Candidate c) {
+            return new Generated(c, statements, nested, uses);
+        }
+    }
+
+    /**
+     * Offers {@code handler} and its JDK twin as one {@code runtime_choice} decision (the run asked
+     * for it: {@code options.jdk_alternatives}). Returns false, having done nothing, when the twin
+     * cannot translate the statement or the handler waits for a dialect setting: the handler then
+     * translates it as without the option. When only the twin can, it is offered alone.
+     */
+    private boolean runtimeChoice(OpUnit unit, BlockStmt block, Map<String, Object> facts, MappingRule rule, Handler handler,
+            Handler twin) {
+        List<Generated> jdkOnes = candidates(unit, List.of(twin));
+        if (jdkOnes.isEmpty()) {
+            return false;
+        }
+        int hits = dialectHits;
+        List<Generated> runtimeOnes = candidates(unit, List.of(handler));
+        if (dialectHits > hits) {
+            return false;
+        }
+        String message;
+        if (runtimeOnes.isEmpty()) {
+            String problem;
+            int mark = in.libraries().mark();
+            try {
+                generate(handler, unit, new ArrayList<>());
+                problem = "it does not apply";
+            } catch (HandlerException e) {
+                problem = e.getMessage();
+            } finally {
+                in.libraries().takeSince(mark);  // only probing why the handler fails: record no use
+            }
+            message = "the runtime handler '" + handler.id() + "' cannot translate this statement exactly (" + problem
+                    + "); its JDK twin '" + twin.id() + "' can, approximately";
+        } else {
+            message = "'" + handler.id() + "' (the runtime library, GnuCOBOL's exact semantics) or its JDK twin '" + twin.id()
+                    + "' (plain JDK calls, approximate)";
+        }
+        List<Generated> offered = new ArrayList<>();
+        runtimeOnes.forEach(g -> offered.add(g.withCandidate(g.candidate().withUses("runtime"))));
+        jdkOnes.forEach(g -> offered.add(g.withCandidate(g.candidate().withUses("jdk"))));
+        unresolved(unit, block, facts, Reason.RUNTIME_CHOICE, rule, message, offered);
+        return true;
+    }
+
+    /**
+     * Every builtin handler for the operation that can translate this instance (except {@code excluded});
+     * JDK twins only when the run asks for them.
+     */
     private List<Generated> candidatesFor(OpUnit unit, Handler excluded) {
-        List<Handler> hs = in.builtins().handlersFor(unit.operation()).stream().filter(h -> h != excluded).toList();
+        List<Handler> hs = in.builtins().handlersFor(unit.operation()).stream()
+                .filter(h -> h != excluded && (in.dialect().jdkAlternatives() || !in.builtins().isJdk(h))).toList();
         return candidates(unit, hs);
     }
 
@@ -2958,15 +3794,22 @@ public final class ProgramTranslator implements TranslationContext {
             List<Decision> nested = new ArrayList<>();
             int savedStatements = statements;
             int savedTranslated = translated;
+            int mark = in.libraries().mark();
             try {
                 List<Statement> stmts = generate(h, unit, nested);
+                var staged = in.libraries().takeSince(mark);
                 String preview = String.join("\n", stmts.stream().map(Statement::toString).toList());
-                Candidate candidate = new Candidate("builtin:" + h.id(), h.id(), h.description(), preview)
-                        .withDocs(JavaDocs.runtime().calledBy(stmts));
-                out.add(new Generated(candidate, stmts, nested));
+                List<Candidate.Doc> docs = new ArrayList<>(JavaDocs.runtime().calledBy(stmts));
+                if (in.builtins().isJdk(h)) {
+                    // A JDK twin's docs come from the JDK's own sources (lib/src.zip).
+                    docs.addAll(JavaDocs.jdk().calledByAnyScope(stmts));
+                }
+                Candidate candidate = new Candidate("builtin:" + h.id(), h.id(), h.description(), preview).withDocs(docs);
+                out.add(new Generated(candidate, stmts, nested, staged));
             } catch (HandlerException e) {
                 // Not a viable candidate for this instance.
             } finally {
+                in.libraries().takeSince(mark);  // uses of a candidate that failed to generate
                 // Candidate exploration must not change the program's statement counts.
                 statements = savedStatements;
                 translated = savedTranslated;
@@ -3005,6 +3848,7 @@ public final class ProgramTranslator implements TranslationContext {
             block.getStatements().remove(index);
             block.getStatements().addAll(index, g.statements());
             annotate(g.statements(), note);
+            in.libraries().restore(g.uses());  // only the selected candidate's library uses are recorded
             return g.nested();
         };
         return new Decision(reason, unit.operation(), message, unit.location(), in.programId(), facts,
@@ -3470,8 +4314,12 @@ public final class ProgramTranslator implements TranslationContext {
 
     /** An intrinsic function, read from the parse tree (ProLeap keeps no arguments). */
     private Operand functionOperand(CobolParser.FunctionCallContext f) throws HandlerException {
+        Operand library = functionOverrides.get(f);
+        if (library != null) {
+            return library;
+        }
         String fn = f.functionName().getText().toUpperCase(Locale.ROOT);
-        if (FLOAT_FUNCTIONS.contains(fn)) {
+        if (FLOAT_FUNCTIONS.contains(fn) && !jdk) {
             throw HandlerException.unsupported("FUNCTION " + fn + " is computed in floating point; its result is not bit-exact");
         }
         List<Operand> args = new ArrayList<>();
@@ -3498,6 +4346,18 @@ public final class ProgramTranslator implements TranslationContext {
                 continue;
             }
             args.add(argument(a));
+        }
+        if (jdk) {
+            if (JDK_FUNCTIONS.contains(fn) && f.referenceModifier() == null) {
+                return jdkFunction(fn, args);
+            }
+            // Without a JDK form a function is computed as the runtime computes it (from BigDecimal arguments).
+            jdk = false;
+            try {
+                return functionOperand(f);
+            } finally {
+                jdk = true;
+            }
         }
         Operand result = switch (fn) {
             case "UPPER-CASE", "LOWER-CASE", "REVERSE" -> {
@@ -3624,6 +4484,81 @@ public final class ProgramTranslator implements TranslationContext {
                     false, "text");
         }
         return result;
+    }
+
+    /** The intrinsic functions a JDK twin computes with java.lang.Math, in doubles. */
+    private static final Set<String> JDK_FUNCTIONS = Set.of("SQRT", "LOG", "LOG10", "EXP", "EXP10", "SIN", "COS", "TAN", "ASIN",
+            "ACOS", "ATAN", "PI", "E", "RANDOM", "ABS", "MAX", "MIN", "MOD", "REM", "INTEGER", "INTEGER-PART", "SUM", "MEAN");
+
+    /** A {@link #JDK_FUNCTIONS} function in JDK mode: a double-valued result (display {@code double}). */
+    private Operand jdkFunction(String fn, List<Operand> args) throws HandlerException {
+        List<Expression> xs = new ArrayList<>();
+        for (Operand a : args) {
+            if (!a.isNumericValued()) {
+                throw HandlerException.unsupported("FUNCTION " + fn + " of " + a.category() + " has no JDK form");
+            }
+            xs.add(numeric(a));
+        }
+        Expression e = switch (fn) {
+            case "SQRT", "LOG", "LOG10", "EXP", "SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN" -> {
+                arity(fn, args, 1);
+                yield staticCall("Math", fn.toLowerCase(Locale.ROOT), xs.getFirst());
+            }
+            case "EXP10" -> {
+                arity(fn, args, 1);
+                yield staticCall("Math", "pow", Ast.doubleLiteral(BigDecimal.TEN), xs.getFirst());
+            }
+            case "PI", "E" -> {
+                arity(fn, args, 0);
+                yield new com.github.javaparser.ast.expr.FieldAccessExpr(name("Math"), fn);
+            }
+            case "RANDOM" -> {
+                // A seed (RANDOM(n)) starts GnuCOBOL's own generator, which has no JDK counterpart.
+                arity(fn, args, 0);
+                yield staticCall("Math", "random");
+            }
+            case "ABS", "INTEGER" -> {
+                arity(fn, args, 1);
+                yield staticCall("Math", fn.equals("ABS") ? "abs" : "floor", xs.getFirst());
+            }
+            case "INTEGER-PART" -> {
+                arity(fn, args, 1);
+                yield new com.github.javaparser.ast.expr.CastExpr(com.github.javaparser.ast.type.PrimitiveType.longType(),
+                        new EnclosedExpr(xs.getFirst()));
+            }
+            case "MAX", "MIN" -> {
+                if (xs.isEmpty()) {
+                    throw HandlerException.unsupported("FUNCTION " + fn + " needs arguments");
+                }
+                Expression r = xs.getFirst();
+                for (int i = 1; i < xs.size(); i++) {
+                    r = staticCall("Math", fn.equals("MAX") ? "max" : "min", r, xs.get(i));
+                }
+                yield r;
+            }
+            case "SUM", "MEAN" -> {
+                if (xs.isEmpty()) {
+                    throw HandlerException.unsupported("FUNCTION " + fn + " needs arguments");
+                }
+                Expression r = xs.getFirst();
+                for (int i = 1; i < xs.size(); i++) {
+                    r = Ast.binary(r, BinaryExpr.Operator.PLUS, xs.get(i));
+                }
+                yield fn.equals("SUM") ? r : Ast.binary(r, BinaryExpr.Operator.DIVIDE, Ast.doubleLiteral(BigDecimal.valueOf(xs.size())));
+            }
+            case "MOD" -> {
+                // a - b * floor(a / b): the sign of the divisor, as FUNCTION MOD.
+                arity(fn, args, 2);
+                yield Ast.binary(xs.get(0), BinaryExpr.Operator.MINUS, Ast.binary(xs.get(1), BinaryExpr.Operator.MULTIPLY,
+                        staticCall("Math", "floor", Ast.binary(xs.get(0).clone(), BinaryExpr.Operator.DIVIDE, xs.get(1).clone()))));
+            }
+            case "REM" -> {
+                arity(fn, args, 2);
+                yield Ast.binary(xs.get(0), BinaryExpr.Operator.REMAINDER, xs.get(1));
+            }
+            default -> throw new IllegalStateException(fn);
+        };
+        return new Operand.Computed(e, true, "double");
     }
 
     /** A plain (unsubscripted) name of a table item as a function argument, or null. */
@@ -4033,6 +4968,9 @@ public final class ProgramTranslator implements TranslationContext {
 
     @Override
     public Expression numeric(Operand o) throws HandlerException {
+        if (jdk) {
+            return numericJdk(o);
+        }
         return switch (o) {
             case Operand.Field f when f.numeric() -> call(field(f), "get");
             case Operand.ReturnCode r -> call(name("returnCode"), "get");
@@ -4046,7 +4984,31 @@ public final class ProgramTranslator implements TranslationContext {
         };
     }
 
+    /** {@link #numeric} in JDK mode: a {@code double}-valued expression. */
+    private Expression numericJdk(Operand o) throws HandlerException {
+        return switch (o) {
+            case Operand.Field f when f.numeric() -> call(call(field(f), "get"), "doubleValue");
+            case Operand.ReturnCode r -> call(call(name("returnCode"), "get"), "doubleValue");
+            case Operand.Index i -> name(i.index().javaName());
+            case Operand.Register r -> name(r.javaName());
+            case Operand.Computed c when c.numeric() && "double".equals(c.display()) -> c.value().clone();
+            case Operand.Computed c when c.numeric() -> call(c.value().clone(), "doubleValue");
+            case Operand.NumericLiteral n -> Ast.doubleLiteral(n.value());
+            case Operand.Figurative f when f.isZero() -> Ast.doubleLiteral(BigDecimal.ZERO);
+            case Operand.Arithmetic a -> arithmetic(a.stmt());
+            default -> throw HandlerException.unsupported(o.category() + " used where a numeric value is required");
+        };
+    }
+
     private Expression arithmetic(ArithmeticValueStmt a) throws HandlerException {
+        if (jdk) {
+            Expression e = multDivs(a.getMultDivs());
+            for (PlusMinus pm : a.getPlusMinus()) {
+                boolean plus = pm.getPlusMinusType() == PlusMinus.PlusMinusType.PLUS;
+                e = Ast.binary(e, plus ? BinaryExpr.Operator.PLUS : BinaryExpr.Operator.MINUS, multDivs(pm.getMultDivs()));
+            }
+            return e;
+        }
         Expression e = multDivs(a.getMultDivs());
         for (PlusMinus pm : a.getPlusMinus()) {
             boolean plus = pm.getPlusMinusType() == PlusMinus.PlusMinusType.PLUS;
@@ -4058,6 +5020,13 @@ public final class ProgramTranslator implements TranslationContext {
 
     private Expression multDivs(MultDivs md) throws HandlerException {
         Expression e = powers(md.getPowers());
+        if (jdk) {
+            for (MultDiv m : md.getMultDivs()) {
+                e = Ast.binary(e, m.getMultDivType() == MultDiv.MultDivType.DIV ? BinaryExpr.Operator.DIVIDE : BinaryExpr.Operator.MULTIPLY,
+                        powers(m.getPowers()));
+            }
+            return e;
+        }
         for (MultDiv m : md.getMultDivs()) {
             if (m.getMultDivType() == MultDiv.MultDivType.DIV) {
                 if (!gnuArithmetic) {
@@ -4079,6 +5048,23 @@ public final class ProgramTranslator implements TranslationContext {
      * negative exponent changes the result of later evaluations of the same expression.
      */
     private Expression powers(Powers p) throws HandlerException {
+        if (jdk) {
+            // Any exponent: Math.pow, right to left (a ** b ** c is a ** (b ** c)).
+            Expression e = basis(p.getBasis());
+            if (p.getPowersType() == Powers.PowersType.MINUS) {
+                e = Ast.negate(e);
+            }
+            List<Expression> operands = new ArrayList<>();
+            operands.add(e);
+            for (var power : p.getPowers()) {
+                operands.add(basis(power.getBasis()));
+            }
+            Expression result = operands.getLast();
+            for (int i = operands.size() - 2; i >= 0; i--) {
+                result = staticCall("Math", "pow", operands.get(i), result);
+            }
+            return result;
+        }
         if (!p.getPowers().isEmpty() && !gnuArithmetic) {
             throw HandlerException.unsupported("exponentiation (**) is not supported");
         }
@@ -4229,6 +5215,20 @@ public final class ProgramTranslator implements TranslationContext {
                         + " is invalid COBOL");
             }
             test = call(field(o), "isNumeric");
+        } else if (jdk) {
+            // Every character passes Character's test (a space counts as a letter for ALPHABETIC).
+            Expression value = call(call(field(o), "get"), "chars");
+            Expression ch = name("ch");
+            Expression space = Ast.binary(name("ch"), BinaryExpr.Operator.EQUALS, Ast.chr(' '));
+            Expression predicate = switch (cc.getClassConditionType()) {
+                case NUMERIC -> new com.github.javaparser.ast.expr.MethodReferenceExpr(new com.github.javaparser.ast.expr.TypeExpr(
+                        Ast.type("Character")), null, "isDigit");
+                case ALPHABETIC -> lambda("ch", Ast.binary(staticCall("Character", "isLetter", ch), BinaryExpr.Operator.OR, space));
+                case ALPHABETIC_UPPER -> lambda("ch", Ast.binary(staticCall("Character", "isUpperCase", ch), BinaryExpr.Operator.OR, space));
+                case ALPHABETIC_LOWER -> lambda("ch", Ast.binary(staticCall("Character", "isLowerCase", ch), BinaryExpr.Operator.OR, space));
+                default -> throw HandlerException.unsupported("class condition " + cc.getClassConditionType() + " has no JDK form");
+            };
+            test = call(value, "allMatch", predicate);
         } else {
             Expression value = call(field(o), "get");
             test = switch (cc.getClassConditionType()) {
@@ -4278,7 +5278,8 @@ public final class ProgramTranslator implements TranslationContext {
                     case NEGATIVE -> BinaryExpr.Operator.LESS;
                     case ZERO -> BinaryExpr.Operator.EQUALS;
                 };
-                Expression e = Ast.compareToZero(call(numeric(o), "signum"), op);
+                Expression e = jdk ? Ast.binary(numeric(o), op, Ast.doubleLiteral(BigDecimal.ZERO))
+                        : Ast.compareToZero(call(numeric(o), "signum"), op);
                 yield Facts.hasDirectToken(s.getCtx(), "NOT") ? new UnaryExpr(new EnclosedExpr(e), UnaryExpr.Operator.LOGICAL_COMPLEMENT) : e;
             }
             case COMBINED -> {
@@ -4319,8 +5320,47 @@ public final class ProgramTranslator implements TranslationContext {
         return comparison(left, right, op, where);
     }
 
+    private static Expression lambda(String parameter, Expression body) {
+        return new com.github.javaparser.ast.expr.LambdaExpr(new com.github.javaparser.ast.body.Parameter(
+                new com.github.javaparser.ast.type.UnknownType(), parameter), body);
+    }
+
+    /** {@link #comparison} in JDK mode: doubles with Java's operators, strings with equals / compareTo. */
+    private Expression comparisonJdk(Operand left, Operand right, RelationalOperatorType op, ParserRuleContext where)
+            throws HandlerException {
+        if (left.isNumericValued() && right.isNumericValued()) {
+            return Ast.binary(numeric(left), javaOperator(op), numeric(right));
+        }
+        Expression l = alphanumericSide(left, right);
+        Expression rr = alphanumericSide(right, left);
+        boolean equality = op == RelationalOperatorType.EQUAL || op == RelationalOperatorType.NOT_EQUAL;
+        if (l != null && rr != null) {
+            // String.compareTo orders by char code: the ASCII collating sequence.
+            if (requireCollatingSequence(op, where).equals("ebcdic")) {
+                throw HandlerException.unsupported("an EBCDIC-ordered comparison has no JDK form");
+            }
+            if (equality) {
+                Expression eq = call(l, "equals", rr);
+                return op == RelationalOperatorType.EQUAL ? eq : new UnaryExpr(eq, UnaryExpr.Operator.LOGICAL_COMPLEMENT);
+            }
+            return Ast.compareToZero(call(l, "compareTo", rr), javaOperator(op));
+        }
+        Operand.Figurative f = right instanceof Operand.Figurative rf ? rf : left instanceof Operand.Figurative lf ? lf : null;
+        Expression side = l != null ? l : rr;
+        if (side != null && f != null && f.isSingle() && equality) {
+            // Equal to a figurative constant: every character is its character.
+            Expression all = call(call(side, "chars"), "allMatch", lambda("ch",
+                    Ast.binary(name("ch"), BinaryExpr.Operator.EQUALS, Ast.chr(f.fill()))));
+            return op == RelationalOperatorType.EQUAL ? all : new UnaryExpr(all, UnaryExpr.Operator.LOGICAL_COMPLEMENT);
+        }
+        throw HandlerException.unsupported("comparison of " + left.category() + " with " + right.category() + " has no JDK form");
+    }
+
     private Expression comparison(Operand left, Operand right, RelationalOperatorType op, ParserRuleContext where)
             throws HandlerException {
+        if (jdk) {
+            return comparisonJdk(left, right, op, where);
+        }
         if (left.isNumericValued() && right.isNumericValued()) {
             return Ast.compareToZero(staticCall("Compare", "numeric", numeric(left), numeric(right)), javaOperator(op));
         }
@@ -4405,8 +5445,20 @@ public final class ProgramTranslator implements TranslationContext {
     @Override
     public BlockStmt nested(Scope scope) {
         BlockStmt block = new BlockStmt();
-        translateInto(scope, block);
+        // A nested statement is translated on its own (with its own runtime / JDK choice).
+        boolean savedJdk = jdk;
+        jdk = false;
+        try {
+            translateInto(scope, block);
+        } finally {
+            jdk = savedJdk;
+        }
         return block;
+    }
+
+    @Override
+    public boolean jdk() {
+        return jdk;
     }
 
     @Override

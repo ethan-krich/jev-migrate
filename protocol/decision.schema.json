@@ -10,7 +10,7 @@
       "properties": {
         "id": {"type": "string", "pattern": "^decision-[0-9]+$", "description": "Unique within a session"},
         "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "Content hash (reason, operation, location, text, facts, candidate ids, dialect, importance; never the context); the cache key"},
-        "reason": {"enum": ["missing_mapping", "unsupported_construct", "ambiguous_mapping", "missing_target_api", "invalid_mapping", "callback_required"]},
+        "reason": {"enum": ["missing_mapping", "unsupported_construct", "ambiguous_mapping", "missing_target_api", "invalid_mapping", "callback_required", "library_call", "runtime_choice"]},
         "operation": {"type": "string", "description": "Source operation, or DATA / ENVIRONMENT / PROCEDURE for declarations"},
         "message": {"type": "string"},
         "required": {"const": true, "description": "Finalize refuses to write output while a required decision is pending"},
@@ -54,6 +54,28 @@
           "required": ["script", "function"],
           "properties": {"script": {"type": "string"}, "function": {"type": "string"}}
         },
+        "library": {
+          "type": "object",
+          "description": "A library_call decision: the library, the step of the call being built, and the claimed COBOL part (advisory; the library's hash is in the facts, so in the fingerprint)",
+          "required": ["id", "java", "step"],
+          "properties": {
+            "id": {"type": "string"},
+            "java": {"type": "string", "description": "Maven coordinates or source path"},
+            "step": {"enum": ["start", "args", "next", "result", "fields", "lifetime"]},
+            "chain": {"type": "array", "items": {"type": "string"}, "description": "The calls chosen so far"},
+            "part": {
+              "type": "object",
+              "required": ["kind", "name"],
+              "properties": {
+                "kind": {"enum": ["program", "operation", "paragraph", "copybook"]},
+                "name": {"type": "string"},
+                "file": {"type": "string"},
+                "comments": {"type": "array", "items": {"type": "string"}},
+                "text": {"type": "string", "description": "The part's COBOL source, capped"}
+              }
+            }
+          }
+        },
         "setting": {
           "type": "object",
           "description": "A setting decision: selecting a candidate means translating again with `field` set to `values[candidate_id]` (sent in initialize.settings), never resolve",
@@ -73,6 +95,7 @@
         "handler": {"type": "string"},
         "description": {"type": "string"},
         "preview": {"type": "string", "description": "Target code the candidate generates"},
+        "uses": {"enum": ["runtime", "jdk"], "description": "On a runtime_choice decision: built on the translator's runtime library (exact) or on plain JDK calls (approximate)"},
         "docs": {
           "type": "array",
           "description": "The Java methods the preview calls: signature and the first paragraph of their Javadoc; advisory, not part of the fingerprint",

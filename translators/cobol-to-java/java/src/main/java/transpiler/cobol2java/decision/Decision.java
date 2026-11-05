@@ -54,6 +54,10 @@ public final class Decision {
     private Map<String, Object> settingValues;
     private State state = State.PENDING;
     private String selectedCandidate;
+    /** A library_call decision: the library, the step and the claimed part (rendered as {@code library}). */
+    private ObjectNode library;
+    /** Set by a plan whose resolution leaves its statement untranslated (a follow-up of the same statement is raised). */
+    private boolean statementOpen;
 
     public Decision(Reason reason, String operation, String message, SourceLocation location, String programId,
             Map<String, Object> facts, String ruleId, List<Candidate> candidates, MappingRule.CallbackRef callback,
@@ -91,6 +95,25 @@ public final class Decision {
         this.settingField = field;
         this.settingValues = new java.util.LinkedHashMap<>(values);
         return this;
+    }
+
+    /** Attaches the library information of a library_call decision (advisory: not part of the fingerprint). */
+    public Decision withLibrary(ObjectNode info) {
+        this.library = info;
+        return this;
+    }
+
+    /** The library information of a library_call decision, or null. */
+    public ObjectNode library() {
+        return library;
+    }
+
+    /**
+     * Called by a plan while it applies: resolving this decision did not complete its statement
+     * (the statement continues in a follow-up decision, or in decisions the plan returns).
+     */
+    public void leaveStatementOpen() {
+        this.statementOpen = true;
     }
 
     /** The setting field of a setting decision, or null. */
@@ -194,7 +217,7 @@ public final class Decision {
      */
     public boolean statementTranslated() {
         boolean slotted = candidates.stream().anyMatch(c -> c.id().equals(selectedCandidate) && !c.slots().isEmpty());
-        return !slotted && (slotGroup == null || slotGroup.complete());
+        return !slotted && !statementOpen && (slotGroup == null || slotGroup.complete());
     }
 
     public ObjectNode toJson(String targetLanguage) {
@@ -239,6 +262,9 @@ public final class Decision {
             if (c.preview() != null) {
                 cn.put("preview", c.preview());
             }
+            if (c.uses() != null) {
+                cn.put("uses", c.uses());
+            }
             if (!c.docs().isEmpty()) {
                 var docs = cn.putArray("docs");
                 for (Candidate.Doc d : c.docs()) {
@@ -256,6 +282,9 @@ public final class Decision {
             ObjectNode st = n.putObject("setting");
             st.put("field", settingField);
             st.set("values", Json.MAPPER.valueToTree(settingValues));
+        }
+        if (library != null) {
+            n.set("library", library);
         }
         if (callback != null) {
             ObjectNode cb = n.putObject("callback");

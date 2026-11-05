@@ -67,35 +67,65 @@ BUILTIN_HANDLERS = MappingProxyType({
     "set_index": "SET",
     "search": "SEARCH",
     "search_all": "SEARCH",
+    # JDK twins: the same statement with plain JDK calls (approximate), see JDK_TWINS.
+    "add_jdk": "ADD",
+    "subtract_jdk": "SUBTRACT",
+    "multiply_jdk": "MULTIPLY",
+    "divide_jdk": "DIVIDE",
+    "compute_gnucobol_jdk": "COMPUTE",
+    "display_jdk": "DISPLAY",
+    "if_jdk": "IF",
+    "string_jdk": "STRING",
+    "unstring_jdk": "UNSTRING",
+    "inspect_jdk": "INSPECT",
+})
+
+# Builtin handler -> its JDK twin. With options.jdk_alternatives (on by default when Jev decides)
+# a statement both can translate is a runtime_choice decision: the runtime library's exact
+# GnuCOBOL semantics, or plain JDK calls (double arithmetic, java.lang.Math, String, System.out),
+# which are approximate. Jev picks per statement whether the exactness is needed.
+JDK_TWINS = MappingProxyType({
+    "add": "add_jdk",
+    "subtract": "subtract_jdk",
+    "multiply": "multiply_jdk",
+    "divide": "divide_jdk",
+    "compute_gnucobol": "compute_gnucobol_jdk",
+    "display": "display_jdk",
+    "if": "if_jdk",
+    "string": "string_jdk",
+    "unstring": "unstring_jdk",
+    "inspect": "inspect_jdk",
 })
 
 # Handlers that no default rule selects: the worker offers them as candidates on a decision
 # (compute when a rule is missing, call_external for a CALL outside the project, the STOP literal
-# and DISPLAY UPON PRINTER / SYSPCH ones for a console or device the target system decides).
+# and DISPLAY UPON PRINTER / SYSPCH ones for a console or device the target system decides, and the
+# JDK twins of a runtime_choice).
 CANDIDATE_HANDLERS = frozenset({
     "compute", "call_external", "stop_literal_accept", "stop_literal_continue",
     "display_printer", "display_device_stdout", "display_device_stderr", "read_file_unlocked",
+    *JDK_TWINS.values(),
 })
 
 # Facts the worker computes per operation instance; usable as `when` condition keys.
 FACTS = MappingProxyType({
-    "MOVE": frozenset({"source_category", "target_category", "source_figurative"}),
+    "MOVE": frozenset({"source_category", "target_category", "source_figurative", "operation_in_library"}),
     "ADD": frozenset({"form", "rounded", "size_error"}),
     "SUBTRACT": frozenset({"form", "rounded", "size_error"}),
     "MULTIPLY": frozenset({"form", "rounded", "size_error"}),
     "DIVIDE": frozenset({"form", "rounded", "size_error", "remainder"}),
     "COMPUTE": frozenset({"rounded", "size_error", "receivers"}),
-    "DISPLAY": frozenset({"upon", "no_advancing", "operands"}),
+    "DISPLAY": frozenset({"upon", "no_advancing", "operands", "operation_in_library"}),
     "IF": frozenset({"has_else"}),
-    "PERFORM": frozenset({"form", "loop", "test", "thru"}),
+    "PERFORM": frozenset({"form", "loop", "test", "thru", "paragraph_in_library"}),
     "STOP": frozenset({"kind"}),
     "EXIT": frozenset({"kind"}),
-    "CALL": frozenset({"program", "program_kind", "program_in_project", "using"}),
+    "CALL": frozenset({"program", "program_kind", "program_in_project", "program_in_library", "using"}),
     "CANCEL": frozenset(),
     "ENTRY": frozenset(),
     "SET": frozenset({"form"}),
     "EVALUATE": frozenset({"subjects", "has_other", "has_thru"}),
-    "ACCEPT": frozenset({"from"}),
+    "ACCEPT": frozenset({"from", "operation_in_library"}),
     "EXHIBIT": frozenset({"named", "changed"}),
     "INITIALIZE": frozenset({"replacing", "to_value", "with_filler", "then_default"}),
     "SEARCH": frozenset({"all", "varying", "at_end"}),
@@ -129,6 +159,7 @@ OPERATIONS = frozenset({
 })
 
 PRIORITY = 100
+LIBRARY_PRIORITY = PRIORITY + 10
 
 # (decision reason, operation) -> importance tier, "*" matching anything. The worker puts the
 # tier of the most specific entry on every decision: (reason, operation), then (*, operation),
@@ -139,6 +170,8 @@ DEFAULT_IMPORTANCE = MappingProxyType({
     ("unsupported_construct", "*"): "high",
     ("missing_target_api", "*"): "high",
     ("callback_required", "*"): "high",
+    # A library call is not equivalence-checked: every step of it is reviewed as a high-stakes choice.
+    ("library_call", "*"): "high",
     # Declarations shape every statement that uses the data.
     ("*", "DATA"): "critical",
     # Arithmetic and data conversion: wrong digits are wrong amounts.
@@ -164,6 +197,20 @@ DEFAULT_IMPORTANCE = MappingProxyType({
     ("*", "DISPLAY"): "low",
     ("*", "EXHIBIT"): "low",
 })
+
+# Rules with the library strategy: (id, source, when, description). They match only when
+# transpile(libraries=...) claims the part, and turn its use into a library_call decision. They
+# take LIBRARY_PRIORITY so they win over the handler rules of the same verb. (A claimed FUNCTION is
+# offered wherever it appears, whatever the rule.)
+DEFAULT_LIBRARY_RULES: tuple[tuple[str, str, dict, str], ...] = (
+    ("cobol.call.library", "CALL", {"program_in_library": True},
+     "CALL of a program or system routine a library claims: library calls or the exact translation (library_call)"),
+    ("cobol.perform.library", "PERFORM", {"paragraph_in_library": True},
+     "PERFORM of a paragraph or section a library claims (by name, or as a procedure copybook) (library_call)"),
+    ("cobol.move.library", "MOVE", {"operation_in_library": True}, "MOVE claimed by a library (library_call)"),
+    ("cobol.display.library", "DISPLAY", {"operation_in_library": True}, "DISPLAY claimed by a library (library_call)"),
+    ("cobol.accept.library", "ACCEPT", {"operation_in_library": True}, "ACCEPT claimed by a library (library_call)"),
+)
 
 # (id, source, handler, when, description)
 DEFAULT_RULES: tuple[tuple[str, str, str, dict, str], ...] = (

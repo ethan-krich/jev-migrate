@@ -1,0 +1,5 @@
+{
+  "setup": [
+    "if [ -f \"$PRAGMA_PROJECT_PATH/.env\" ] && [ ! -f .env ]; then cp \"$PRAGMA_PROJECT_PATH/.env\" .env && chmod 600 .env; fi"
+  ]
+}

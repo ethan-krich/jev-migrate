@@ -5,7 +5,7 @@
 | Layer | Owns | Must not |
 |---|---|---|
 | **Python** `transpiler` (`python/`) | Public API (`transpile`), mutable `MappingRegistry`, result objects, provider and callback types, language-pair discovery (entry point `transpiler.language_pairs`), the provider process (`transpiler.providers.serve`), `JevProvider` and its `Gate` | Contain COBOL or Java transformation logic |
-| **Python** `cobol_to_java` (`translators/cobol-to-java/python/`) | Default mapping table (handler ids only), `DEFAULT_IMPORTANCE`, `Layout` folder convention, handler/fact catalog for early validation | Implement semantics |
+| **Python** `cobol_to_java` (`translators/cobol-to-java/python/`) | Default mapping table (handler ids only), `DEFAULT_IMPORTANCE`, `Layout` folder convention, handler/fact catalog for early validation, the `Library` / `Cobol` / `Java` declarations (data only; the language-agnostic `LibraryRegistry` is in `transpiler.libraries`) | Implement semantics |
 | **C++** `transpiler-core` (`core/`) | File discovery (dirs, files, globs incl. `**`), translator selection from `translators/*/translator.json`, worker and provider process lifecycle, timeouts, NDJSON protocol, decision batching/validation/caching, the gate outcome, the `expand_context` loop, run report and `review.md` | Know about COBOL, Java, ProLeap or JavaParser |
 | **Java** worker (`translators/cobol-to-java/java/`) | Parsing (ProLeap), semantic checks, mapping-rule selection, builtin handlers, JavaParser AST construction, session state (partial ASTs, decisions), importance tiers, the decision context graph, writing output | Execute Python; write output while decisions are pending |
 | **Java** runtime (`…/java/runtime/`) | COBOL data semantics used by generated code: byte-addressed `Storage` per level-01 record with `AlphanumericField` / `NumericField` (zoned, packed, binary) / `EditedField` views (GnuCOBOL byte images), `Bounds` (run-time range checks), `StringOps`, `Functions`, `CobolFile` (sequential), `RelativeFile`, `IndexedFile`, `SortFile`, `PerformStack`, `Display`, `ProgramSupport` (CALL, LINKAGE binding) | Depend on anything; it is copied into every output |
@@ -19,15 +19,17 @@ transpile(source, mappings, layout, provider)                       [Python]
 transpiler-core run --job job.json                                  [C++]
   1. discover()  -> programs + copybooks under source_root
   2. start worker (translator.json command), wait for `ready` event
-  3. initialize  { files, layout, mappings, options }   ──▶ parse ALL programs, name classes,
-                                                             detect collisions, PROGRAM-ID directory
+  3. initialize  { files, layout, mappings, options,     ──▶ parse ALL programs, name classes,
+                   libraries? }                             detect collisions, PROGRAM-ID directory,
+                                                             index each library's Java source
   4. translate   { files: [one program] }  × N          ──▶ per statement: facts -> rule -> handler
                                                              -> JavaParser nodes, or placeholder + decision
   5. decision rounds: batch pending -> cache -> provider.decide -> [expand_context -> ask again]
      -> gate passed? -> validate(candidate offered, fingerprint)
      -> resolve { resolutions }                         ──▶ replace placeholders; nested and slot
                                                              decisions return
-  6. finalize                                           ──▶ writes Java + runtime only if nothing pending
+  6. finalize                                           ──▶ writes Java + runtime only if nothing pending;
+                                                             reports libraries_used and equivalence
   7. shutdown; write <output>/transpile-report.json and review.md; print report on stdout
   ▼
 TranspileResult(status ok|incomplete|failed, programs, decisions, files_written)   [Python]
@@ -70,7 +72,8 @@ provider can only pick from **validated** options. Unsupported data declarations
 `OCCURS`) are decisions without candidates; they block output.
 
 Decision reasons: `missing_mapping`, `unsupported_construct`, `ambiguous_mapping`,
-`missing_target_api`, `invalid_mapping`, `callback_required`. The fingerprint is a SHA-256 over
+`missing_target_api`, `invalid_mapping`, `callback_required`, `library_call` (see
+[Library mappings](#library-mappings)). The fingerprint is a SHA-256 over
 the reason, location, text, facts, candidate ids, dialect and importance. The C++ cache keys on
 it.
 
@@ -208,14 +211,86 @@ as the reference to prove an exact one.
 | Construct | Decision today | Why it waits for Phase 2 |
 |---|---|---|
 | `COMP-1` / `COMP-2` (floating point) | `unsupported_construct` | IEEE results and GnuCOBOL's DISPLAY of floats depend on its C library; mainframe data uses hexadecimal floating point, which GnuCOBOL does not reproduce |
-| Floating-point intrinsic functions (`SQRT`, `LOG`, `EXP`, trigonometry, `RANDOM`, statistics, `PRESENT-VALUE`, `ANNUITY`) | `unsupported_construct` | Last-digit results differ between glibc / GMP and Java's `Math` |
-| `**` with a non-integer or negative exponent | `unsupported_construct` | Same: not provably bit-exact |
+| Floating-point intrinsic functions (`SQRT`, `LOG`, `EXP`, trigonometry, `RANDOM`, statistics, `PRESENT-VALUE`, `ANNUITY`) | `unsupported_construct`; with [`jdk_alternatives`](#runtime-or-jdk) a `runtime_choice` whose only candidate is the JDK twin (`java.lang.Math`, for the functions it covers) | Last-digit results differ between glibc / GMP and Java's `Math` |
+| `**` with a non-integer or negative exponent | `unsupported_construct`; with `jdk_alternatives` a JDK-only `runtime_choice` (`Math.pow`) | Same: not provably bit-exact |
 | `POINTER`, `ADDRESS OF`, `ALLOCATE` / `FREE`, `SET ADDRESS` | `unsupported_construct` (`ALLOCATE`: `unsupported_dialect`, ProLeap cannot parse it) | Byte-addressed storage can model offsets, not arbitrary addresses or memory shared with C |
 | `N` (national) pictures | `unsupported_construct` | GnuCOBOL 3.2's national support is incomplete, so there is no reliable reference |
 | EBCDIC data (`Dialect.encoding = ebcdic`) | `missing_mapping` / `unsupported_construct` | GnuCOBOL runs on ASCII data, so EBCDIC byte images cannot be checked against it (the EBCDIC *collating sequence* is supported) |
 
 Like every decision, these may get worker-validated candidates over time; a model choosing
 among them still never writes target code itself.
+
+## Library mappings
+
+Library mappings are the first deliberate exception to "the code behaves exactly like the
+original". With `transpile(libraries=...)`, a part of the COBOL program (a called program, an
+operation, a paragraph, a copybook) is declared to be implemented by a Java library already
+installed in the target project, and its uses may call that library instead of translating the
+COBOL. The user accepts that such a use is not equivalent by construction; the design keeps that
+exception narrow ([mapping-api.md](mapping-api.md#library-mappings) has the details):
+
+- **Opt-in only.** Without `libraries=` the output, the facts and the fingerprints are unchanged,
+  and equivalence still holds. A library never replaces the runtime library.
+- **Never chosen silently.** Each use is a chain of flat `library_call` decisions (start, args,
+  next, result, fields, lifetime), each also offering `cobol:translate`, the exact translation,
+  which is generated first. Nothing is written while one is pending; the gate is the same as for
+  every other decision.
+- **Always flagged**, in the Java, the class Javadoc, `transpile-report.json`
+  (`libraries_used`, `equivalence: partial`), `review.md` (first section: "run your tests against
+  both the original program and the translation") and the CLI.
+- **Still no invented code.** The worker indexes the library's sources with JavaParser
+  (`library.JavaIndex`) and generates every candidate as JavaParser nodes; arguments and results
+  bind only through the exact `JavaTypes` pairs, so an item without an exact pair gives no
+  candidate. Jev only picks.
+- **Offline.** Installed dependencies are read from the local Maven / Gradle caches (sources jar
+  required); translation never downloads anything. The target project's `pom.xml` /
+  `gradle.lockfile` is read as data to check the dependency is declared; no build file is
+  generated.
+- **Separation holds.** Python holds the declarations; C++ passes `libraries` to `initialize` and
+  copies `libraries_used` / `equivalence` from `finalize` into the report without reading them
+  (`review.md` renders them as a table); COBOL and Java knowledge stays in the worker.
+
+`JevProvider` asks library decisions with their own task (the candidates are untested; prefer the
+library unless nothing comes close) and caps the options it sends at
+`ContextBudget.max_option_chars`. The default is Jev's input limit, less the state, the question
+and `max_chars`, with 25% left free; `JEV_INPUT_CHARS` (32 000 characters) is provisional until it
+is measured against the live API with `scripts/jev-smoke.sh`. A decision whose options do not fit
+is held as `too_many_options` and the user is asked to narrow the library with `expose` or
+`hints`; options are never dropped to fit.
+
+## Runtime or JDK
+
+The second exception is the runtime library itself. The runtime reproduces GnuCOBOL exactly
+(decimal arithmetic truncated to each PICTURE, ROUNDED, SIZE ERROR, space-padded comparisons in
+the collating sequence, byte-exact output), which a statement often does not need: a loop counter
+or a progress message is the same in plain Java. With the worker option `jdk_alternatives`, a
+statement that a builtin handler and its **JDK twin** can both translate is a `runtime_choice`
+decision between the two, and Jev decides whether the runtime's exactness is needed
+([mapping-api.md](mapping-api.md#runtime-or-jdk) lists the twins):
+
+- **The same candidate API.** A twin is a builtin handler (`add_jdk`, `if_jdk`, …) whose generator
+  is its runtime handler's, run in the worker's JDK mode: doubles and `java.lang.Math` for numbers,
+  `String` / `StringBuilder` / regular expressions for text, `System.out` for DISPLAY. Both
+  candidates are generated as JavaParser nodes; each says what it `uses` (`runtime` or `jdk`), its
+  description says where the JDK one can differ, and its `docs` come from the runtime's sources or
+  from the JDK's own (`lib/src.zip` of the worker's JDK, or the file `TRANSPILER_JDK_SRC` names;
+  none when the JDK has no sources). Fields stay runtime fields: only the statement changes.
+- **One top-level prompt.** `JevProvider` asks `runtime_choice` decisions with their own task
+  (`RUNTIME_TASK`): exactness for money, amounts, totals, keys and anything written or compared;
+  the JDK for counters, indexes, diagnostics and values that are approximate by nature.
+- **Asked only by a provider that judges.** `transpile` adds the language pair's
+  `judged_options` (`{"jdk_alternatives": True}`) when the provider is Jev
+  (`provider.judges`), unless `options` sets it. With the deterministic or a static provider, and
+  in every test that does not ask for it, the output, the facts and the fingerprints are unchanged.
+- **Approximate, and visible.** A twin is not equivalence-checked: every applied pick is in the
+  Java (`// Decided by jev (confidence 0.90): builtin:add_jdk`), the report and `review.md`.
+- **No twin, no question.** When the twin cannot translate a statement (DIVIDE … REMAINDER,
+  STRING WITH POINTER, INSPECT … BEFORE INITIAL, …) the runtime handler translates it as without
+  the option. When only the twin can (`FUNCTION SQRT`, `**` with a fractional exponent), it is
+  offered alone, and Jev may abstain.
+
+Runtime and JDK statements share standard output: the runtime's `Display` points `System.out` /
+`System.err` at its own buffers (ISO-8859-1), so a JDK DISPLAY stays in order with the runtime's.
 
 ## Adding a language pair
 

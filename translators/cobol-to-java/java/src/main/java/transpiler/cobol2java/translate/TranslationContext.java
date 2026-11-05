@@ -19,8 +19,17 @@ public interface TranslationContext {
 
     Operand operand(Call call) throws HandlerException;
 
-    /** A BigDecimal-valued expression for a numeric operand. */
+    /** A BigDecimal-valued expression for a numeric operand ({@code double}-valued in {@link #jdk} mode). */
     Expression numeric(Operand operand) throws HandlerException;
+
+    /**
+     * True while a JDK twin of a builtin handler generates (see {@link Builtins#jdkTwin}): numeric
+     * values are Java {@code double}s, conditions use plain JDK comparisons, and output goes to
+     * {@code System.out}. Statements nested in the one being translated are translated on their own.
+     */
+    default boolean jdk() {
+        return false;
+    }
 
     /** {@link #numeric} with GnuCOBOL 3.2's division (38 extra digits, truncated) and integer powers. */
     Expression gnuArithmetic(Operand operand) throws HandlerException;
@@ -130,6 +139,26 @@ public interface TranslationContext {
 
     /** The fully qualified class translated from the program with this PROGRAM-ID, if in the project. */
     Optional<String> programClass(String programId);
+
+    /** The library claiming the program a CALL names (initialize.libraries), or empty. */
+    default Optional<transpiler.cobol2java.library.Libraries.Library> programLibrary(String name) {
+        return Optional.empty();
+    }
+
+    /** The library claiming a paragraph or section of this program, by name or through its copybook, or empty. */
+    default Optional<transpiler.cobol2java.library.Libraries.Library> paragraphLibrary(String name) {
+        return Optional.empty();
+    }
+
+    /** Whether the session declares libraries (the library facts are computed only then). */
+    default boolean declaresLibraries() {
+        return false;
+    }
+
+    /** The library claiming a verb ({@code Cobol.operation("MOVE")}), or empty. */
+    default Optional<transpiler.cobol2java.library.Libraries.Library> operationLibrary(String verb) {
+        return Optional.empty();
+    }
 
     /** The ENTRY number a CALL name denotes in its program (0: a PROGRAM-ID). */
     int entryIndex(String name);

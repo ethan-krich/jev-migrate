@@ -55,7 +55,8 @@
         "probabilities": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1}},
         "review_priority": {"$ref": "decision.schema.json#/$defs/review_priority"},
         "provider": {"type": "string"},
-        "rationale": {"type": "string"}
+        "rationale": {"type": "string"},
+        "held_reason": {"type": "string", "description": "Why the provider holds the decision without choosing (e.g. too_many_options: the options exceed what it can read)"}
       },
       "allOf": [
         {"if": {"properties": {"gate": {"const": "need_context"}}}, "then": {"required": ["need_context"], "not": {"required": ["selection"]}}},

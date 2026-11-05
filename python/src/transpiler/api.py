@@ -19,6 +19,7 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any, Protocol
 
+from .libraries import LibraryRegistry
 from .protocol import IMPORTANCE_TIERS, JOB_VERSION, DecisionRequest, ReviewPriority, importance_table
 from .providers import DecisionProvider, DeterministicProvider
 from .registry import HandlerCatalog, MappingRegistry
@@ -57,6 +58,9 @@ class LanguagePair:
     catalog: HandlerCatalog
     default_dialect: Callable[[], Dialect] | None = None
     default_importance: Callable[[], Mapping[tuple[str, str], str]] | None = None
+    # Worker options for a provider that judges between alternatives (``provider.judges``, e.g.
+    # Jev); an explicit ``options`` entry wins.
+    judged_options: Mapping[str, Any] = field(default_factory=dict)
 
 
 def language_pairs() -> dict[str, LanguagePair]:
@@ -171,6 +175,46 @@ class SettingChoice:
 
 
 @dataclass(frozen=True)
+class LibraryUse:
+    """One use of a part a library claims, and what replaced it: ``outcome`` is ``library`` (a call
+    into the library, not equivalence-checked), ``translated`` (the exact translation; ``reason``
+    says why) or ``pending``."""
+
+    program: str
+    file: str
+    line: int
+    selector: str
+    part: str
+    outcome: str
+    chain: tuple[str, ...] = ()
+    reason: str | None = None
+    decided_by: str | None = None
+    java: str | None = None
+
+    @classmethod
+    def from_json(cls, d: dict[str, Any]) -> LibraryUse:
+        return cls(d.get("program", ""), d.get("file", ""), d.get("line", 0), d.get("selector", ""), d.get("part", ""),
+                   d.get("outcome", ""), tuple(d.get("chain", [])), d.get("reason"), d.get("decided_by"), d.get("java"))
+
+
+@dataclass(frozen=True)
+class LibraryUsed:
+    """A library with use sites in the project. ``declared_in_target`` is whether ``target_project``
+    declares it (``None``: not checked, or the build files cannot confirm it; ``target_note`` says why)."""
+
+    id: str
+    java: str
+    uses: tuple[LibraryUse, ...]
+    declared_in_target: bool | None = None
+    target_note: str | None = None
+
+    @classmethod
+    def from_json(cls, d: dict[str, Any]) -> LibraryUsed:
+        return cls(d["id"], d.get("java", ""), tuple(LibraryUse.from_json(u) for u in d.get("uses", [])),
+                   d.get("declared_in_target"), d.get("target_note"))
+
+
+@dataclass(frozen=True)
 class Resolutions:
     provider: str | None
     applied: tuple[Resolution, ...]
@@ -244,6 +288,18 @@ class TranspileResult:
                 for s in self.report.get("settings", [])]
 
     @property
+    def libraries_used(self) -> list[LibraryUsed]:
+        """Libraries whose claimed parts the project uses, with every use site and its outcome."""
+        return [LibraryUsed.from_json(lib) for lib in self.report.get("libraries_used", [])]
+
+    @property
+    def equivalence(self) -> str:
+        """``partial`` when any part calls a library instead of its translation, or any statement was
+        translated with a JDK twin (``builtin:<handler>_jdk``): neither is checked against the original.
+        Else ``exact``."""
+        return self.report.get("equivalence", "exact")
+
+    @property
     def resolutions(self) -> Resolutions:
         r = self.report.get("resolutions", {})
         return Resolutions(
@@ -274,6 +330,14 @@ class TranspileResult:
         for s in self.settings:
             confidence = "" if s.confidence is None else f" (confidence {s.confidence:.2f})"
             lines.append(f"  setting {s.field} = {s.value!r}, chosen by {s.resolution.provider or 'provider'}{confidence}")
+        library_uses = [u for lib in self.libraries_used for u in lib.uses if u.outcome == "library"]
+        if library_uses:
+            lines.append(f"  warning: {len(library_uses)} use(s) of library parts call a library instead of the translation "
+                         f"(not equivalence-checked): run your tests against both the original program and the translation; "
+                         f"see {self.output / 'review.md'}")
+        for lib in self.libraries_used:
+            if lib.declared_in_target is False or (lib.declared_in_target is None and lib.target_note):
+                lines.append(f"  warning: library {lib.id} ({lib.java}): {lib.target_note}")
         for p in self.programs:
             lines.append(f"  {p.file}: {p.status} -> {p.output_path or '-'}")
             lines.extend(f"    {d['severity']}: {d['message']}" for d in p.diagnostics)
@@ -308,6 +372,8 @@ def transpile(
     provider: DecisionProvider | None = None,
     options: dict[str, Any] | None = None,
     copybook_paths: Sequence[str | os.PathLike[str]] = (),
+    libraries: LibraryRegistry | None = None,
+    target_project: str | os.PathLike[str] | None = None,
     source_language: str | None = None,
     core: str | os.PathLike[str] | None = None,
     timeout: float | None = None,
@@ -324,9 +390,22 @@ def transpile(
     without it the language pair's default dialect is used. A key given both by an explicit
     ``dialect`` and in ``options`` is an error; ``options`` may override the default dialect.
 
+    With a provider that judges between alternatives (``JevProvider``) the language pair's
+    ``judged_options`` are added: for COBOL to Java, ``jdk_alternatives`` offers each statement a
+    builtin handler has a JDK twin for as a ``runtime_choice`` between the runtime library (exact)
+    and plain JDK calls (approximate). Pass ``options={"jdk_alternatives": False}`` to keep the
+    runtime everywhere, or ``True`` to ask a static provider.
+
     ``importance`` maps ``(reason, operation)`` (``*`` matches anything) to a decision's tier,
     ``low``, ``normal``, ``high`` or ``critical``; without it the language pair's default table
     is used (``cobol_to_java.DEFAULT_IMPORTANCE``).
+
+    ``libraries`` (``cobol_to_java.libraries()``) maps parts of the source to libraries already
+    installed in the target project. Each use of such a part is a ``library_call`` decision whose
+    candidates call the library, next to the exact translation; a library use is **not**
+    equivalence-checked and is flagged in the output, the report, ``review.md`` and
+    ``result.libraries_used``. ``target_project`` is the project the output goes into: the worker
+    checks that each library used is declared in its ``pom.xml`` or ``gradle.lockfile``.
     """
     if mappings is not None:
         pair = find_language_pair(target, source_language, mappings.language_pair)
@@ -336,7 +415,10 @@ def transpile(
     layout = layout or pair.default_layout()
     provider = provider or DeterministicProvider()
 
-    worker_options = _merge_options(dialect, pair, options or {})
+    options = dict(options or {})
+    if provider.judges:
+        options = {**pair.judged_options, **options}
+    worker_options = _merge_options(dialect, pair, options)
     inputs = [source] if isinstance(source, (str, os.PathLike)) else list(source)
     output_path = Path(output).resolve()
     job = {
@@ -357,6 +439,17 @@ def transpile(
         "mappings": mappings.to_dict(),
         "provider": provider.to_config(),
     }
+    if libraries is not None:
+        if libraries.language_pair != pair.name:
+            raise TranspilerError(f"libraries are for {libraries.language_pair!r}, not {pair.name!r}")
+        job["translator_params"]["libraries"] = libraries.to_dict()  # raises LibraryError
+        if target_project is not None:
+            project = Path(target_project).resolve()
+            if not project.is_dir():
+                raise TranspilerError(f"target_project {str(project)!r} is not a directory")
+            job["translator_params"]["libraries"]["target_project"] = str(project)
+    elif target_project is not None:
+        raise TranspilerError("target_project= is only used with libraries=")
     if (budget := provider.context_budget()) is not None:
         job["translator_params"]["context"] = budget
     if importance is None and pair.default_importance is not None:
