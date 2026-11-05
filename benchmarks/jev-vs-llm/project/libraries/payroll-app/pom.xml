@@ -1,0 +1,14 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <!-- The target project the translated payroll code goes into: it already depends on acme-tax. -->
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>payroll-app</artifactId>
+  <version>1.0</version>
+  <dependencies>
+    <dependency>
+      <groupId>com.acme</groupId>
+      <artifactId>acme-tax</artifactId>
+      <version>1.0</version>
+    </dependency>
+  </dependencies>
+</project>
