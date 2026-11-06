@@ -1,25 +1,41 @@
 # jev-migrate
 
-A modular transpiler for researching hybrid deterministic + probabilistic code translation.
-**Phase 1** is a working, tested, *deterministic* COBOL-to-Java translator. Operations that cannot
-be translated reliably come back as structured **decisions**. **Phase 2** can route them to
-[Jev](docs/architecture.md#phase-2-jev), which only chooses among candidates the worker has already
-generated and validated, and reports how confident it is in each pick. Phase 2 is opt-in: by default
-nothing makes AI or network calls at runtime.
+**COBOL to Java that keeps the program's exact behaviour.** A deterministic translator writes all
+of the Java. When the source alone can't settle a choice, the translator raises a structured
+**decision** with candidates it has already generated and validated, and
+[Jev](docs/architecture.md#phase-2-jev) picks one and reports its confidence. Jev never writes
+code. Every pick is recorded in a review queue.
+
+📊 **Slides:** [docs/slides.pdf](docs/slides.pdf) (the project overview deck)
+
+- **Exact by default.** Translations are checked byte for byte against GnuCOBOL 3.2 by
+  64 equivalence fixtures. A construct that can't be translated exactly becomes a decision.
+  It is never approximated or dropped, and nothing is written while a decision is pending.
+- **Cheap, fast choices.** On the [payroll benchmark](benchmarks/jev-vs-llm/results.md), Jev
+  makes 100% of the rubric picks at about $0.0008 and 1.9 s per file, and every run's output
+  matches GnuCOBOL's. A chat LLM picking in Jev's place costs about 5× more and takes about 10×
+  longer. A chat LLM writing the Java directly compiles but never produces the exact output.
+- **Opt-in departures from exactness, always flagged.** You can map COBOL routines to an existing
+  Java library, or let Jev use plain JDK code where the runtime's COBOL semantics aren't needed
+  (for example a loop counter, but never money).
 
 ```
 Python API (transpiler, cobol_to_java)  ──job──▶  C++ orchestrator (transpiler-core)
                                                       │  NDJSON over stdin/stdout
                                                       ▼
                                         Java worker (ProLeap ➜ rules ➜ JavaParser)
+                                                      │  decisions
+                                                      ▼
+                                        provider: deterministic, static answers, or Jev
 ```
 
 - **Python** owns the public API, the mutable mapping registry and the folder convention.
-- **C++** discovers files, drives persistent translator workers, routes and validates decisions.
-  It knows nothing about COBOL or Java.
-- **Java** parses COBOL, applies mapping rules, builds Java ASTs, and writes the output project.
+- **C++** discovers files, drives persistent translator workers, and routes and validates
+  decisions. It knows nothing about COBOL or Java.
+- **Java** parses COBOL with ProLeap, applies mapping rules, builds Java ASTs with JavaParser, and
+  writes the output project together with its small runtime library.
 
-## Prerequisites
+## Quick start
 
 | Tool | Version | Used for |
 |---|---|---|
@@ -27,41 +43,43 @@ Python API (transpiler, cobol_to_java)  ──job──▶  C++ orchestrator (tr
 | CMake + C++ compiler | CMake 3.28+, clang 17+ / GCC 14+ (C++23) | orchestrator |
 | [uv](https://docs.astral.sh/uv/) | 0.11+ | Python 3.11+ workspace |
 | git | any | ProLeap parser submodule |
-| GnuCOBOL | 3.2 (optional) | live behavioural-equivalence tests |
+| GnuCOBOL | 3.2 (optional) | live behavioural-equivalence tests, `cobol.sh` |
 | Docker | optional | pinned toolchain (`docker/Dockerfile`) |
 
-Gradle needs no install: the wrapper is pinned to 9.3.1 with a checksum. Without GnuCOBOL, the
-equivalence tests compare against output recorded from GnuCOBOL 3.2.
-
-## Setup, build, test
+You don't need to install Gradle: the wrapper is pinned to 9.3.1 with a checksum. Without
+GnuCOBOL, the equivalence tests compare against output recorded from GnuCOBOL 3.2.
 
 ```bash
 git clone --recurse-submodules <repo> && cd jev-migrate
-./scripts/setup.sh     # checks tools, inits submodule, uv sync, fetches Gradle deps
+./scripts/setup.sh     # checks tools, inits the submodule, uv sync, fetches Gradle deps
 ./scripts/build.sh     # CMake (core), Gradle installDist (worker), uv sync
-./scripts/test.sh      # GoogleTest via CTest, JUnit 5, pytest (unit, integration, equivalence)
-./scripts/run.sh legacy                # translates legacy/ into generated/ with live Jev (CLI)
-./scripts/cobol.sh -I legacy/copy legacy/MAIN.cbl   # compiles with cobc -x and runs the COBOL
-./scripts/java.sh --main com.acme.Main generated    # compiles with javac and runs the Java
+./scripts/test.sh      # GoogleTest, JUnit 5, pytest (unit, integration, equivalence); offline
 ```
 
-The scripts work from any directory. `./scripts/test.sh java` (or `cpp`, `python`) runs a single
-suite; arguments after `--` go to pytest.
+Then translate a folder and compare it with the original:
 
-`cobol.sh` and `java.sh` compile and run one program the way the equivalence tests do: the
-main program comes first for `cobc`, stdin and stdout pass through, and the exit status is the
-program's. `--data DIR` runs the program in a scratch copy of DIR's files instead of the current
-directory. `java.sh` needs `--main` when the output has more than one program class.
+```bash
+cp .env.example .env                                # add OPENROUTER_API_KEY or TYPESAFE_API_KEY
+./scripts/run.sh legacy --base-package com.acme     # legacy/ -> generated/, decisions resolved by Jev
+./scripts/cobol.sh -I legacy/copy legacy/MAIN.cbl   # compile with cobc -x and run the COBOL
+./scripts/java.sh --main com.acme.Main generated    # compile with javac and run the Java
+```
 
-**Pinned toolchain.** `./scripts/docker.sh test` (or `build`, `run`, `cobol`, `java`, `shell`) runs the same
-scripts in a slim Debian image with every tool version pinned, including GnuCOBOL 3.2. That is the
-reference environment for equivalence results.
+| Script | What it does |
+|---|---|
+| `setup.sh` / `build.sh` | install dependencies / incremental build of all three parts |
+| `test.sh [cpp\|java\|python] [-- pytest args]` | the deterministic, offline test suites |
+| `run.sh SRC [--output DIR] [--mappings file.py] [--jev MODEL]` | translate with the live Jev API (`uv run python -m transpiler` is the same CLI, deterministic) |
+| `cobol.sh` / `java.sh [--main CLASS] [--data DIR]` | compile and run one program or its translation, the way the equivalence tests do |
+| `jev-smoke.sh` | opt-in live run of [`examples/cobol-to-java-jev`](examples/cobol-to-java-jev/projects.py) |
+| `docker.sh test\|build\|run\|cobol\|java\|shell` | the same scripts in the pinned reference toolchain (Debian, GnuCOBOL 3.2) |
 
-The command-line report uses colors on interactive terminals; redirected output stays plain text.
-Use `--verbose` for the worker log on stderr, or `--json` for a machine-readable report on stdout.
-Set `NO_COLOR` to disable colors.
+The scripts work from any directory. The CLI report uses colors on a terminal. Use `--verbose` to
+get the worker log, `--json` for a machine-readable report, and `NO_COLOR` to turn colors off.
 
-## A first translation
+## Python API
+
+### A first translation (deterministic)
 
 ```python
 from transpiler import transpile
@@ -89,8 +107,8 @@ status: incomplete (2 program(s), 0 file(s) written)
       candidate builtin:display
 ```
 
-Nothing is written while any decision is pending, and a `generated/transpile-report.json` is
-always written. To resolve decisions offline, pass validated selections:
+Nothing is written while a decision is pending. `generated/transpile-report.json` is written on
+every run. To resolve decisions offline, pass validated selections:
 
 ```python
 from transpiler import DecisionResponse, StaticProvider
@@ -100,17 +118,12 @@ result = transpile("legacy", output="generated", mappings=mappings,
 assert result.ok   # generated/src/main/java/com/example/legacy/... compiles with plain javac
 ```
 
-### Asking Jev (Phase 2, opt-in)
+### Letting Jev decide (opt-in)
 
 ```bash
 uv sync --all-packages --extra jev     # the optional transpiler[jev] extra (typesafe_sdk)
 export TYPESAFE_API_KEY=...            # read by the provider process only; never written to the job
 ```
-
-Jev is also served through [OpenRouter](https://openrouter.ai/docs/guides/community/typesafe-sdk)
-with an OpenRouter key: `JevProvider("jev-latest", base_url=OPENROUTER_BASE_URL,
-api_key_env="OPENROUTER_API_KEY")` (bare ids map to OpenRouter's `typesafe/` models; pin one with
-`jev-1.13`). `timeout_seconds` (default 120) bounds each API call.
 
 ```python
 from transpiler import ContextBudget, Gate, JevProvider, transpile
@@ -126,39 +139,36 @@ for r in sorted(result.resolutions.applied, key=lambda r: r.confidence):   # lea
 print((result.output / "review.md").read_text())   # the review queue, also result.review_queue()
 ```
 
-By default Jev always makes an attempt: every decision with candidates gets the candidate Jev
-ranks highest, and `confidence` is the probability Jev gives it. When Jev would rather have
-abstained (no candidate fits), the pick is still applied and its rationale says so; a low
-confidence is the signal to review it. To hold picks instead, pass a gate:
-`gate=Gate(floors={"low": 0.70, "normal": 0.85, "high": 0.95, "critical": None}, min_margin=0.15)`
-applies a pick only if Jev's confidence reaches the floor of the decision's importance tier
-(`None`: never automatically) and beats the runner-up by `min_margin`; anything else stays
-pending, so the run is `incomplete` and nothing is written. Tiers come from
-[`DEFAULT_IMPORTANCE`](docs/mapping-api.md#importance) (`transpile(importance=...)` overrides
-it).
+Jev is also served through [OpenRouter](https://openrouter.ai/docs/guides/community/typesafe-sdk):
+`JevProvider("jev-latest", base_url=OPENROUTER_BASE_URL, api_key_env="OPENROUTER_API_KEY")`.
+Bare ids map to OpenRouter's `typesafe/` models, and you can pin a version with `jev-1.13`.
+`timeout_seconds` (default 120) bounds each API call.
 
-Jev can also choose a setting the source does not state, such as the collating sequence a
-program was written for, by reading the code that depends on it; every program is then
-translated again with that value (see [setting decisions](docs/worker-protocol.md#setting-decisions)).
-`./scripts/jev-smoke.sh` runs the setting projects in
-[`examples/cobol-to-java-jev`](examples/cobol-to-java-jev/projects.py) against the live API and
-says whether Jev's pick matches the setting each program was written for
-(`OPENROUTER_API_KEY=... ./scripts/jev-smoke.sh`, or `TYPESAFE_API_KEY=...`; it also reads them
-from a git-ignored `.env`, see `.env.example`). Set `JEV_VERBOSE=1` to include the worker log.
-The script builds the project before running and is not part of any test suite.
-
-With Jev, the runtime library is a choice too: each ADD, SUBTRACT, MULTIPLY, DIVIDE, COMPUTE,
-DISPLAY, IF, STRING, UNSTRING or INSPECT that also has a plain-JDK translation (doubles,
-`java.lang.Math`, `String`, `System.out`) is a `runtime_choice`, and Jev decides from the data
-whether the runtime's exact COBOL semantics are needed (money: yes; a loop counter: no). The JDK
-translations are approximate and every pick is noted in the Java and in `review.md`; pass
-`options={"jdk_alternatives": False}` to keep the runtime everywhere
-([Runtime or JDK](docs/mapping-api.md#runtime-or-jdk)).
+- **Always an answer, or a gate.** By default every decision with candidates gets Jev's top-ranked
+  candidate, and `confidence` is the probability Jev gives it. A low confidence is the signal to
+  review the pick. To hold picks instead, pass
+  `gate=Gate(floors={"low": 0.70, "normal": 0.85, "high": 0.95, "critical": None}, min_margin=0.15)`.
+  A pick is then applied only if it reaches the floor of its
+  [importance tier](docs/mapping-api.md#importance) and beats the runner-up by `min_margin`.
+  Anything else stays pending, and nothing is written.
+- **Settings the source doesn't state.** Some settings, such as the collating sequence a program
+  was written for, appear nowhere in the source. Jev infers them from the code that depends on
+  them, and every program is then translated again with that value
+  ([setting decisions](docs/worker-protocol.md#setting-decisions),
+  [results](benchmarks/dialect-inference/results.md)). You can also fix settings yourself:
+  `transpile(..., dialect=Dialect(encoding="ascii", out_of_range="fail"))`
+  ([Dialect](docs/mapping-api.md#dialect-project-settings)).
+- **Runtime or JDK.** Some ADD, SUBTRACT, MULTIPLY, DIVIDE, COMPUTE, DISPLAY, IF, STRING, UNSTRING
+  and INSPECT statements also have a plain-JDK translation (doubles, `java.lang.Math`, `String`,
+  `System.out`). For each of these, Jev decides from the data whether the runtime's exact COBOL
+  semantics are needed. JDK picks are approximate and are noted in the Java and in `review.md`.
+  Pass `options={"jdk_alternatives": False}` to keep the runtime everywhere
+  ([Runtime or JDK](docs/mapping-api.md#runtime-or-jdk)).
 
 ### Mapping COBOL parts to Java libraries (opt-in, not equivalence-checked)
 
-When a team has already replaced some COBOL routines with a Java library, the translation can
-call that library instead of translating those routines:
+If a team has already replaced some COBOL routines with a Java library, the translation can call
+that library instead of translating those routines:
 
 ```python
 from cobol_to_java import Cobol, Java, Library, libraries
@@ -170,30 +180,24 @@ result = transpile("src", output="out", libraries=libs, target_project="../billi
 print(result.equivalence, [(u.part, u.outcome, u.chain) for lib in result.libraries_used for u in lib.uses])
 ```
 
-A library can claim called programs (by PROGRAM-ID or path), intrinsic functions, MOVE / DISPLAY /
-ACCEPT, system routines, paragraphs, and copybooks (procedure code, or a data record that converts
-to a library class at the call). The worker reads the library's public API from its sources
-(nothing is downloaded) and each use becomes a chain of `library_call` decisions: which call
-starts it, how the COBOL items bind to its parameters, further calls on the result, which item
-receives it. Every step also offers `cobol:translate`, the exact translation. **Library calls are
-not checked against the original COBOL**: each one is flagged in the Java, the report and the
-first section of `review.md`, and the CLI says to run your tests against both the original
-program and the translation. Details: [library mappings](docs/mapping-api.md#library-mappings).
-The third smoke project, `billing`, maps its date routines to a small Java library; the smoke run
-installs it into a scratch Maven repository, lets Jev build each call, and runs the library
-translation next to the plain one (`JEV_PROJECTS=billing ./scripts/jev-smoke.sh`).
+A library can claim any of these COBOL parts:
 
-Settings the source does not determine (character set, out-of-range policy, file paths, …) go
-in a [`Dialect`](docs/mapping-api.md#dialect-project-settings):
-`transpile(..., dialect=Dialect(encoding="ascii", out_of_range="fail"))`. A program that needs
-an unset one gets a single `dialect:<field>` decision, which a provider can answer for the
-fields with a fixed set of values.
+- called programs (by PROGRAM-ID or path)
+- intrinsic functions
+- MOVE, DISPLAY and ACCEPT
+- system routines
+- paragraphs
+- copybooks (procedure code, or a data record that converts to a library class at the call)
 
-From the shell: `./scripts/run.sh legacy --base-package com.acme`. It writes to `generated/`
-(git-ignored; `--output DIR` picks another folder) and resolves open decisions with the live Jev
-API, so it needs `OPENROUTER_API_KEY` or `TYPESAFE_API_KEY` in the environment or in `.env`.
-`--mappings file.py` loads a `configure(mappings)` hook. Without `--jev MODEL`,
-`uv run python -m transpiler` is the same command line run deterministically.
+The worker reads the library's public API from its sources and downloads nothing. Each use becomes
+a chain of `library_call` decisions: which call starts it, how COBOL items bind to its parameters,
+further calls on the result, and which item receives it. Every step also offers `cobol:translate`,
+the exact translation.
+
+**Library calls are not checked against the original COBOL.** Each one is flagged in the Java, the
+report and the first section of `review.md`, and the CLI tells you to test both programs. Details:
+[library mappings](docs/mapping-api.md#library-mappings). The `billing` example runs both versions
+side by side: `JEV_PROJECTS=billing ./scripts/jev-smoke.sh`.
 
 ## Output layout
 
@@ -208,7 +212,7 @@ legacy/billing/copy/ACCT.cpy        -> copybook (inlined, never a class)
 
 The full rules are in [docs/mapping-api.md](docs/mapping-api.md#folder-layout).
 
-## Supported COBOL (Phase 1)
+## Supported COBOL
 
 The subset is deliberately small and exact. Anything outside it becomes a decision; nothing is
 approximated or dropped. The behaviour below is checked against GnuCOBOL 3.2 by the
@@ -259,7 +263,7 @@ equivalence fixtures.
 | ◐ | `CALL` of a program outside the project, `DISPLAY UPON PRINTER / SYSPCH`, `STOP literal` | decisions with candidates (GnuCOBOL's behaviour among them) that a provider such as Jev chooses; `CALL … RETURNING` with `ON EXCEPTION` is a decision |
 | ❌ | Other special registers (`DEBUG-ITEM`, `SORT-RETURN`, …), other dialects | files ProLeap cannot parse (XML / JSON GENERATE, ALLOCATE, OO COBOL, …) fail with `unsupported_dialect` |
 
-Constructs deliberately left to Phase 2 (floating point, pointers, national pictures,
+Constructs deliberately left as decisions (floating point, pointers, national pictures,
 EBCDIC data) are listed with the reasons in
 [docs/architecture.md](docs/architecture.md#constructs-deferred-to-phase-2).
 
@@ -267,22 +271,31 @@ Known divergence: GnuCOBOL 3.2 prints an empty value for a `COMPUTE` receiver wh
 *inside that statement's own* `ON SIZE ERROR` phrase. The translation prints the (unchanged) value.
 The fixtures avoid that pattern.
 
+## Benchmarks
+
+Live runs against paid APIs, never part of the test suites. See [benchmarks/](benchmarks/README.md):
+
+- [Jev vs. LLM on a payroll project](benchmarks/jev-vs-llm/results.md): Jev deciding vs. a chat LLM deciding vs. a chat LLM writing the Java.
+- [Dialect inference](benchmarks/dialect-inference/results.md): how reliably Jev infers an unstated collating sequence.
+
 ## Repository map
 
 | Path | What |
 |---|---|
 | `core/` | C++23 orchestrator, GoogleTest suite, scriptable fake worker |
 | `translators/cobol-to-java/java/` | Gradle build: worker, `runtime/` support library, `proleap/` parser build |
-| `translators/cobol-to-java/python/` | `cobol_to_java`: default mappings, `Layout`, language-pair registration |
+| `translators/cobol-to-java/python/` | `cobol_to_java`: default mappings, `Layout`, `Dialect`, library specs, language-pair registration |
 | `translators/cobol-to-java/fixtures/` | COBOL fixtures + recorded GnuCOBOL output |
 | `python/` | `transpiler`: public API, registry, library registry, providers (deterministic, static, Jev) and the provider process, callbacks, protocol types |
 | `protocol/` | JSON schemas: worker messages, mappings, decisions, providers, libraries |
-| `examples/cobol-to-java-jev/` | the projects of `scripts/jev-smoke.sh` (settings, and `billing` with a Java date library) |
-| `tests/` | integration, equivalence, benchmarks (pytest) |
+| `examples/cobol-to-java-jev/` | the projects of `scripts/jev-smoke.sh` (collating-sequence inference, and `billing` with a Java date library) |
+| `benchmarks/` | live benchmarks and their results |
+| `tests/` | integration and equivalence tests (pytest) |
+| `docs/` | architecture, mapping API, worker protocol, [slides](docs/slides.pdf) |
 | `third_party/proleap-cobol-parser` | ProLeap 4.0.0 submodule (MIT), pinned commit |
 
 Documentation: [architecture](docs/architecture.md) · [mapping API](docs/mapping-api.md) ·
-[worker protocol](docs/worker-protocol.md) · [AGENTS.md](AGENTS.md)
+[worker protocol](docs/worker-protocol.md) · [slides](docs/slides.pdf) · [AGENTS.md](AGENTS.md)
 
 ## Third-party components
 

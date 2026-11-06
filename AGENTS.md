@@ -59,6 +59,6 @@ an opt-in live run against the TypeSafe API; it is never part of a test suite.
 ## Where things are documented
 
 - `README.md`: setup, first translation, the supported COBOL subset, licenses.
-- `docs/architecture.md`: responsibilities, data flow, decisions, the Phase 2 Jev plan.
+- `docs/architecture.md`: responsibilities, data flow, decisions, the Jev integration.
 - `docs/mapping-api.md`: mapping registry, handlers, facts, folder layout.
 - `docs/worker-protocol.md` and `protocol/*.schema.json`: the worker protocol.
